@@ -1,0 +1,48 @@
+
+import axios from 'axios'
+
+const RAW = (import.meta.env.VITE_API_URL ?? '').trim();
+export const API_ROOT = (RAW === '/' || RAW === '') ? '' : RAW.replace(/\/$/, '');
+export const api = axios.create({ baseURL: `${API_ROOT}/api` })
+
+// Outline
+export async function getOutline() { const { data } = await api.get('/outline'); return data }
+export async function saveOutlineApi(outline) { const { data } = await api.post('/outline', { outline }); return data }
+
+// Task details
+export async function getTask(id) { const { data } = await api.get(`/tasks/${id}`); return data }
+export async function updateTask(id, payload) { const { data } = await api.patch(`/tasks/${id}`, payload); return data }
+
+// Day timeline
+export async function getDays() { const { data } = await api.get('/day'); return data }
+export const listDays = getDays
+
+// Uploads
+export async function uploadImage(file) {
+  const form = new FormData()
+  form.append('image', file)
+  const { data } = await api.post('/upload/image', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  const rel = String(data.url || '')
+  const abs = /^https?:\/\//i.test(rel) ? rel : `${API_ROOT}${rel.startsWith('/') ? '' : '/'}${rel}`
+  return { url: abs }
+}
+
+// History
+export async function listHistory(limit=50, offset=0) { const { data } = await api.get(`/history?limit=${limit}&offset=${offset}`); return data.items || [] }
+export async function getVersionDoc(id) { const { data } = await api.get(`/history/${id}`); return data }
+export async function diffVersion(id, against='current') { const { data } = await api.get(`/history/${id}/diff?against=${against}`); return data }
+export async function restoreVersion(id) { const { data } = await api.post(`/history/${id}/restore`); return data }
+export async function createCheckpoint(note='') { const { data } = await api.post('/history/checkpoint', { note }); return data }
+
+export function absoluteUrl(path) {
+  if (!path) return path
+  if (/^https?:\/\//i.test(path)) return path
+  if (!API_ROOT) return path
+  return path.startsWith('/') ? `${API_ROOT}${path}` : `${API_ROOT}/${path}`
+}
+
+// Health
+export async function getHealth() {
+  const { data } = await api.get('/health')
+  return data
+}
