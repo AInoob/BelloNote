@@ -23,4 +23,4 @@ server/data/*.db*
 start-all.log
 client.log
 server.log
-
+.idea/
