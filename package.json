@@ -1,0 +1,11 @@
+{
+  "name": "bellonote-e2e",
+  "private": true,
+  "scripts": {
+    "pretest:e2e": "npm --prefix client run build",
+    "test:e2e": "npx playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0"
+  }
+}

@@ -8,8 +8,21 @@ import { ensureDefaultProject } from '../lib/projects.js'
 
 const router = Router()
 
+function ensureProjectForTests(req) {
+  if (req.headers['x-playwright-test'] && process.env.NODE_ENV !== 'production') {
+    const project = db.prepare('SELECT id FROM projects WHERE name = ?').get('Playwright E2E')
+    if (!project) {
+      const info = db.prepare('INSERT INTO projects (name) VALUES (?)').run('Playwright E2E')
+      return info.lastInsertRowid
+    }
+    return project.id
+  }
+  return null
+}
+
 router.get('/outline', (req, res) => {
-  const projectId = ensureDefaultProject()
+  const testProjectId = ensureProjectForTests(req)
+  const projectId = testProjectId || ensureDefaultProject()
   const tasks = db.prepare(`SELECT * FROM tasks WHERE project_id = ? ORDER BY position ASC, created_at ASC, id ASC`).all(projectId)
   const updateContent = db.prepare(`UPDATE tasks SET content=?, updated_at=datetime('now') WHERE id=?`)
   const dataUriRe = /data:[^;]+;base64,/i
@@ -49,7 +62,8 @@ router.get('/outline', (req, res) => {
 })
 
 router.post('/outline', (req, res) => {
-  const projectId = ensureDefaultProject()
+  const testProjectId = ensureProjectForTests(req)
+  const projectId = testProjectId || ensureDefaultProject()
   const { outline } = req.body
   if (!Array.isArray(outline)) return res.status(400).json({ error: 'outline array required' })
 

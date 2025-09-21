@@ -15,7 +15,6 @@ export async function updateTask(id, payload) { const { data } = await api.patch
 
 // Day timeline
 export async function getDays() { const { data } = await api.get('/day'); return data }
-export const listDays = getDays
 
 // Uploads
 export async function uploadImage(file, filename) {

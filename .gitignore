@@ -24,3 +24,4 @@ start-all.log
 client.log
 server.log
 .idea/
+test-results/

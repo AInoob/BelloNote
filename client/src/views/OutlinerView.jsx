@@ -491,6 +491,17 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     }
   })
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__WORKLOG_EDITOR = editor
+    }
+    return () => {
+      if (typeof window !== 'undefined' && window.__WORKLOG_EDITOR === editor) {
+        window.__WORKLOG_EDITOR = null
+      }
+    }
+  }, [editor])
+
   const normalizeImageSrc = useCallback((src) => absoluteUrl(src), [])
 
   const ensureUploadedImages = useCallback(async () => {
@@ -651,7 +662,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     }
     dom.addEventListener('click', handler)
     return () => dom.removeEventListener('click', handler)
-  }, [editor])
+  }, [editor, pushDebug])
 
   useEffect(() => {
     function onDocMouseDown(e) {
@@ -1126,23 +1137,69 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }
   closeSlashRef.current = closeSlash
   const consumeSlashMarker = useCallback(() => {
-    const marker = slashMarker.current
-    if (!marker || !editor) return null
-    const pos = marker.pos
-    const queryLength = slashQueryRef.current.length
-    const to = pos + 1 + queryLength
+    if (!editor) return null
+    const query = slashQueryRef.current
+    const { state } = editor
+    const { $from } = state.selection
+    const queryLength = query.length
+    const suffix = `/${query}`
+    let from = null
+    let to = null
+    let source = 'cursor'
+
+    if ($from.parent?.isTextblock) {
+      try {
+        const textBefore = $from.parent.textBetween(0, $from.parentOffset, '\uFFFC', '\uFFFC')
+        if (textBefore && textBefore.endsWith(suffix)) {
+          const startOffset = $from.parentOffset - suffix.length
+          if (startOffset >= 0) {
+            from = $from.start() + startOffset
+            to = from + suffix.length
+          }
+        }
+      } catch (err) {
+        pushDebug('popup: inspect textBefore failed', { error: err.message })
+      }
+    }
+
+    if (from === null) {
+      const marker = slashMarker.current
+      if (!marker) {
+        pushDebug('popup: no slash marker to consume')
+        setSlashQuery('')
+        return null
+      }
+      from = marker.pos
+      const docSize = state.doc.content.size
+      const probeEnd = Math.min(marker.pos + 1 + query.length, docSize)
+      const slice = state.doc.textBetween(marker.pos, probeEnd, '\n', '\n') || ''
+      if (queryLength && slice.startsWith('/' + query)) {
+        to = marker.pos + 1 + queryLength
+      } else {
+        to = marker.pos + 1
+      }
+      source = 'marker'
+    }
+
     let removed = null
     try {
-      editor.chain().focus().setTextSelection({ from: pos, to }).deleteSelection().run()
-      removed = { from: pos, to }
-      pushDebug('popup: removed slash marker', { pos, length: queryLength })
+      pushDebug('popup: doc before slash removal', { doc: editor.getJSON() })
+      const ok = editor.chain().focus().deleteRange({ from, to }).run()
+      if (ok) {
+        removed = { from, to }
+        pushDebug('popup: removed slash marker', { from, to, source })
+      } else {
+        pushDebug('popup: remove slash marker skipped', { from, to, source })
+      }
+      pushDebug('popup: doc after slash removal', { doc: editor.getJSON() })
     } catch (e) {
       pushDebug('popup: remove slash marker failed', { error: e.message })
     }
+
     slashMarker.current = null
     setSlashQuery('')
     return removed
-  }, [editor])
+  }, [editor, pushDebug])
 
   const cleanDanglingSlash = useCallback((from) => {
     if (!editor) return
@@ -1155,6 +1212,83 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       pushDebug('popup: clean dangling slash failed', { error: e.message })
     }
   }, [editor])
+
+  // Ensure slash commands that add block nodes (code, details, etc.) stay inside the current list item
+  const insertBlockNodeInList = useCallback((nodeName, attrs = {}, options = {}) => {
+    if (!editor) return false
+    const { select = 'after' } = options
+    return editor.chain().focus().command(({ state, dispatch, tr, commands }) => {
+      const type = state.schema.nodes[nodeName]
+      if (!type) return false
+      const { $from } = state.selection
+
+      let listItemDepth = -1
+      for (let depth = $from.depth; depth >= 0; depth--) {
+        if ($from.node(depth).type.name === 'listItem') {
+          listItemDepth = depth
+          break
+        }
+      }
+
+      if (listItemDepth === -1) {
+        return commands.insertContent({ type: nodeName, attrs })
+      }
+
+      let contentNode = null
+      const defaultType = type.contentMatch?.defaultType
+      if (defaultType) {
+        if (defaultType.isText) {
+          contentNode = state.schema.text('')
+        } else {
+          contentNode = defaultType.create()
+        }
+      }
+
+      const newNode = type.create(attrs, contentNode ? [contentNode] : undefined)
+
+      let blockDepth = -1
+      for (let depth = $from.depth; depth > listItemDepth; depth--) {
+        const current = $from.node(depth)
+        if (current.isBlock) {
+          blockDepth = depth
+          break
+        }
+      }
+
+      const insertPos = blockDepth >= 0
+        ? $from.after(blockDepth)
+        : $from.end(listItemDepth)
+
+      tr.insert(insertPos, newNode)
+
+      if (!dispatch) return true
+
+      const targetPos = select === 'inside'
+        ? insertPos + 1
+        : insertPos + newNode.nodeSize
+
+      try {
+        tr.setSelection(TextSelection.near(tr.doc.resolve(targetPos), 1))
+      } catch (err) {
+        try {
+          tr.setSelection(TextSelection.create(tr.doc, targetPos))
+        } catch {
+          tr.setSelection(TextSelection.near(tr.doc.resolve(tr.doc.content.size), -1))
+        }
+      }
+
+      dispatch(tr.scrollIntoView())
+      pushDebug('insert block node', {
+        nodeName,
+        insertPos,
+        select,
+        listItemDepth,
+        blockDepth,
+        from: $from.pos
+      })
+      return true
+    }).run()
+  }, [editor, pushDebug])
   const insertToday = () => {
     const removed = consumeSlashMarker()
     editor.chain().focus().insertContent(' @' + dayjs().format('YYYY-MM-DD')).run()
@@ -1174,11 +1308,17 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }
   const insertCode = () => {
     const removed = consumeSlashMarker()
-    const inserted = editor.chain().focus().insertContent([
-      { type: 'hardBreak' },
-      { type: 'codeBlock', content: [] }
-    ]).run()
-    if (!inserted) editor.chain().focus().toggleCodeBlock().run()
+    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+    if (caretPos !== null) {
+      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+    }
+    const inserted = insertBlockNodeInList('codeBlock', {}, { select: 'inside' })
+    if (inserted) {
+      pushDebug('doc after code insert', { doc: editor.getJSON() })
+    } else {
+      pushDebug('insert code block fallback')
+      editor.chain().focus().insertContent({ type: 'codeBlock' }).run()
+    }
     if (removed) cleanDanglingSlash(removed.from)
     closeSlash()
     pushDebug('insert code block')
@@ -1191,6 +1331,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       if (!f) return
       const removed = consumeSlashMarker()
       const result = await uploadImage(f)
+      const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+      if (caretPos !== null) {
+        editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+      }
       const normalized = normalizeImageSrc(result.url)
       const attrs = { src: normalized }
       if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
@@ -1204,7 +1348,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }
   const insertDetails = () => {
     const removed = consumeSlashMarker()
-    editor.chain().focus().insertContent({ type: 'detailsBlock' }).run()
+    const inserted = insertBlockNodeInList('detailsBlock')
+    if (!inserted) editor.chain().focus().insertContent({ type: 'detailsBlock' }).run()
     if (removed) cleanDanglingSlash(removed.from)
     closeSlash()
     pushDebug('insert details block')

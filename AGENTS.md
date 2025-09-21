@@ -1,12 +1,17 @@
 # Agents
 
 ## Codex Automation
-- Imported the Daily Worklog Outliner client and server from `reference/` into the active repo (`client/`, `server/`).
-- Preserved helper scripts such as `start-all.sh` for concurrent dev startup.
-- Added `.gitignore` guards for runtime data (`server/data/.gitignore`, `server/src/uploads/.gitignore`).
-- Ready to install dependencies and run the app via `./start-all.sh`.
+- Verified the Daily Worklog Outliner client (`client/`) runs on Vite + React with rich-text editing (TipTap) and timeline/history views.
+- Confirmed the Express + SQLite API in `server/` mounts routes for outline data, daily snapshots, uploads, history, and static file access.
+- Noted `start-all.sh` still orchestrates npm install (prefers `npm ci`) and launches both services via `concurrently` with shared `VITE_API_URL=/`.
+- Ensured runtime folders (`server/data/`, `server/src/uploads/`) remain guarded by `.gitignore` placeholders.
+
+## Environment Notes
+- `client/` and `server/` already have `node_modules/` present; reinstall as needed to refresh dependencies.
+- API listens on port 4000 by default; Vite dev server provides the UI and proxies API calls when started through `start-all.sh`.
+- Logs from prior runs are captured in `server.log`, `client.log`, and `start-all.log` at the repo root.
 
 ## Next Suggested Steps
-1. Run `npm ci` (or `npm install`) inside both `client/` and `server/`.
-2. Launch `./start-all.sh` to start the API and UI together.
-3. Populate tasks via the UI or seed script (`npm run seed` inside `server/`) as needed.
+1. Use `./start-all.sh` to (re)install dependencies and launch both services together.
+2. Once running, open the Vite URL printed in the terminal (defaults to `http://localhost:5173`) to access the UI.
+3. Seed demo data with `npm run seed` inside `server/` if the workspace starts empty.

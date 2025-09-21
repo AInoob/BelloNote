@@ -1,8 +1,6 @@
 
 import express from 'express'
 import cors from 'cors'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
 
 import './lib/db.js'
@@ -12,10 +10,6 @@ import uploadRouter from './routes/upload.js'
 import outlineRouter from './routes/outline.js'
 import historyRouter from './routes/history.js'
 import filesRouter from './routes/files.js'
-import { ensureUploadDir } from './lib/files.js'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 const require = createRequire(import.meta.url)
 const { version: pkgVersion } = require('../package.json')
@@ -36,9 +30,6 @@ app.options('*', cors())
 
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
-
-ensureUploadDir()
-app.use('/uploads', express.static(path.join(__dirname, './uploads')))
 app.use('/files', filesRouter)
 
 app.use('/api', outlineRouter)
