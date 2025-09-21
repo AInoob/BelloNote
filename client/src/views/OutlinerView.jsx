@@ -1,14 +1,17 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { EditorContent, useEditor, ReactNodeViewRenderer, NodeViewContent } from '@tiptap/react'
+import { EditorContent, useEditor, ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import Image from '@tiptap/extension-image'
+import { ImageWithMeta } from '../extensions/imageWithMeta.js'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import ListItem from '@tiptap/extension-list-item'
+import Link from '@tiptap/extension-link'
+import Highlight from '@tiptap/extension-highlight'
 import { lowlight } from 'lowlight/lib/core.js'
 import dayjs from 'dayjs'
 import { TextSelection, NodeSelection } from 'prosemirror-state'
 import { API_ROOT, absoluteUrl, getOutline, saveOutlineApi, uploadImage } from '../api.js'
+import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
 import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
 import { DetailsBlock } from '../extensions/detailsBlock.jsx'
 
@@ -22,20 +25,122 @@ const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
 const loadCollapsed = () => { try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')) } catch { return new Set() } }
 const saveCollapsed = (s) => localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(s)))
 
-const TaskListItem = ListItem.extend({
-  name: 'listItem',
-  draggable: true,
-  selectable: true,
-  addAttributes() { return { dataId: { default: null }, status: { default: 'todo' }, collapsed: { default: false } } },
-  addNodeView() { return ReactNodeViewRenderer(ListItemView) }
-})
+const URL_PROTOCOL_RE = /^[a-z][\w+.-]*:\/\//i
+const DOMAIN_LIKE_RE = /^[\w.-]+\.[a-z]{2,}(?:\/[\w#?=&%+@.\-]*)?$/i
+
+const isLikelyUrl = (value = '') => {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  if (URL_PROTOCOL_RE.test(trimmed)) {
+    try { new URL(trimmed); return true } catch { return false }
+  }
+  return DOMAIN_LIKE_RE.test(trimmed)
+}
+
+const normalizeUrl = (value = '') => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (URL_PROTOCOL_RE.test(trimmed)) return trimmed
+  return `https://${trimmed}`
+}
+
+const escapeForRegex = (value = '') => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
+
+function CodeBlockView(props) {
+  const { node, extension, updateAttributes, editor } = props
+  const [copied, setCopied] = useState(false)
+  const codeText = useMemo(() => node.textContent || '', [node])
+  const languageLabel = useMemo(() => {
+    const raw = node.attrs.language
+    if (!raw || typeof raw !== 'string') return 'Code'
+    if (!raw.trim()) return 'Code'
+    return raw
+      .split(/[-_\s]+/)
+      .filter(Boolean)
+      .map(part => part[0]?.toUpperCase() + part.slice(1))
+      .join(' ')
+  }, [node.attrs.language])
+
+  const handleCopy = async () => {
+    const text = codeText.replace(/\u200b/g, '')
+    const reset = () => setCopied(false)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(reset, 1500)
+    } catch {
+      try {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+        setCopied(true)
+        setTimeout(reset, 1500)
+      } catch {
+        setCopied(false)
+      }
+    }
+  }
+
+  return (
+    <NodeViewWrapper className="code-block-wrapper" data-language={node.attrs.language || ''}>
+      <div className="code-block-actions" contentEditable={false} tabIndex={-1}>
+        <span className="code-block-label">{languageLabel}</span>
+        <button
+          type="button"
+          className={`code-copy-btn ${copied ? 'copied' : ''}`}
+          onClick={handleCopy}
+          tabIndex={-1}
+        >
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
+      </div>
+      <pre>
+        <code>
+          <NodeViewContent as="span" />
+        </code>
+      </pre>
+    </NodeViewWrapper>
+  )
+}
+
+function createTaskListItemExtension({ readOnly, draggingState }) {
+  return ListItem.extend({
+    name: 'listItem',
+    draggable: !readOnly,
+    selectable: true,
+    addAttributes() {
+      return {
+        dataId: { default: null },
+        status: { default: 'todo' },
+        collapsed: { default: false }
+      }
+    },
+    addNodeView() {
+      return ReactNodeViewRenderer((props) => (
+        <ListItemView
+          {...props}
+          readOnly={readOnly}
+          draggingState={draggingState}
+        />
+      ))
+    }
+  })
+}
 
 function ListItemView(props) {
-  const { node, updateAttributes, editor, getPos } = props
+  const { node, updateAttributes, editor, getPos, readOnly = false, draggingState } = props
   const id = node.attrs.dataId
   const status = node.attrs.status || 'todo'
   const collapsed = !!node.attrs.collapsed
   const fallbackIdRef = useRef(id ? String(id) : `temp-${Math.random().toString(36).slice(2, 8)}`)
+  const justDraggedRef = useRef(false)
+  const draggingRef = draggingState || { current: null }
 
   useEffect(() => {
     if (id) fallbackIdRef.current = String(id)
@@ -52,14 +157,18 @@ function ListItemView(props) {
     const set = loadCollapsed()
     if (id) { next ? set.add(String(id)) : set.delete(String(id)); saveCollapsed(set) }
   }
+
   const cycle = () => {
+    if (readOnly) return
     const idx = STATUS_ORDER.indexOf(status)
     const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
     updateAttributes({ status: next })
   }
 
   const handleDragStart = (event) => {
+    if (readOnly) return
     try {
+      justDraggedRef.current = true
       let currentId = id ? String(id) : fallbackIdRef.current
       if (!currentId) {
         currentId = 'new-' + Math.random().toString(36).slice(2, 8)
@@ -70,6 +179,7 @@ function ListItemView(props) {
       const view = editor.view
       const tr = view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos))
       view.dispatch(tr)
+      console.log('[drag] start', { id: currentId, pos })
       if (event.dataTransfer) {
         event.dataTransfer.setData('text/plain', ' ')
         event.dataTransfer.effectAllowed = 'move'
@@ -79,11 +189,13 @@ function ListItemView(props) {
         const wrapper = event.currentTarget.closest('li.li-node')
         if (wrapper) wrapper.setAttribute('data-id', currentId)
       }
-      draggingRef.current = {
-        id: currentId,
-        element: event.currentTarget instanceof HTMLElement
-          ? event.currentTarget.closest('li.li-node')
-          : null
+      if (draggingRef) {
+        draggingRef.current = {
+          id: currentId,
+          element: event.currentTarget instanceof HTMLElement
+            ? event.currentTarget.closest('li.li-node')
+            : null
+        }
       }
     } catch (e) {
       console.error('[drag] failed to select node', e)
@@ -91,37 +203,61 @@ function ListItemView(props) {
   }
 
   const handleDragEnd = () => {
-    draggingRef.current = null
+    if (readOnly) return
+    const last = draggingRef?.current
+    if (last) console.log('[drag] end', { id: last.id })
+    if (draggingRef) draggingRef.current = null
     if (editor?.view) editor.view.dragging = null
+    // Defer resetting until after click events complete so we can detect drag+click
+    setTimeout(() => { justDraggedRef.current = false }, 0)
+  }
+
+  const handleToggleClick = () => {
+    if (justDraggedRef.current) {
+      // Skip toggling when the control was just used for dragging
+      justDraggedRef.current = false
+      return
+    }
+    toggleCollapse()
   }
 
   return (
-    <li
+    <NodeViewWrapper
+      as="li"
       className={`li-node ${collapsed ? 'collapsed' : ''}`}
-      data-node-view-wrapper=""
       data-status={status}
       data-id={id ? String(id) : fallbackIdRef.current}
-      draggable
-      onDragEnd={handleDragEnd}
+      draggable={!readOnly}
+      onDragEnd={readOnly ? undefined : handleDragEnd}
     >
       <div className="li-row">
-        <button className="caret" onClick={toggleCollapse} title={collapsed ? 'Expand' : 'Collapse'}>{collapsed ? '▸' : '▾'}</button>
-        <span
-          className="drag-handle"
-          draggable
-          contentEditable={false}
-          onMouseDown={(e) => e.preventDefault()}
-          onDragStart={handleDragStart}
-          title="Drag to reorder"
-        >⋮⋮</span>
-        <button className="status-chip inline" onClick={cycle} title="Click to change status">{STATUS_ICON[status] || '○'}</button>
+        <button
+          className="caret drag-toggle"
+          onClick={handleToggleClick}
+          title={collapsed ? 'Expand (drag to reorder)' : 'Collapse (drag to reorder)'}
+          draggable={!readOnly}
+          onDragStart={readOnly ? undefined : handleDragStart}
+          type="button"
+        >
+          <span className="caret-arrow" aria-hidden>{collapsed ? '▸' : '▾'}</span>
+          <span className="caret-grip" aria-hidden>⋮</span>
+        </button>
+        <button
+          className="status-chip inline"
+          onClick={readOnly ? undefined : cycle}
+          title="Click to change status"
+          disabled={readOnly}
+        >
+          {STATUS_ICON[status] || '○'}
+        </button>
         <NodeViewContent className="li-content" />
       </div>
-    </li>
+    </NodeViewWrapper>
   )
 }
 
-export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=false }) {
+export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=false, readOnly = false, initialOutline = null }) {
+  const isReadOnly = !!readOnly
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [slashOpen, setSlashOpen] = useState(false)
@@ -131,7 +267,36 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const slashMarker = useRef(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState({ todo: true, 'in-progress': true, done: true })
+  const [slashQuery, setSlashQuery] = useState('')
+  const slashQueryRef = useRef('')
+  const slashInputRef = useRef(null)
+  const slashSelectedRef = useRef(0)
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0)
+  const filteredCommandsRef = useRef([])
+  const closeSlashRef = useRef(() => {})
   const draggingRef = useRef(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchQueryRef = useRef('')
+  const convertingImagesRef = useRef(false)
+  const pendingImageSrcRef = useRef(new Set())
+
+  const taskListItemExtension = useMemo(
+    () => createTaskListItemExtension({ readOnly: isReadOnly, draggingState: draggingRef }),
+    [isReadOnly, draggingRef]
+  )
+
+  const updateSlashActive = useCallback((idx) => {
+    slashSelectedRef.current = idx
+    setSlashActiveIndex(idx)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      draggingRef.current = null
+    }
+  }, [draggingRef])
+  useEffect(() => { slashQueryRef.current = slashQuery }, [slashQuery])
+  useEffect(() => { searchQueryRef.current = searchQuery }, [searchQuery])
   const dirtyRef = useRef(false)
   const savingRef = useRef(false)
 
@@ -141,15 +306,42 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     LOG(msg, extra)
   }
 
+  const CodeBlockWithCopy = useMemo(
+    () => CodeBlockLowlight.extend({
+      addNodeView() {
+        return ReactNodeViewRenderer(CodeBlockView)
+      }
+    }).configure({ lowlight }),
+    []
+  )
+
+  const imageExtension = useMemo(
+    () => ImageWithMeta.configure({ inline: true, allowBase64: true }),
+    []
+  )
+
+  const extensions = useMemo(() => [
+    StarterKit.configure({ listItem: false, codeBlock: false }),
+    taskListItemExtension,
+    Link.configure({ openOnClick: false, autolink: false, linkOnPaste: false }),
+    Highlight.configure({ multicolor: true }),
+    imageExtension,
+    CodeBlockWithCopy,
+    WorkDateHighlighter,
+    DetailsBlock
+  ], [taskListItemExtension, CodeBlockWithCopy, imageExtension])
+
   const editor = useEditor({
     // disable default codeBlock to avoid duplicate name with CodeBlockLowlight
-    extensions: [StarterKit.configure({ listItem: false, codeBlock: false }), TaskListItem, Image.configure({ inline:true, allowBase64:true }), CodeBlockLowlight.configure({ lowlight }), WorkDateHighlighter, DetailsBlock],
+    extensions,
     content: '<p>Loading…</p>',
-    autofocus: true,
+    autofocus: !isReadOnly,
+    editable: !isReadOnly,
     onCreate: () => { pushDebug('editor: ready') },
-    onUpdate: () => { markDirty(); queueSave() },
+    onUpdate: () => { if (!isReadOnly) { markDirty(); queueSave() } },
     editorProps: {
       handleTextInput(view, from, to, text) {
+        if (isReadOnly) return false
         if (text === '/') {
           pushDebug('handleTextInput " / " passthrough', { from, to })
           return false
@@ -158,6 +350,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       },
       handleDOMEvents: {
         beforeinput: (view, event) => {
+          if (isReadOnly) return false
           const e = event
           if (e && e.inputType === 'insertText' && e.data === '/') {
             pushDebug('beforeinput passthrough for " / "')
@@ -166,6 +359,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           return false
         },
         keypress: (view, event) => {
+          if (isReadOnly) return false
           if (event.key === '/') {
             pushDebug('keypress passthrough for " / "')
             return false
@@ -173,6 +367,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           return false
         },
         input: (view, event) => {
+          if (isReadOnly) return false
           const data = event.data || ''
           if (data === '/') {
             pushDebug('input passthrough for " / "')
@@ -181,7 +376,53 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           return false
         }
       },
+      handlePaste(view, event) {
+        if (isReadOnly) return false
+        const text = event.clipboardData?.getData('text/plain') || ''
+        const trimmed = text.trim()
+        if (!trimmed || !isLikelyUrl(trimmed)) return false
+        if (view.state.selection.empty) return false
+        event.preventDefault()
+        const href = normalizeUrl(trimmed)
+        editor?.chain().focus().setLink({ href }).run()
+        pushDebug('paste: link applied', { href })
+        return true
+      },
       handleKeyDown(view, event) {
+        if (isReadOnly) return false
+        if (slashOpen) {
+          if (event.key === 'Enter') {
+            const command = filteredCommandsRef.current[slashSelectedRef.current] || filteredCommandsRef.current[0]
+            if (command) {
+              event.preventDefault()
+              event.stopPropagation()
+              command.run()
+              return true
+            }
+          }
+          if (event.key === 'ArrowDown') {
+            if (filteredCommandsRef.current.length) {
+              event.preventDefault()
+              const next = (slashSelectedRef.current + 1) % filteredCommandsRef.current.length
+              updateSlashActive(next)
+            }
+            return true
+          }
+          if (event.key === 'ArrowUp') {
+            if (filteredCommandsRef.current.length) {
+              event.preventDefault()
+              const next = (slashSelectedRef.current - 1 + filteredCommandsRef.current.length) % filteredCommandsRef.current.length
+              updateSlashActive(next)
+            }
+            return true
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            closeSlashRef.current()
+            return true
+          }
+        }
         const isSlashKey = event.key === '/' || event.key === '?' || event.code === 'Slash'
         if (isSlashKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
           const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
@@ -200,8 +441,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
             rect = { left: 0, bottom: 0 }
             pushDebug('popup: coords fail', { error: e.message })
           }
+          updateSlashActive(0)
           setSlashPos({ x: rect.left, y: rect.bottom + 4 })
           setSlashOpen(true)
+          setSlashQuery('')
           pushDebug('popup: open (keydown)', { key: event.key, char, left: rect.left, top: rect.bottom })
           return true
         }
@@ -248,6 +491,148 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     }
   })
 
+  const normalizeImageSrc = useCallback((src) => absoluteUrl(src), [])
+
+  const ensureUploadedImages = useCallback(async () => {
+    if (!editor || isReadOnly || convertingImagesRef.current) return
+    convertingImagesRef.current = true
+    try {
+      const queue = []
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type?.name !== 'image') return
+        const src = node.attrs?.src
+        if (!src || !isDataUri(src) || pendingImageSrcRef.current.has(src)) return
+        queue.push({ pos, src })
+        pendingImageSrcRef.current.add(src)
+      })
+      for (const item of queue) {
+        const payload = dataUriToFilePayload(item.src)
+        if (!payload) {
+          pendingImageSrcRef.current.delete(item.src)
+          continue
+        }
+        try {
+          const result = await uploadImage(payload.file, payload.name)
+          const { state, view } = editor
+          const node = state.doc.nodeAt(item.pos)
+          if (!node || node.type?.name !== 'image') continue
+          const attrs = { ...node.attrs }
+          attrs.src = normalizeImageSrc(result.url)
+          if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
+          if (result?.id) attrs['data-file-id'] = result.id
+          view.dispatch(state.tr.setNodeMarkup(item.pos, undefined, attrs))
+        } catch (err) {
+          console.error('[outline] failed to upload pasted image', err)
+        } finally {
+          pendingImageSrcRef.current.delete(item.src)
+        }
+      }
+    } finally {
+      convertingImagesRef.current = false
+    }
+  }, [editor, isReadOnly, normalizeImageSrc])
+
+  useEffect(() => {
+    if (!editor || isReadOnly) return
+    const handler = () => { ensureUploadedImages() }
+    editor.on('update', handler)
+    ensureUploadedImages()
+    return () => {
+      editor.off('update', handler)
+    }
+  }, [editor, isReadOnly, ensureUploadedImages])
+
+  const applySearchHighlight = useCallback(() => {
+    if (!editor) return
+    const { state } = editor
+    const { doc, selection } = state
+    const highlightMark = editor.schema.marks.highlight
+    if (!highlightMark) return
+    let tr = state.tr.removeMark(0, doc.content.size, highlightMark)
+    const query = searchQueryRef.current.trim()
+    if (!query) {
+      tr.setMeta('addToHistory', false)
+      tr.setSelection(selection.map(tr.doc, tr.mapping))
+      editor.view.dispatch(tr)
+      return
+    }
+    let regex
+    try {
+      regex = new RegExp(escapeForRegex(query), 'gi')
+    } catch {
+      tr.setMeta('addToHistory', false)
+      tr.setSelection(selection.map(tr.doc, tr.mapping))
+      editor.view.dispatch(tr)
+      return
+    }
+    doc.descendants((node, pos) => {
+      if (!node.isText) return
+      const text = node.text || ''
+      let match
+      while ((match = regex.exec(text)) !== null) {
+        const from = pos + match.index
+        const to = from + match[0].length
+        tr = tr.addMark(from, to, highlightMark.create({ color: '#fde68a' }))
+      }
+    })
+    tr.setMeta('addToHistory', false)
+    tr.setSelection(selection.map(tr.doc, tr.mapping))
+    editor.view.dispatch(tr)
+  }, [editor])
+
+  useEffect(() => {
+    if (!editor) return
+    const updateSlashState = () => {
+      const marker = slashMarker.current
+      if (!marker) {
+        if (slashQueryRef.current) setSlashQuery('')
+        return
+      }
+      try {
+        const { pos } = marker
+        const { from } = editor.state.selection
+        const to = Math.max(from, pos + 1)
+        const text = editor.state.doc.textBetween(pos, to, '\n', '\n')
+        if (!text.startsWith('/')) {
+          closeSlashRef.current()
+          return
+        }
+        const query = text.slice(1)
+        if (slashQueryRef.current !== query) setSlashQuery(query)
+      } catch (err) {
+        if (slashQueryRef.current) setSlashQuery('')
+      }
+    }
+    editor.on('update', updateSlashState)
+    editor.on('selectionUpdate', updateSlashState)
+    return () => {
+      editor.off('update', updateSlashState)
+      editor.off('selectionUpdate', updateSlashState)
+    }
+  }, [editor])
+
+  useEffect(() => {
+    if (slashOpen) {
+      updateSlashActive(0)
+      requestAnimationFrame(() => {
+        slashInputRef.current?.focus()
+        slashInputRef.current?.select()
+      })
+    }
+  }, [slashOpen])
+
+  useEffect(() => {
+    if (!editor) return
+    applySearchHighlight()
+  }, [editor, applySearchHighlight, searchQuery])
+
+  useEffect(() => {
+    if (!editor) return
+    const handler = () => applySearchHighlight()
+    editor.on('update', handler)
+    return () => editor.off('update', handler)
+  }, [editor, applySearchHighlight])
+
   useEffect(() => { onSaveStateChange({ dirty, saving }) }, [dirty, saving])
 
   useEffect(() => {
@@ -276,8 +661,12 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     function onDocKeyDown(e) {
       if (!slashOpen) return
       const isNav = ['ArrowDown','ArrowUp','Enter','Tab'].includes(e.key)
+      const insideMenu = menuRef.current && menuRef.current.contains(e.target)
       if (e.key === 'Escape') { closeSlash(); e.preventDefault(); pushDebug('popup: close by ESC') }
-      else if (!isNav && e.key.length === 1 && e.key !== '/' && e.key !== '?') { closeSlash(); pushDebug('popup: close by typing', { key:e.key }) }
+      else if (!insideMenu && !isNav && e.key.length === 1 && e.key !== '/' && e.key !== '?') {
+        closeSlash();
+        pushDebug('popup: close by typing', { key:e.key })
+      }
     }
     document.addEventListener('mousedown', onDocMouseDown)
     document.addEventListener('keydown', onDocKeyDown)
@@ -317,8 +706,13 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }
 
   const saveTimer = useRef(null)
-  const markDirty = () => { dirtyRef.current = true; setDirty(true) }
+  const markDirty = () => {
+    if (isReadOnly) return
+    dirtyRef.current = true
+    setDirty(true)
+  }
   function queueSave(delay = 700) {
+    if (isReadOnly) return
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => doSave(), delay)
   }
@@ -396,7 +790,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }, [editor, applyStatusFilter])
 
   useEffect(() => {
-    if (!editor) return
+    if (!editor || isReadOnly) return
     const dom = editor.view.dom
     const handleDragOver = (event) => {
       if (!draggingRef.current) return
@@ -407,18 +801,44 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       const drag = draggingRef.current
       if (!drag) return
       event.preventDefault()
-      const targetEl = event.target instanceof HTMLElement ? event.target.closest('li.li-node') : null
       const dragEl = drag.element
-      if (dragEl && targetEl && dragEl.contains(targetEl)) {
+      const pointerY = event.clientY
+      const candidates = Array.from(dom.querySelectorAll('li.li-node'))
+        .filter(el => el !== dragEl) // skip the node currently being dragged
+      let chosen = null
+      let dropAfter = false
+      for (const el of candidates) {
+        const rect = el.getBoundingClientRect()
+        if (rect.height === 0) continue
+        const mid = rect.top + rect.height / 2
+        if (pointerY < mid) {
+          chosen = el
+          dropAfter = false
+          break
+        }
+      }
+      if (!chosen && candidates.length) {
+        chosen = candidates[candidates.length - 1]
+        dropAfter = true
+      }
+      const targetId = chosen?.getAttribute('data-id') || null
+      if (dragEl && chosen && dragEl.contains(chosen)) {
+        console.log('[drop] aborted: target inside drag element', { dragId: drag.id, targetId })
         draggingRef.current = null
         return
       }
-      const targetId = targetEl?.getAttribute('data-id') || null
       const outline = parseOutline()
-      const dropAfter = targetEl ? (event.clientY > (targetEl.getBoundingClientRect().top + targetEl.getBoundingClientRect().height / 2)) : true
+      console.log('[drop] request', {
+        dragId: drag.id,
+        targetId,
+        dropAfter,
+        pointerY,
+        chosenBounds: chosen ? (() => { const rect = chosen.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, mid: rect.top + rect.height / 2 } })() : null
+      })
       const moved = moveNodeInOutline(outline, drag.id, targetId, dropAfter ? 'after' : 'before')
       draggingRef.current = null
       if (!moved) return
+      console.log('[drop] move applied', { order: moved.map(n => n.id) })
       const docJSON = { type: 'doc', content: [buildList(moved)] }
       editor.commands.setContent(docJSON)
       markDirty()
@@ -431,10 +851,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       dom.removeEventListener('dragover', handleDragOver)
       dom.removeEventListener('drop', handleDrop)
     }
-  }, [editor, applyStatusFilter])
+  }, [editor, applyStatusFilter, isReadOnly])
 
   async function doSave() {
-    if (!editor) return
+    if (!editor || isReadOnly) return
     if (savingRef.current) return
     pushDebug('save: begin')
     savingRef.current = true
@@ -491,7 +911,22 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }
 
   useEffect(() => {
-    if (!editor) return
+    if (!editor || !isReadOnly) return
+    if (!initialOutline) return
+    const roots = Array.isArray(initialOutline?.roots)
+      ? initialOutline.roots
+      : Array.isArray(initialOutline)
+        ? initialOutline
+        : (initialOutline?.roots || [])
+    const doc = { type: 'doc', content: [buildList(roots)] }
+    editor.commands.setContent(doc)
+    dirtyRef.current = false
+    setDirty(false)
+    applyStatusFilter()
+  }, [editor, initialOutline, isReadOnly, applyStatusFilter])
+
+  useEffect(() => {
+    if (!editor || isReadOnly) return
     ;(async () => {
       const data = await getOutline()
       const roots = data.roots || []
@@ -501,9 +936,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       setDirty(false)
       pushDebug('loaded outline', { roots: roots.length })
     })()
-  }, [editor])
-
-  const normalizeImageSrc = (src) => absoluteUrl(src)
+  }, [editor, isReadOnly])
 
   function normalizeBodyNodes(nodes) {
     return nodes.map(node => {
@@ -554,7 +987,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       content: nodes.map(n => {
         const titleText = n.title || 'Untitled'
         const ownDates = Array.isArray(n.ownWorkedOnDates) ? n.ownWorkedOnDates : []
-        const body = parseBodyContent(n.content)
+        const rawBody = n.content ?? n.body ?? []
+        const body = parseBodyContent(rawBody)
         const hasExtras = body.some(node => node.type !== 'paragraph' || (node.content || []).some(ch => ch.type !== 'text'))
         const bodyContent = body.length ? body : defaultBody(titleText, ownDates, hasExtras)
         const children = [...bodyContent]
@@ -588,7 +1022,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           const dates = extractDates(li)
           const id = li.attrs?.dataId || null
           const status = li.attrs?.status || 'todo'
-          const item = { id, title, status, dates, children: [] }
+          const item = { id, title, status, dates, ownWorkedOnDates: dates, children: [] }
           if (bodyNodes.length) {
             try {
               const cloned = JSON.parse(JSON.stringify(bodyNodes))
@@ -596,6 +1030,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
             } catch {
               item.body = normalizeBodyNodes(bodyNodes)
             }
+            item.content = item.body
             pushDebug('parse: captured body', { id, body: item.body })
           }
           collector.push(item)
@@ -612,16 +1047,21 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     : JSON.parse(JSON.stringify(outline)))
 
   function moveNodeInOutline(nodes, dragId, targetId, position = 'before') {
+    console.log('[drop] moveNodeInOutline', { dragId, targetId, position })
     if (!dragId || dragId === targetId) return null
     const clone = cloneOutline(nodes)
     const removedInfo = removeNodeById(clone, dragId)
-    if (!removedInfo?.node) return null
+    if (!removedInfo?.node) {
+      console.log('[drop] move failed to find dragged node', { dragId })
+      return null
+    }
     const removed = removedInfo.node
     if (!targetId) {
       clone.push(removed)
       return clone
     }
     if (!insertNodeRelative(clone, targetId, removed, position === 'after')) {
+      console.log('[drop] insert fallback to end', { dragId, targetId })
       clone.push(removed)
     }
     return clone
@@ -670,33 +1110,76 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }
 
   const closeSlash = ({ preserveMarker = false } = {}) => {
-    if (!preserveMarker) slashMarker.current = null
+    if (!preserveMarker) {
+      const marker = slashMarker.current
+      if (marker && editor) {
+        const cursorPos = marker.pos + 1 + slashQueryRef.current.length
+        editor.chain().setTextSelection(cursorPos).focus().run()
+      } else if (editor) {
+        editor.chain().focus().run()
+      }
+      slashMarker.current = null
+      updateSlashActive(0)
+      setSlashQuery('')
+    }
     setSlashOpen(false)
   }
-  const consumeSlashMarker = () => {
+  closeSlashRef.current = closeSlash
+  const consumeSlashMarker = useCallback(() => {
     const marker = slashMarker.current
-    if (!marker || !editor) return
-    const { pos, char } = marker
+    if (!marker || !editor) return null
+    const pos = marker.pos
+    const queryLength = slashQueryRef.current.length
+    const to = pos + 1 + queryLength
+    let removed = null
     try {
-      const text = editor.state.doc.textBetween(pos, pos + 1, '\n', '\n')
-      if (text === char) {
-        editor.chain().focus().deleteRange({ from: pos, to: pos + 1 }).run()
-        pushDebug('popup: removed slash marker', { pos, char })
-      }
+      editor.chain().focus().setTextSelection({ from: pos, to }).deleteSelection().run()
+      removed = { from: pos, to }
+      pushDebug('popup: removed slash marker', { pos, length: queryLength })
     } catch (e) {
       pushDebug('popup: remove slash marker failed', { error: e.message })
     }
     slashMarker.current = null
+    setSlashQuery('')
+    return removed
+  }, [editor])
+
+  const cleanDanglingSlash = useCallback((from) => {
+    if (!editor) return
+    const char = editor.state.doc.textBetween(from, from + 1, '\n', '\n')
+    if (char !== '/') return
+    try {
+      editor.chain().focus().deleteRange({ from, to: from + 1 }).run()
+      pushDebug('popup: cleaned dangling slash', { from })
+    } catch (e) {
+      pushDebug('popup: clean dangling slash failed', { error: e.message })
+    }
+  }, [editor])
+  const insertToday = () => {
+    const removed = consumeSlashMarker()
+    editor.chain().focus().insertContent(' @' + dayjs().format('YYYY-MM-DD')).run()
+    if (removed) cleanDanglingSlash(removed.from)
+    closeSlash()
+    pushDebug('insert date today')
   }
-  const insertToday = () => { consumeSlashMarker(); editor.chain().focus().insertContent(' @' + dayjs().format('YYYY-MM-DD')).run(); closeSlash(); pushDebug('insert date today') }
-  const insertPick = () => { const v = prompt('Date (YYYY-MM-DD)?', dayjs().format('YYYY-MM-DD')); if (v) { consumeSlashMarker(); editor.chain().focus().insertContent(' @' + v).run(); pushDebug('insert date picked', { v }) } closeSlash() }
+  const insertPick = () => {
+    const v = prompt('Date (YYYY-MM-DD)?', dayjs().format('YYYY-MM-DD'))
+    if (v) {
+      const removed = consumeSlashMarker()
+      editor.chain().focus().insertContent(' @' + v).run()
+      if (removed) cleanDanglingSlash(removed.from)
+      pushDebug('insert date picked', { v })
+    }
+    closeSlash()
+  }
   const insertCode = () => {
-    consumeSlashMarker()
+    const removed = consumeSlashMarker()
     const inserted = editor.chain().focus().insertContent([
       { type: 'hardBreak' },
       { type: 'codeBlock', content: [] }
     ]).run()
     if (!inserted) editor.chain().focus().toggleCodeBlock().run()
+    if (removed) cleanDanglingSlash(removed.from)
     closeSlash()
     pushDebug('insert code block')
   }
@@ -706,16 +1189,69 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     input.onchange = async () => {
       const f = input.files[0];
       if (!f) return
-      consumeSlashMarker()
-      const { url } = await uploadImage(f)
-      const normalized = normalizeImageSrc(url)
-      editor.chain().focus().setImage({ src: normalized }).run()
-      pushDebug('insert image', { url: normalized })
+      const removed = consumeSlashMarker()
+      const result = await uploadImage(f)
+      const normalized = normalizeImageSrc(result.url)
+      const attrs = { src: normalized }
+      if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
+      if (result?.id) attrs['data-file-id'] = result.id
+      editor.chain().focus().setImage(attrs).run()
+      if (removed) cleanDanglingSlash(removed.from)
+      pushDebug('insert image', { url: normalized, id: result?.id })
       closeSlash()
     }
     input.click()
   }
-  const insertDetails = () => { consumeSlashMarker(); editor.chain().focus().insertContent({ type: 'detailsBlock' }).run(); closeSlash(); pushDebug('insert details block') }
+  const insertDetails = () => {
+    const removed = consumeSlashMarker()
+    editor.chain().focus().insertContent({ type: 'detailsBlock' }).run()
+    if (removed) cleanDanglingSlash(removed.from)
+    closeSlash()
+    pushDebug('insert details block')
+  }
+
+  const slashCommands = useMemo(() => ([
+    { id: 'today', label: 'Date worked on (today)', hint: 'Insert @YYYY-MM-DD for today', keywords: ['today', 'date', 'now'], run: insertToday },
+    { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },
+    { id: 'code', label: 'Code block', hint: 'Insert a multiline code block', keywords: ['code', 'snippet', '```'], run: insertCode },
+    { id: 'image', label: 'Upload image', hint: 'Upload and insert an image', keywords: ['image', 'photo', 'upload'], run: insertImage },
+    { id: 'details', label: 'Details (inline)', hint: 'Collapsible details block', keywords: ['details', 'summary', 'toggle'], run: insertDetails }
+  ]), [insertToday, insertPick, insertCode, insertImage, insertDetails])
+
+  const normalizedSlashQuery = slashQuery.trim().toLowerCase()
+  const filteredCommands = useMemo(() => {
+    const terms = normalizedSlashQuery.split(/\s+/g).filter(Boolean)
+    if (!terms.length) return slashCommands
+    const scored = []
+    slashCommands.forEach((cmd, index) => {
+      const label = cmd.label.toLowerCase()
+      const keywords = (cmd.keywords || []).map(k => k.toLowerCase())
+      let matches = true
+      let score = 0
+      for (const term of terms) {
+        const labelMatch = label.includes(term)
+        const keywordExact = keywords.includes(term)
+        const keywordMatch = keywordExact || keywords.some(k => k.includes(term))
+        if (!labelMatch && !keywordMatch) { matches = false; break }
+        if (keywordExact) score += 3
+        else if (keywordMatch) score += 2
+        if (labelMatch) score += 1
+      }
+      if (matches) scored.push({ cmd, score, index })
+    })
+    scored.sort((a, b) => (b.score - a.score) || (a.index - b.index))
+    return scored.map(item => item.cmd)
+  }, [normalizedSlashQuery, slashCommands])
+
+  filteredCommandsRef.current = filteredCommands
+
+  useEffect(() => {
+    if (!filteredCommands.length) {
+      updateSlashActive(0)
+    } else if (slashSelectedRef.current >= filteredCommands.length) {
+      updateSlashActive(0)
+    }
+  }, [filteredCommands, updateSlashActive])
 
   return (
     <div style={{ position:'relative' }}>
@@ -734,6 +1270,17 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           <button className="btn ghost" type="button" onClick={() => applyPresetFilter('active')}>Active</button>
           <button className="btn ghost" type="button" onClick={() => applyPresetFilter('completed')}>Completed</button>
         </div>
+        <div className="search-bar">
+          <input
+            type="search"
+            value={searchQuery}
+            placeholder="Search outline…"
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button type="button" onClick={() => setSearchQuery('')}>Clear</button>
+          )}
+        </div>
       </div>
       <EditorContent editor={editor} className="tiptap" />
       {imagePreview && (
@@ -745,12 +1292,72 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
         </div>
       )}
       {slashOpen && (
-        <div ref={menuRef} className="slash-menu" style={{ left: slashPos.x, top: slashPos.y }} onMouseDown={(e)=>e.preventDefault()}>
-          <button onClick={insertToday}>Date worked on (today)</button>
-          <button onClick={insertPick}>Date worked on (pick)</button>
-          <button onClick={insertCode}>Code block</button>
-          <button onClick={insertImage}>Upload image</button>
-          <button onClick={insertDetails}>Details (inline)</button>
+        <div
+          ref={menuRef}
+          className="slash-menu"
+          style={{ left: slashPos.x, top: slashPos.y }}
+          onMouseDown={(e) => {
+            if (!(e.target instanceof HTMLInputElement)) e.preventDefault()
+          }}
+        >
+          <input
+            type="text"
+            value={slashQuery}
+            onChange={(e) => {
+              updateSlashActive(0)
+              setSlashQuery(e.target.value)
+            }}
+            placeholder="Type a command…"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                const command = filteredCommands[slashActiveIndex] || filteredCommands[0]
+                command?.run()
+                return
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                closeSlash()
+                return
+              }
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                if (filteredCommands.length) {
+                  const next = (slashActiveIndex + 1) % filteredCommands.length
+                  updateSlashActive(next)
+                }
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                if (filteredCommands.length) {
+                  const next = (slashActiveIndex - 1 + filteredCommands.length) % filteredCommands.length
+                  updateSlashActive(next)
+                }
+                return
+              }
+            }}
+            ref={slashInputRef}
+            autoFocus
+          />
+          {filteredCommands.length ? (
+            filteredCommands.map((cmd, idx) => (
+              <button
+                key={cmd.id}
+                type="button"
+                onClick={cmd.run}
+                className={idx === slashActiveIndex ? 'active' : ''}
+              >
+            <span className="cmd-label">{cmd.label}</span>
+            {cmd.hint ? <span className="cmd-hint">{cmd.hint}</span> : null}
+          </button>
+        ))
+          ) : (
+            <div className="slash-empty">No matches</div>
+          )}
+          {!slashQuery && filteredCommands.length > 0 && (
+            <div className="slash-hint">Type to filter commands · Enter to accept</div>
+          )}
         </div>
       )}
       {showDebug && (

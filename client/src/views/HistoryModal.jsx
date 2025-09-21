@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import OutlinerView from './OutlinerView.jsx'
 import { listHistory, getVersionDoc, diffVersion, restoreVersion } from '../api.js'
 
 export default function HistoryModal({ onClose, onRestored }) {
@@ -9,6 +10,10 @@ export default function HistoryModal({ onClose, onRestored }) {
   const [loading, setLoading] = useState(false)
   const [restoring, setRestoring] = useState(false)
   const [snapshotDoc, setSnapshotDoc] = useState(null)
+  const [snapshotVersionId, setSnapshotVersionId] = useState(null)
+  const [snapshotLoadingId, setSnapshotLoadingId] = useState(null)
+  const [collapsedDays, setCollapsedDays] = useState(new Set())
+  const snapshotRequestRef = useRef(0)
 
   useEffect(() => {
     (async () => {
@@ -45,6 +50,81 @@ export default function HistoryModal({ onClose, onRestored }) {
 
   const grouped = useMemo(() => groupHistory(items), [items])
   const hasItems = grouped.length > 0
+  const versionIndexMap = useMemo(() => {
+    const map = new Map()
+    items.forEach((it, index) => map.set(it.id, index))
+    return map
+  }, [items])
+  const selectedIndex = useMemo(() => (selected ? versionIndexMap.get(selected.id) ?? -1 : -1), [selected, versionIndexMap])
+  const totalVersions = items.length
+  const snapshotIndex = snapshotVersionId != null ? (versionIndexMap.get(snapshotVersionId) ?? null) : null
+  const isSnapshotLoading = snapshotLoadingId !== null
+  const hasNewerSnapshot = snapshotIndex !== null && snapshotIndex > 0
+  const hasOlderSnapshot = snapshotIndex !== null && snapshotIndex < totalVersions - 1
+
+  useEffect(() => {
+    setCollapsedDays(prev => {
+      const next = new Set(prev)
+      grouped.forEach((day, index) => {
+        if (index === 0) {
+          next.delete(day.key)
+        } else if (!prev.has(day.key)) {
+          next.add(day.key)
+        }
+      })
+      return next
+    })
+  }, [grouped])
+
+  const openSnapshotAtIndex = async (index, { reuseDoc = null } = {}) => {
+    if (index == null || index < 0 || index >= items.length) return
+    const target = items[index]
+    if (!target) return
+    const token = snapshotRequestRef.current + 1
+    snapshotRequestRef.current = token
+    if (reuseDoc) {
+      setSnapshotVersionId(target.id)
+      setSnapshotDoc(reuseDoc)
+      setSnapshotLoadingId(null)
+      return
+    }
+    setSnapshotLoadingId(target.id)
+    try {
+      const doc = await getVersionDoc(target.id)
+      if (snapshotRequestRef.current !== token) return
+      setSnapshotDoc(doc.doc)
+      setSnapshotVersionId(target.id)
+    } catch (err) {
+      if (snapshotRequestRef.current === token) console.error('[history] snapshot load failed', err)
+    } finally {
+      if (snapshotRequestRef.current === token) setSnapshotLoadingId(null)
+    }
+  }
+
+  const openSnapshot = (event, it) => {
+    event.stopPropagation()
+    const index = versionIndexMap.get(it.id)
+    if (typeof index !== 'number') return
+    const reuseDoc = selected?.id === it.id && preview ? preview : null
+    openSnapshotAtIndex(index, { reuseDoc })
+  }
+
+  const closeSnapshot = () => {
+    snapshotRequestRef.current += 1
+    setSnapshotDoc(null)
+    setSnapshotVersionId(null)
+    setSnapshotLoadingId(null)
+  }
+
+  const handleSnapshotNewer = () => {
+    if (!hasNewerSnapshot || snapshotIndex == null) return
+    openSnapshotAtIndex(snapshotIndex - 1)
+  }
+
+  const handleSnapshotOlder = () => {
+    if (!hasOlderSnapshot || snapshotIndex == null) return
+    openSnapshotAtIndex(snapshotIndex + 1)
+  }
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -63,34 +143,55 @@ export default function HistoryModal({ onClose, onRestored }) {
               <div className="meta">Make some edits or create a checkpoint to see past versions here.</div>
             </div>
           )}
-          {grouped.map(day => (
-            <div className="history-day" key={day.key}>
-              <div className="history-day-label">{day.label}</div>
-              {day.hours.map(hour => (
-                <div className="history-hour" key={hour.key}>
-                  <div className="history-hour-label">{hour.label}</div>
-                  {hour.minutes.map(min => (
-                    <div className="history-minute" key={min.key}>
-                      <div className="history-minute-label">{min.label}</div>
-                      {min.items.map(it => (
-                        <div
-                          key={it.id}
-                          className={`history-item ${selected?.id===it.id ? 'active' : ''}`}
-                          onClick={() => select(it)}
-                        >
-                          <div>
-                            <div>v{it.id} · {formatTime(it.created_at)}</div>
-                            <div className="meta">{it.cause} · {it.meta?.diffSummary ? `${it.meta.diffSummary.added} added · ${it.meta.diffSummary.removed} removed · ${it.meta.diffSummary.modified} modified` : 'no diff captured'}</div>
-                          </div>
-                          <div className="meta">{Math.round((it.size_bytes||0)/1024)} KB</div>
+          {grouped.map(day => {
+            const collapsed = collapsedDays.has(day.key)
+            return (
+              <div className={`history-day ${collapsed ? 'collapsed' : ''}`} key={day.key}>
+                <button
+                  type="button"
+                  className="history-day-toggle"
+                  aria-expanded={!collapsed}
+                  onClick={() => setCollapsedDays(prev => {
+                    const next = new Set(prev)
+                    if (next.has(day.key)) next.delete(day.key)
+                    else next.add(day.key)
+                    return next
+                  })}
+                >
+                  <span className={`history-day-caret ${collapsed ? '' : 'open'}`} aria-hidden>▸</span>
+                  <span className="history-day-label">{day.label}</span>
+                  <span className="meta">{day.items.length} version{day.items.length === 1 ? '' : 's'}</span>
+                </button>
+                {!collapsed && (
+                  <div className="history-day-list">
+                    {day.items.map(it => (
+                      <div
+                        key={it.id}
+                        className={`history-item ${selected?.id===it.id ? 'active' : ''}`}
+                        onClick={() => select(it)}
+                      >
+                        <div>
+                          <div>v{it.id} · {formatTime(it.created_at)}</div>
+                          <div className="meta">{it.cause}{it.meta?.note ? ` · ${it.meta.note}` : ''}</div>
                         </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          ))}
+                        <div className="history-item-actions">
+                          <div className="meta">{versionMetaText(it)}</div>
+                          <button
+                            className="btn ghost xs"
+                            type="button"
+                            onClick={(event) => openSnapshot(event, it)}
+                            disabled={snapshotLoadingId === it.id}
+                          >
+                            {snapshotLoadingId === it.id ? 'Opening…' : 'Preview'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
         <div className="right">
           {!selected ? <div className="meta">Select a version…</div> : null}
@@ -100,7 +201,16 @@ export default function HistoryModal({ onClose, onRestored }) {
               <div style={{display:'flex', gap:8, alignItems:'center', marginBottom:8}}>
                 <div><strong>Version v{selected.id}</strong> · {new Date(selected.created_at + 'Z').toLocaleString()} · {selected.cause}</div>
                 <div className="spacer"></div>
-                <button className="btn ghost" onClick={() => preview && setSnapshotDoc(preview)} disabled={!preview}>View snapshot</button>
+                <button
+                  className="btn ghost"
+                  onClick={() => {
+                    if (!preview || selectedIndex < 0) return
+                    openSnapshotAtIndex(selectedIndex, { reuseDoc: preview })
+                  }}
+                  disabled={!preview}
+                >
+                  View snapshot
+                </button>
                 <button className="btn" onClick={doRestore} disabled={restoring}>{restoring ? 'Restoring…' : 'Restore'}</button>
               </div>
               <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px'}}>
@@ -121,7 +231,17 @@ export default function HistoryModal({ onClose, onRestored }) {
                 </div>
                 <div>
                   <h3 style={{margin:'6px 0'}}>Preview</h3>
-                  {preview ? <PreviewTree doc={preview} /> : <div className="meta">No preview</div>}
+                  {preview ? (
+                    <div className="history-inline-preview">
+                      <OutlinerView
+                        key={`inline-${selected?.id ?? 'preview'}`}
+                        readOnly
+                        initialOutline={preview}
+                        showDebug={false}
+                        onSaveStateChange={() => {}}
+                      />
+                    </div>
+                  ) : <div className="meta">No preview</div>}
                 </div>
               </div>
             </>
@@ -129,87 +249,135 @@ export default function HistoryModal({ onClose, onRestored }) {
         </div>
       </div>
       {snapshotDoc && (
-        <div className="overlay" onClick={() => setSnapshotDoc(null)}>
-          <div className="modal" style={{ maxWidth:'70vw', maxHeight:'80vh' }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:0 }}>
-              <span>Snapshot preview</span>
-              <button className="btn" onClick={() => setSnapshotDoc(null)}>Close</button>
-            </h2>
-            <div className="snapshot-tree">
-              <PreviewTree doc={snapshotDoc} />
-            </div>
-          </div>
-        </div>
+        <SnapshotViewer
+          doc={snapshotDoc}
+          onClose={closeSnapshot}
+          onPrev={hasNewerSnapshot ? handleSnapshotNewer : null}
+          onNext={hasOlderSnapshot ? handleSnapshotOlder : null}
+          hasPrev={hasNewerSnapshot}
+          hasNext={hasOlderSnapshot}
+          isLoading={isSnapshotLoading}
+        />
       )}
     </div>
   )
 }
 
-function PreviewTree({ doc }) {
+function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext = false, isLoading = false }) {
+  if (!doc) return null
+  const prevDisabled = !hasPrev || typeof onPrev !== 'function' || isLoading
+  const nextDisabled = !hasNext || typeof onNext !== 'function' || isLoading
   return (
-    <div className="tree">
-      <ul>{(doc.roots||[]).map(node => <TreeNode key={node.id} node={node} />)}</ul>
+    <div className="snapshot-fullscreen" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="snapshot-fullscreen-inner" onClick={e => e.stopPropagation()}>
+        <div className="snapshot-fullscreen-bar">
+          <div className="snapshot-fullscreen-title">Snapshot preview</div>
+          <div className="snapshot-fullscreen-actions">
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={() => { if (!prevDisabled) onPrev() }}
+              disabled={prevDisabled}
+            >
+              Newer
+            </button>
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={() => { if (!nextDisabled) onNext() }}
+              disabled={nextDisabled}
+            >
+              Older
+            </button>
+            <button className="btn" type="button" onClick={onClose}>Close</button>
+          </div>
+        </div>
+        <div className="snapshot-fullscreen-body snapshot-fullscreen-body--outline">
+          <OutlinerView
+            readOnly
+            initialOutline={doc}
+            showDebug={false}
+            onSaveStateChange={() => {}}
+          />
+        </div>
+      </div>
     </div>
   )
 }
-function TreeNode({ node }) {
-  return (
-    <li>
-      <span>{statusIcon(node.status)} {node.title} <span className="meta">{(node.ownWorkedOnDates||[]).map(d=>'@'+d).join(' ')}</span></span>
-      {node.children && node.children.length ? (
-        <ul>{node.children.map(ch => <TreeNode key={ch.id} node={ch} />)}</ul>
-      ) : null}
-    </li>
-  )
-}
-function statusIcon(s) { return s==='done'?'✓':(s==='in-progress'?'◐':'○') }
 
 function groupHistory(rows) {
-  const dayMap = new Map()
+  const byDay = new Map()
   rows.forEach(row => {
-    const date = new Date(row.created_at + 'Z')
-    if (Number.isNaN(date.valueOf())) return
+    const date = parseTimestamp(row.created_at)
+    if (!date) return
     const dayKey = date.toISOString().slice(0, 10)
-    const hourKey = date.toISOString().slice(11, 13)
-    const minuteKey = date.toISOString().slice(11, 16)
-    if (!dayMap.has(dayKey)) {
-      dayMap.set(dayKey, {
+    if (!byDay.has(dayKey)) {
+      byDay.set(dayKey, {
         key: dayKey,
-        label: date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }),
-        hours: new Map()
-      })
-    }
-    const day = dayMap.get(dayKey)
-    if (!day.hours.has(hourKey)) {
-      day.hours.set(hourKey, {
-        key: `${dayKey}-${hourKey}`,
-        label: `${hourKey}:00`,
-        minutes: new Map()
-      })
-    }
-    const hour = day.hours.get(hourKey)
-    if (!hour.minutes.has(minuteKey)) {
-      hour.minutes.set(minuteKey, {
-        key: `${dayKey}-${minuteKey}`,
-        label: minuteKey,
+        label: formatDayLabel(date),
         items: []
       })
     }
-    hour.minutes.get(minuteKey).items.push(row)
+    byDay.get(dayKey).items.push(row)
   })
-  return Array.from(dayMap.values()).map(day => ({
-    ...day,
-    hours: Array.from(day.hours.values()).map(hour => ({
-      ...hour,
-      minutes: Array.from(hour.minutes.values())
-    }))
-  }))
+  const groups = Array.from(byDay.values())
+  groups.forEach(group => {
+    group.items.sort((a, b) => {
+      const da = parseTimestamp(a.created_at)
+      const db = parseTimestamp(b.created_at)
+      return (db?.getTime() || 0) - (da?.getTime() || 0)
+    })
+  })
+  groups.sort((a, b) => (a.key > b.key ? -1 : (a.key < b.key ? 1 : 0)))
+  return groups
+}
+
+function parseTimestamp(ts) {
+  try {
+    const date = new Date(ts + 'Z')
+    return Number.isNaN(date.valueOf()) ? null : date
+  } catch {
+    return null
+  }
+}
+
+function formatDayLabel(date) {
+  const today = startOfDay(new Date())
+  const target = startOfDay(date)
+  const diffDays = Math.round((today.getTime() - target.getTime()) / DAY_MS)
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  const opts = { weekday: 'short', month: 'short', day: 'numeric' }
+  if (today.getFullYear() !== target.getFullYear()) opts.year = 'numeric'
+  return date.toLocaleDateString(undefined, opts)
 }
 
 function formatTime(ts) {
-  try {
-    return new Date(ts + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return ts
-  }
+  const date = parseTimestamp(ts)
+  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ts
 }
+
+function formatVersionTime(ts) {
+  const date = parseTimestamp(ts)
+  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+}
+
+function formatSize(bytes) {
+  if (!Number.isFinite(bytes)) return ''
+  if (bytes < 1024) return `${bytes} B`
+  return `${Math.round(bytes / 1024)} KB`
+}
+
+function versionMetaText(it) {
+  const time = formatVersionTime(it.created_at)
+  const size = formatSize(it.size_bytes)
+  return [time, size].filter(Boolean).join(' · ')
+}
+
+function startOfDay(date) {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000

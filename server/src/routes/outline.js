@@ -3,19 +3,36 @@ import { Router } from 'express'
 import { db } from '../lib/db.js'
 import { buildProjectTree } from '../util/tree.js'
 import { recordVersion } from '../lib/versioning.js'
+import { sanitizeRichText, parseMaybeJson, stringifyNodes, sanitizeHtmlContent } from '../lib/richtext.js'
+import { ensureDefaultProject } from '../lib/projects.js'
 
 const router = Router()
 
-function ensureWorkspaceId() {
-  const row = db.prepare(`SELECT id FROM projects ORDER BY id ASC LIMIT 1`).get()
-  if (row) return row.id
-  return db.prepare(`INSERT INTO projects (name) VALUES (?)`).run('Workspace').lastInsertRowid
-}
-
 router.get('/outline', (req, res) => {
-  const projectId = ensureWorkspaceId()
+  const projectId = ensureDefaultProject()
   const tasks = db.prepare(`SELECT * FROM tasks WHERE project_id = ? ORDER BY position ASC, created_at ASC, id ASC`).all(projectId)
-  if (!tasks.length) return res.json({ roots: [] })
+  const updateContent = db.prepare(`UPDATE tasks SET content=?, updated_at=datetime('now') WHERE id=?`)
+  const dataUriRe = /data:[^;]+;base64,/i
+  const sanitizedTasks = tasks.map(task => {
+    if (!task.content) return task
+    const trimmed = typeof task.content === 'string' ? task.content.trim() : ''
+    let updatedContent = null
+    if (trimmed.startsWith('[')) {
+      const rawNodes = parseMaybeJson(task.content)
+      const sanitizedNodes = sanitizeRichText(rawNodes, projectId, { title: task.title })
+      const json = stringifyNodes(sanitizedNodes)
+      if (json !== task.content) updatedContent = json
+    } else if (dataUriRe.test(trimmed)) {
+      const sanitized = sanitizeHtmlContent(task.content, projectId)
+      if (sanitized !== task.content) updatedContent = sanitized
+    }
+    if (updatedContent !== null) {
+      try { updateContent.run(updatedContent, task.id) } catch (err) { console.error('[outline] failed to persist sanitized content', err) }
+      return { ...task, content: updatedContent }
+    }
+    return task
+  })
+  if (!sanitizedTasks.length) return res.json({ roots: [] })
   const logs = db.prepare(`
     SELECT w.task_id, w.date
     FROM work_logs w
@@ -27,12 +44,12 @@ router.get('/outline', (req, res) => {
     if (!map.has(l.task_id)) map.set(l.task_id, [])
     map.get(l.task_id).push(l.date)
   }
-  const tree = buildProjectTree(tasks, map)
+  const tree = buildProjectTree(sanitizedTasks, map)
   res.json({ roots: tree })
 })
 
 router.post('/outline', (req, res) => {
-  const projectId = ensureWorkspaceId()
+  const projectId = ensureDefaultProject()
   const { outline } = req.body
   if (!Array.isArray(outline)) return res.status(400).json({ error: 'outline array required' })
 
@@ -55,9 +72,9 @@ router.post('/outline', (req, res) => {
   function upsertNode(node, parent_id = null, position = 0) {
     let realId = null
     const id = node.id
-    const contentJson = Array.isArray(node.body)
-      ? JSON.stringify(node.body)
-      : (typeof node.content === 'string' ? node.content : '[]')
+    const rawBody = parseMaybeJson(node.body ?? node.content)
+    const sanitizedBody = sanitizeRichText(rawBody, projectId, { title: node.title })
+    const contentJson = stringifyNodes(sanitizedBody)
     if (!id || String(id).startsWith('new-')) {
       const info = insertTask.run({ project_id: projectId, parent_id, title: node.title || 'Untitled', status: node.status || 'todo', content: contentJson, position })
       realId = info.lastInsertRowid

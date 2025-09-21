@@ -2,11 +2,12 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer, NodeViewWrapper, EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import Image from '@tiptap/extension-image'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { lowlight } from 'lowlight/lib/core.js'
-import React, { useEffect, useState } from 'react'
-import { getTask, updateTask, uploadImage } from '../api.js'
+import React, { useEffect, useState, useRef, useCallback } from 'react'
+import { getTask, updateTask, uploadImage, absoluteUrl } from '../api.js'
+import { ImageWithMeta } from './imageWithMeta.js'
+import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
 
 function nearestListItemId(editor, getPos) {
   try {
@@ -25,11 +26,13 @@ const DetailsView = (props) => {
   const open = !!node.attrs.open
   const [taskId, setTaskId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const convertingImagesRef = useRef(false)
+  const pendingImagesRef = useRef(new Set())
 
   useEffect(() => { setTaskId(nearestListItemId(editor, getPos)) }, [])
 
   const detailsEditor = useEditor({
-    extensions: [StarterKit, Image.configure({ inline:false, allowBase64:true }), CodeBlockLowlight.configure({ lowlight })],
+    extensions: [StarterKit, ImageWithMeta.configure({ inline:false, allowBase64:true }), CodeBlockLowlight.configure({ lowlight })],
     content: '<p></p>',
     onUpdate: async ({ editor: ed }) => {
       if (!taskId || String(taskId).startsWith('new-')) return
@@ -38,6 +41,53 @@ const DetailsView = (props) => {
       setSaving(false)
     }
   })
+
+  const ensureUploadedImages = useCallback(async () => {
+    if (!detailsEditor || convertingImagesRef.current) return
+    convertingImagesRef.current = true
+    try {
+      const queue = []
+      detailsEditor.state.doc.descendants((node, pos) => {
+        if (node.type?.name !== 'image') return
+        const src = node.attrs?.src
+        if (!src || !isDataUri(src) || pendingImagesRef.current.has(src)) return
+        queue.push({ pos, src })
+        pendingImagesRef.current.add(src)
+      })
+      for (const item of queue) {
+        const payload = dataUriToFilePayload(item.src, 'details')
+        if (!payload) {
+          pendingImagesRef.current.delete(item.src)
+          continue
+        }
+        try {
+          const result = await uploadImage(payload.file, payload.name)
+          const { state, view } = detailsEditor
+          const node = state.doc.nodeAt(item.pos)
+          if (!node || node.type?.name !== 'image') continue
+          const attrs = { ...node.attrs }
+          attrs.src = absoluteUrl(result.url)
+          if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
+          if (result?.id) attrs['data-file-id'] = result.id
+          view.dispatch(state.tr.setNodeMarkup(item.pos, undefined, attrs))
+        } catch (err) {
+          console.error('[details] failed to upload pasted image', err)
+        } finally {
+          pendingImagesRef.current.delete(item.src)
+        }
+      }
+    } finally {
+      convertingImagesRef.current = false
+    }
+  }, [detailsEditor])
+
+  useEffect(() => {
+    if (!detailsEditor) return
+    const handler = () => { ensureUploadedImages() }
+    detailsEditor.on('update', handler)
+    ensureUploadedImages()
+    return () => { detailsEditor.off('update', handler) }
+  }, [detailsEditor, ensureUploadedImages])
 
   useEffect(() => {
     let cancelled = false
@@ -67,8 +117,11 @@ const DetailsView = (props) => {
               input.onchange = async () => {
                 const file = input.files[0]
                 if (!file) return
-                const { url } = await uploadImage(file)
-                detailsEditor.chain().focus().setImage({ src: url }).run()
+                const result = await uploadImage(file)
+                const attrs = { src: absoluteUrl(result.url) }
+                if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
+                if (result?.id) attrs['data-file-id'] = result.id
+                detailsEditor.chain().focus().setImage(attrs).run()
               }
               input.click()
             }}>Upload image</button>

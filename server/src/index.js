@@ -8,9 +8,11 @@ import { createRequire } from 'module'
 import './lib/db.js'
 import tasksRouter from './routes/tasks.js'
 import dayRouter from './routes/day.js'
-import uploadRouter, { ensureUploadDir } from './routes/upload.js'
+import uploadRouter from './routes/upload.js'
 import outlineRouter from './routes/outline.js'
 import historyRouter from './routes/history.js'
+import filesRouter from './routes/files.js'
+import { ensureUploadDir } from './lib/files.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -37,6 +39,7 @@ app.use(express.urlencoded({ extended: true }))
 
 ensureUploadDir()
 app.use('/uploads', express.static(path.join(__dirname, './uploads')))
+app.use('/files', filesRouter)
 
 app.use('/api', outlineRouter)
 app.use('/api/tasks', tasksRouter)

@@ -1,18 +1,12 @@
 
 import { Router } from 'express'
-import { db } from '../lib/db.js'
 import { listHistory, getVersion, diffBetween, restoreVersion, recordVersion } from '../lib/versioning.js'
+import { ensureDefaultProject } from '../lib/projects.js'
 
 const router = Router()
 
-function ensureWorkspaceId() {
-  const row = db.prepare(`SELECT id FROM projects ORDER BY id ASC LIMIT 1`).get()
-  if (row) return row.id
-  return db.prepare(`INSERT INTO projects (name) VALUES (?)`).run('Workspace').lastInsertRowid
-}
-
 router.get('/', (req, res) => {
-  const projectId = ensureWorkspaceId()
+  const projectId = ensureDefaultProject()
   const limit = Math.min(Number(req.query.limit || 50), 200)
   const offset = Math.max(Number(req.query.offset || 0), 0)
   const rows = listHistory(projectId, limit, offset)
@@ -20,7 +14,7 @@ router.get('/', (req, res) => {
 })
 
 router.get('/:id', (req, res) => {
-  const projectId = ensureWorkspaceId()
+  const projectId = ensureDefaultProject()
   const id = Number(req.params.id)
   const row = getVersion(projectId, id)
   if (!row) return res.status(404).json({ error: 'Version not found' })
@@ -28,7 +22,7 @@ router.get('/:id', (req, res) => {
 })
 
 router.get('/:id/diff', (req, res) => {
-  const projectId = ensureWorkspaceId()
+  const projectId = ensureDefaultProject()
   const id = req.params.id
   const against = req.query.against || 'current'
   const diff = diffBetween(projectId, id, against)
@@ -37,7 +31,7 @@ router.get('/:id/diff', (req, res) => {
 })
 
 router.post('/:id/restore', (req, res) => {
-  const projectId = ensureWorkspaceId()
+  const projectId = ensureDefaultProject()
   const id = Number(req.params.id)
   try {
     const v = restoreVersion(projectId, id)
@@ -48,7 +42,7 @@ router.post('/:id/restore', (req, res) => {
 })
 
 router.post('/checkpoint', (req, res) => {
-  const projectId = ensureWorkspaceId()
+  const projectId = ensureDefaultProject()
   const note = (req.body && req.body.note) || ''
   try {
     const v = recordVersion(projectId, 'manual', { note })

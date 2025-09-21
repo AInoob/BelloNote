@@ -18,13 +18,24 @@ export async function getDays() { const { data } = await api.get('/day'); return
 export const listDays = getDays
 
 // Uploads
-export async function uploadImage(file) {
+export async function uploadImage(file, filename) {
   const form = new FormData()
-  form.append('image', file)
+  const name = filename || (file && typeof file.name === 'string' ? file.name : null)
+  if (name) form.append('image', file, name)
+  else form.append('image', file)
   const { data } = await api.post('/upload/image', form, { headers: { 'Content-Type': 'multipart/form-data' } })
-  const rel = String(data.url || '')
-  const abs = /^https?:\/\//i.test(rel) ? rel : `${API_ROOT}${rel.startsWith('/') ? '' : '/'}${rel}`
-  return { url: abs }
+  const relRaw = typeof data.url === 'string' ? data.url : ''
+  const relativeUrl = relRaw.startsWith('/') ? relRaw : (relRaw ? `/${relRaw}` : '')
+  const abs = /^https?:\/\//i.test(relativeUrl)
+    ? relativeUrl
+    : `${API_ROOT}${relativeUrl}`
+  return {
+    url: abs,
+    relativeUrl: relativeUrl || abs,
+    id: data.id,
+    mimeType: data.mimeType,
+    size: data.size
+  }
 }
 
 // History

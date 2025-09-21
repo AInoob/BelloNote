@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS outline_versions (
   doc_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_versions_project ON outline_versions(project_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  stored_name TEXT NOT NULL,
+  original_name TEXT,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash ON files(hash);
+CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id, id DESC);
 `)
 
 // Migration: add position column if missing
