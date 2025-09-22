@@ -1,6 +1,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { getDays, updateTask } from '../api.js'
+import { getDays, getOutline, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
 
 function buildOutlineFromItems(items, seedIds = [], date = null) {
@@ -30,21 +30,95 @@ function buildOutlineFromItems(items, seedIds = [], date = null) {
   return roots
 }
 
+const DATE_RE = /@\d{4}-\d{2}-\d{2}\b/
+const hasTag = (node, tag) => {
+  const t = (node?.title || '').toLowerCase()
+  const bodyLower = JSON.stringify(node?.content || []).toLowerCase()
+  const needle = `@${tag}`
+  return t.includes(needle) || bodyLower.includes(needle)
+}
+const hasDate = (node) => {
+  const t = node?.title || ''
+  const body = JSON.stringify(node?.content || [])
+  return DATE_RE.test(t) || DATE_RE.test(body)
+}
+
+function collectSoonAndFuture(roots) {
+  const soonRoots = []
+  const futureRoots = []
+  function walk(node, parentSoon=false, parentFuture=false) {
+    const selfSoon = hasTag(node, 'soon')
+    const selfFuture = hasTag(node, 'future')
+    const effSoon = parentSoon || selfSoon
+    const effFuture = parentFuture || selfFuture
+    const dated = hasDate(node)
+    if (effSoon && !dated) { soonRoots.push(node); return }
+    if (effFuture && !parentSoon && !dated) { futureRoots.push(node); return }
+    for (const ch of (node.children || [])) walk(ch, effSoon, effFuture)
+  }
+  for (const r of (roots || [])) walk(r, false, false)
+  return { soonRoots, futureRoots }
+}
+
+
 export default function TimelineView() {
   const [days, setDays] = useState([])
-  useEffect(() => { (async () => { const data = await getDays(); setDays(data.days || []) })() }, [])
-  if (!days?.length) return <div className="save-indicator">No work logs yet.</div>
+  const [outlineRoots, setOutlineRoots] = useState([])
+  const [showFuture, setShowFuture] = useState(true)
+
+  useEffect(() => {
+    (async () => {
+      const data = await getDays(); setDays(data.days || [])
+      const o = await getOutline(); setOutlineRoots(o.roots || [])
+    })()
+  }, [])
+
+  const { soonRoots, futureRoots } = useMemo(() => collectSoonAndFuture(outlineRoots), [outlineRoots])
+
+  if (!days?.length && !soonRoots.length && !futureRoots.length) return <div className="save-indicator">No work logs yet.</div>
+
   const handleStatusToggle = async (id, nextStatus) => {
     try {
       await updateTask(id, { status: nextStatus })
-      const data = await getDays()
-      setDays(data.days || [])
+      const data = await getDays(); setDays(data.days || [])
+      const o = await getOutline(); setOutlineRoots(o.roots || [])
     } catch (e) {
       console.error('[timeline] failed to update status', e)
     }
   }
   return (
     <div className="timeline">
+      {/* Filter bar for timeline-specific toggles */}
+      <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8 }}>
+        <div className="future-toggle" style={{ display: 'inline-block' }}>
+          <span style={{ marginRight: 6 }}>Future:</span>
+          <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => setShowFuture(v => !v)}>
+            {showFuture ? 'Shown' : 'Hidden'}
+          </button>
+        </div>
+      </div>
+
+      {/* Soon bucket */}
+      {soonRoots.length > 0 && (
+        <section key="soon">
+          <h3>Soon</h3>
+          <div className="history-inline-preview">
+            <OutlinerView readOnly={true} forceExpand={true} initialOutline={{ roots: soonRoots }} allowStatusToggleInReadOnly={true} onStatusToggle={handleStatusToggle} />
+          </div>
+        </section>
+      )}
+
+      {/* Future bucket */}
+      {showFuture && futureRoots.length > 0 && (
+        <section key="future">
+          <h3>Future</h3>
+          <div className="history-inline-preview">
+            <OutlinerView readOnly={true} forceExpand={true} initialOutline={{ roots: futureRoots }} allowStatusToggleInReadOnly={true} onStatusToggle={handleStatusToggle} />
+          </div>
+        </section>
+      )}
+
+      {/* Dated days */}
       {days.map(day => {
         const roots = buildOutlineFromItems(day.items || [], day.seedIds || [], day.date)
         return (

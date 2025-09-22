@@ -19,11 +19,40 @@ const STATUS_ORDER = ['todo','in-progress','done']
 const STATUS_ICON = { 'todo': '○', 'in-progress': '◐', 'done': '✓' }
 const DATE_RE = /@\d{4}-\d{2}-\d{2}/g
 const COLLAPSED_KEY = 'worklog.collapsed'
+const FILTER_STATUS_KEY = 'worklog.filter.status'
+const FILTER_ARCHIVED_KEY = 'worklog.filter.archived'
+const FILTER_FUTURE_KEY = 'worklog.filter.future'
 const LOG_ON = () => (localStorage.getItem('WL_DEBUG') === '1')
 const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
 
 const loadCollapsed = () => { try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')) } catch { return new Set() } }
 const saveCollapsed = (s) => localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(s)))
+
+const DEFAULT_STATUS_FILTER = { todo: true, 'in-progress': true, done: true }
+const loadStatusFilter = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FILTER_STATUS_KEY) || 'null')
+    const obj = (raw && typeof raw === 'object') ? raw : {}
+    return {
+      todo: typeof obj.todo === 'boolean' ? obj.todo : true,
+      'in-progress': typeof obj['in-progress'] === 'boolean' ? obj['in-progress'] : true,
+      done: typeof obj.done === 'boolean' ? obj.done : true,
+    }
+  } catch {
+    return { ...DEFAULT_STATUS_FILTER }
+  }
+}
+const saveStatusFilter = (f) => {
+  try { localStorage.setItem(FILTER_STATUS_KEY, JSON.stringify({ ...DEFAULT_STATUS_FILTER, ...(f||{}) })) } catch {}
+}
+const loadArchivedVisible = () => {
+  try { const v = localStorage.getItem(FILTER_ARCHIVED_KEY); return v === '0' ? false : true } catch { return true }
+}
+const saveArchivedVisible = (v) => { try { localStorage.setItem(FILTER_ARCHIVED_KEY, v ? '1' : '0') } catch {} }
+const loadFutureVisible = () => {
+  try { const v = localStorage.getItem(FILTER_FUTURE_KEY); return v === '0' ? false : true } catch { return true }
+}
+const saveFutureVisible = (v) => { try { localStorage.setItem(FILTER_FUTURE_KEY, v ? '1' : '0') } catch {} }
 
 const URL_PROTOCOL_RE = /^[a-z][\w+.-]*:\/\//i
 const DOMAIN_LIKE_RE = /^[\w.-]+\.[a-z]{2,}(?:\/[\w#?=&%+@.\-]*)?$/i
@@ -120,7 +149,8 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
         status: { default: 'todo' },
         collapsed: { default: false },
         archivedSelf: { default: false },
-        futureSelf: { default: false }
+        futureSelf: { default: false },
+        soonSelf: { default: false }
       }
     },
     addNodeView() {
@@ -238,7 +268,9 @@ function ListItemView(props) {
       data-archived-self={node.attrs.archivedSelf ? '1' : '0'}
       data-archived={node.attrs.archivedSelf ? '1' : '0'}
       data-future-self={node.attrs.futureSelf ? '1' : '0'}
+      data-soon-self={node.attrs.soonSelf ? '1' : '0'}
       data-future={node.attrs.futureSelf ? '1' : '0'}
+      data-soon={node.attrs.soonSelf ? '1' : '0'}
       draggable={!readOnly}
       onDragEnd={readOnly ? undefined : handleDragEnd}
     >
@@ -277,12 +309,17 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const [debugLines, setDebugLines] = useState([])
   const menuRef = useRef(null)
   const slashMarker = useRef(null)
-  const [showFuture, setShowFuture] = useState(true)
+  const [showFuture, setShowFuture] = useState(() => loadFutureVisible())
 
   const [imagePreview, setImagePreview] = useState(null)
-  const [statusFilter, setStatusFilter] = useState({ todo: true, 'in-progress': true, done: true })
-  const [showArchived, setShowArchived] = useState(true)
+  const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
+  const [showArchived, setShowArchived] = useState(() => loadArchivedVisible())
   const applyStatusFilterRef = useRef(null)
+
+  // Persist filters in localStorage
+  useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
+  useEffect(() => { saveArchivedVisible(showArchived) }, [showArchived])
+  useEffect(() => { saveFutureVisible(showFuture) }, [showFuture])
   const [slashQuery, setSlashQuery] = useState('')
   const slashQueryRef = useRef('')
   const slashInputRef = useRef(null)
@@ -782,13 +819,12 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   ]), [])
 
   const toggleStatusFilter = (key) => {
-    setStatusFilter(prev => {
-      const next = { ...prev, [key]: !prev[key] }
-      if (!next.todo && !next['in-progress'] && !next.done) {
-        return { todo: true, 'in-progress': true, done: false }
-      }
-      return next
-    })
+    let next = { ...statusFilter, [key]: !statusFilter[key] }
+    if (!next.todo && !next['in-progress'] && !next.done) {
+      next = { todo: true, 'in-progress': true, done: false }
+    }
+    try { saveStatusFilter(next) } catch {}
+    setStatusFilter(next)
   }
 
   const applyPresetFilter = (preset) => {
@@ -818,33 +854,41 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       // future
       const presetF = li.getAttribute('data-future-self')
       let selfFuture = presetF === '1' || presetF === 'true'
+      // soon
+      const presetS = li.getAttribute('data-soon-self')
+      let selfSoon = presetS === '1' || presetS === 'true'
 
-      if (!selfArchived || !selfFuture) {
+      if (!selfArchived || !selfFuture || !selfSoon) {
         const body = li.querySelector(':scope > .li-row .li-content')
         const bodyText = (body?.textContent || '').toLowerCase()
         if (!selfArchived) selfArchived = /@archived\b/.test(bodyText)
         if (!selfFuture) selfFuture = /@future\b/.test(bodyText)
+        if (!selfSoon) selfSoon = /@soon\b/.test(bodyText)
       }
       li.dataset.archivedSelf = selfArchived ? '1' : '0'
       li.dataset.futureSelf = selfFuture ? '1' : '0'
+      li.dataset.soonSelf = selfSoon ? '1' : '0'
     })
 
-    // Second pass: propagate archived/future from ancestors and apply visibility rules
+    // Second pass: propagate archived/future/soon from ancestors and apply visibility rules
     liNodes.forEach(li => {
-      // propagate archived from closest ancestor li
+      // propagate flags from closest ancestor li
       let archived = li.dataset.archivedSelf === '1'
       let future = li.dataset.futureSelf === '1'
+      let soon = li.dataset.soonSelf === '1'
       let parent = li.parentElement
-      while (!(archived && future) && parent) {
+      while (!(archived && future && soon) && parent) {
         if (parent.matches && parent.matches('li.li-node')) {
           if (!archived && parent.dataset.archived === '1') archived = true
           if (!future && parent.dataset.future === '1') future = true
-          if (archived && future) break
+          if (!soon && parent.dataset.soon === '1') soon = true
+          if (archived && future && soon) break
         }
         parent = parent.parentElement
       }
       li.dataset.archived = archived ? '1' : '0'
       li.dataset.future = future ? '1' : '0'
+      li.dataset.soon = soon ? '1' : '0'
 
       const status = li.getAttribute('data-status') || 'todo'
       const hideByStatus = statusFilter[status] === false
@@ -1160,9 +1204,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
         const bodyLower = JSON.stringify(bodyContent || []).toLowerCase()
         const archivedSelf = titleLower.includes('@archived') || bodyLower.includes('@archived')
         const futureSelf = titleLower.includes('@future') || bodyLower.includes('@future')
+        const soonSelf = titleLower.includes('@soon') || bodyLower.includes('@soon')
         return {
           type: 'listItem',
-          attrs: { dataId: n.id, status: n.status || 'todo', collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf },
+          attrs: { dataId: n.id, status: n.status || 'todo', collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf, soonSelf },
           content: children
         }
       })
@@ -1487,6 +1532,18 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     closeSlash()
     pushDebug('insert future tag')
   }
+  const insertSoon = () => {
+    const removed = consumeSlashMarker()
+    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+    if (caretPos !== null) {
+      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+    }
+    editor.chain().focus().insertContent(' @soon').run()
+    if (removed) cleanDanglingSlash(removed.from)
+    closeSlash()
+    pushDebug('insert soon tag')
+  }
+
 
   const insertCode = () => {
     const removed = consumeSlashMarker()
@@ -1555,10 +1612,11 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },
     { id: 'archived', label: 'Archive (tag)', hint: 'Insert @archived tag to mark item (and its subtasks) archived', keywords: ['archive','archived','hide'], run: insertArchived },
     { id: 'future', label: 'Future (tag)', hint: 'Insert @future tag to mark item not planned soon (and its subtasks)', keywords: ['future','later','snooze'], run: insertFuture },
+    { id: 'soon', label: 'Soon (tag)', hint: 'Insert @soon tag to mark item coming sooner than future (and its subtasks)', keywords: ['soon','next','upcoming'], run: insertSoon },
     { id: 'code', label: 'Code block', hint: 'Insert a multiline code block', keywords: ['code', 'snippet', '```'], run: insertCode },
     { id: 'image', label: 'Upload image', hint: 'Upload and insert an image', keywords: ['image', 'photo', 'upload'], run: insertImage },
     { id: 'details', label: 'Details (inline)', hint: 'Collapsible details block', keywords: ['details', 'summary', 'toggle'], run: insertDetails }
-  ]), [insertToday, insertPick, insertArchived, insertFuture, insertCode, insertImage, insertDetails])
+  ]), [insertToday, insertPick, insertArchived, insertFuture, insertSoon, insertCode, insertImage, insertDetails])
 
   const normalizedSlashQuery = slashQuery.trim().toLowerCase()
   const filteredCommands = useMemo(() => {
@@ -1597,50 +1655,52 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
 
   return (
     <div style={{ position:'relative' }}>
-      <div className="status-filter-bar">
-        <span className="meta" style={{ marginRight: 8 }}>Show:</span>
-        {availableFilters.map(opt => (
-          <button
-            key={opt.key}
-            className={`btn pill ${statusFilter[opt.key] ? 'active' : ''}`}
-            data-status={opt.key}
-            type="button"
-            onClick={() => toggleStatusFilter(opt.key)}
-          >{opt.label}</button>
-        ))}
-        <div className="filter-presets">
-          <button className="btn ghost" type="button" onClick={() => applyPresetFilter('all')}>All</button>
-          <button className="btn ghost" type="button" onClick={() => applyPresetFilter('active')}>Active</button>
-          <button className="btn ghost" type="button" onClick={() => applyPresetFilter('completed')}>Completed</button>
+      {!isReadOnly && (
+        <div className="status-filter-bar">
+          <span className="meta" style={{ marginRight: 8 }}>Show:</span>
+          {availableFilters.map(opt => (
+            <button
+              key={opt.key}
+              className={`btn pill ${statusFilter[opt.key] ? 'active' : ''}`}
+              data-status={opt.key}
+              type="button"
+              onClick={() => toggleStatusFilter(opt.key)}
+            >{opt.label}</button>
+          ))}
+          <div className="filter-presets">
+            <button className="btn ghost" type="button" onClick={() => applyPresetFilter('all')}>All</button>
+            <button className="btn ghost" type="button" onClick={() => applyPresetFilter('active')}>Active</button>
+            <button className="btn ghost" type="button" onClick={() => applyPresetFilter('completed')}>Completed</button>
+          </div>
+          <div className="archive-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="meta">Archived:</span>
+            <button
+              className={`btn pill ${showArchived ? 'active' : ''}`}
+              type="button"
+              onClick={() => { const next = !showArchived; try { saveArchivedVisible(next) } catch {}; setShowArchived(next) }}
+            >{showArchived ? 'Shown' : 'Hidden'}</button>
+          </div>
+          <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="meta">Future:</span>
+            <button
+              className={`btn pill ${showFuture ? 'active' : ''}`}
+              type="button"
+              onClick={() => { const next = !showFuture; try { saveFutureVisible(next) } catch {}; setShowFuture(next) }}
+            >{showFuture ? 'Shown' : 'Hidden'}</button>
+          </div>
+          <div className="search-bar">
+            <input
+              type="search"
+              value={searchQuery}
+              placeholder="Search outline…"
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button type="button" onClick={() => setSearchQuery('')}>Clear</button>
+            )}
+          </div>
         </div>
-        <div className="archive-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span className="meta">Archived:</span>
-          <button
-            className={`btn pill ${showArchived ? 'active' : ''}`}
-            type="button"
-            onClick={() => setShowArchived(v => !v)}
-          >{showArchived ? 'Shown' : 'Hidden'}</button>
-        </div>
-        <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span className="meta">Future:</span>
-          <button
-            className={`btn pill ${showFuture ? 'active' : ''}`}
-            type="button"
-            onClick={() => setShowFuture(v => !v)}
-          >{showFuture ? 'Shown' : 'Hidden'}</button>
-        </div>
-        <div className="search-bar">
-          <input
-            type="search"
-            value={searchQuery}
-            placeholder="Search outline…"
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-          {searchQuery && (
-            <button type="button" onClick={() => setSearchQuery('')}>Clear</button>
-          )}
-        </div>
-      </div>
+      )}
       <EditorContent editor={editor} className="tiptap" />
       {imagePreview && (
         <div className="overlay" onClick={() => setImagePreview(null)}>
