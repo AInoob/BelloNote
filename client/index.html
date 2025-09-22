@@ -71,9 +71,9 @@
       .caret { border:1px solid var(--border); border-radius:4px; width:18px; height:18px; line-height:16px; text-align:center; background:#fff; cursor:pointer; font-size:10px; padding:0; }
       .status-chip.inline { border-radius:999px; width:20px; height:20px; line-height:18px; text-align:center; font-size:12px; border:1px solid var(--border); background:#fff; cursor:pointer; }
       /* status colors */
-      .li-node[data-status="todo"] .status-chip.inline { background:#e5e7eb; border-color:#d1d5db; color:#374151; }
-      .li-node[data-status="in-progress"] .status-chip.inline { background:#FEF3C7; border-color:#FCD34D; color:#92400E; }
-      .li-node[data-status="done"] .status-chip.inline { background:#DCFCE7; border-color:#86EFAC; color:#166534; }
+      .li-node[data-status="todo"] > .li-row > .status-chip.inline { background:#e5e7eb; border-color:#d1d5db; color:#374151; }
+      .li-node[data-status="in-progress"] > .li-row > .status-chip.inline { background:#FEF3C7; border-color:#FCD34D; color:#92400E; }
+      .li-node[data-status="done"] > .li-row > .status-chip.inline { background:#DCFCE7; border-color:#86EFAC; color:#166534; }
       /* archived dim */
       .li-node[data-archived="1"] > .li-row { opacity:.55; }
 

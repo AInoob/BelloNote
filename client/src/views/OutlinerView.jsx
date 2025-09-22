@@ -119,7 +119,8 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
         dataId: { default: null },
         status: { default: 'todo' },
         collapsed: { default: false },
-        archivedSelf: { default: false }
+        archivedSelf: { default: false },
+        futureSelf: { default: false }
       }
     },
     addNodeView() {
@@ -236,6 +237,8 @@ function ListItemView(props) {
       data-id={id ? String(id) : fallbackIdRef.current}
       data-archived-self={node.attrs.archivedSelf ? '1' : '0'}
       data-archived={node.attrs.archivedSelf ? '1' : '0'}
+      data-future-self={node.attrs.futureSelf ? '1' : '0'}
+      data-future={node.attrs.futureSelf ? '1' : '0'}
       draggable={!readOnly}
       onDragEnd={readOnly ? undefined : handleDragEnd}
     >
@@ -274,6 +277,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const [debugLines, setDebugLines] = useState([])
   const menuRef = useRef(null)
   const slashMarker = useRef(null)
+  const [showFuture, setShowFuture] = useState(true)
+
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState({ todo: true, 'in-progress': true, done: true })
   const [showArchived, setShowArchived] = useState(true)
@@ -803,34 +808,57 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     const parentClass = 'filter-parent'
     const liNodes = Array.from(root.querySelectorAll('li.li-node'))
 
-    // First pass: clear classes and compute self-archived flag from body text (paragraph only)
+    // First pass: clear classes and compute self flags from body text (paragraph only)
     liNodes.forEach(li => {
       li.classList.remove(hiddenClass, parentClass)
-      const preset = li.getAttribute('data-archived-self')
-      let selfArchived = preset === '1' || preset === 'true'
-      if (!selfArchived) {
+
+      // archived
+      const presetA = li.getAttribute('data-archived-self')
+      let selfArchived = presetA === '1' || presetA === 'true'
+      // future
+      const presetF = li.getAttribute('data-future-self')
+      let selfFuture = presetF === '1' || presetF === 'true'
+
+      if (!selfArchived || !selfFuture) {
         const body = li.querySelector(':scope > .li-row .li-content')
         const bodyText = (body?.textContent || '').toLowerCase()
-        selfArchived = /@archived\b/.test(bodyText)
+        if (!selfArchived) selfArchived = /@archived\b/.test(bodyText)
+        if (!selfFuture) selfFuture = /@future\b/.test(bodyText)
       }
       li.dataset.archivedSelf = selfArchived ? '1' : '0'
+      li.dataset.futureSelf = selfFuture ? '1' : '0'
     })
 
-    // Second pass: propagate archived from ancestors and apply visibility rules
+    // Second pass: propagate archived/future from ancestors and apply visibility rules
     liNodes.forEach(li => {
       // propagate archived from closest ancestor li
       let archived = li.dataset.archivedSelf === '1'
+      let future = li.dataset.futureSelf === '1'
       let parent = li.parentElement
-      while (!archived && parent) {
-        if (parent.matches && parent.matches('li.li-node') && parent.dataset.archived === '1') { archived = true; break }
+      while (!(archived && future) && parent) {
+        if (parent.matches && parent.matches('li.li-node')) {
+          if (!archived && parent.dataset.archived === '1') archived = true
+          if (!future && parent.dataset.future === '1') future = true
+          if (archived && future) break
+        }
         parent = parent.parentElement
       }
       li.dataset.archived = archived ? '1' : '0'
+      li.dataset.future = future ? '1' : '0'
 
       const status = li.getAttribute('data-status') || 'todo'
       const hideByStatus = statusFilter[status] === false
       const hideByArchive = !showArchived && archived
-      if (hideByStatus || hideByArchive) li.classList.add(hiddenClass)
+      const hideByFuture = !showFuture && future
+      const shouldHide = hideByStatus || hideByArchive || hideByFuture
+      if (shouldHide) {
+        li.classList.add(hiddenClass)
+        // Inline fallback to ensure visibility toggles even if stylesheet scoping changes
+        li.style.display = 'none'
+      } else {
+        li.classList.remove(hiddenClass)
+        li.style.display = ''
+      }
     })
 
     // Third pass: ensure parents of visible descendants remain visible but dimmed
@@ -857,7 +885,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       }
     })
 
-  }, [editor, statusFilter, showArchived])
+  }, [editor, statusFilter, showArchived, showFuture])
 
   useEffect(() => { applyStatusFilter() }, [applyStatusFilter])
   useEffect(() => { applyStatusFilterRef.current = applyStatusFilter }, [applyStatusFilter])
@@ -1131,9 +1159,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
         const titleLower = (titleText || '').toLowerCase()
         const bodyLower = JSON.stringify(bodyContent || []).toLowerCase()
         const archivedSelf = titleLower.includes('@archived') || bodyLower.includes('@archived')
+        const futureSelf = titleLower.includes('@future') || bodyLower.includes('@future')
         return {
           type: 'listItem',
-          attrs: { dataId: n.id, status: n.status || 'todo', collapsed: collapsedSet.has(idStr), archivedSelf },
+          attrs: { dataId: n.id, status: n.status || 'todo', collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf },
           content: children
         }
       })
@@ -1447,6 +1476,18 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     closeSlash()
     pushDebug('insert archived tag')
   }
+  const insertFuture = () => {
+    const removed = consumeSlashMarker()
+    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+    if (caretPos !== null) {
+      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+    }
+    editor.chain().focus().insertContent(' @future').run()
+    if (removed) cleanDanglingSlash(removed.from)
+    closeSlash()
+    pushDebug('insert future tag')
+  }
+
   const insertCode = () => {
     const removed = consumeSlashMarker()
     const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
@@ -1513,10 +1554,11 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     { id: 'today', label: 'Date worked on (today)', hint: 'Insert @YYYY-MM-DD for today', keywords: ['today', 'date', 'now'], run: insertToday },
     { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },
     { id: 'archived', label: 'Archive (tag)', hint: 'Insert @archived tag to mark item (and its subtasks) archived', keywords: ['archive','archived','hide'], run: insertArchived },
+    { id: 'future', label: 'Future (tag)', hint: 'Insert @future tag to mark item not planned soon (and its subtasks)', keywords: ['future','later','snooze'], run: insertFuture },
     { id: 'code', label: 'Code block', hint: 'Insert a multiline code block', keywords: ['code', 'snippet', '```'], run: insertCode },
     { id: 'image', label: 'Upload image', hint: 'Upload and insert an image', keywords: ['image', 'photo', 'upload'], run: insertImage },
     { id: 'details', label: 'Details (inline)', hint: 'Collapsible details block', keywords: ['details', 'summary', 'toggle'], run: insertDetails }
-  ]), [insertToday, insertPick, insertArchived, insertCode, insertImage, insertDetails])
+  ]), [insertToday, insertPick, insertArchived, insertFuture, insertCode, insertImage, insertDetails])
 
   const normalizedSlashQuery = slashQuery.trim().toLowerCase()
   const filteredCommands = useMemo(() => {
@@ -1578,6 +1620,14 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
             type="button"
             onClick={() => setShowArchived(v => !v)}
           >{showArchived ? 'Shown' : 'Hidden'}</button>
+        </div>
+        <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="meta">Future:</span>
+          <button
+            className={`btn pill ${showFuture ? 'active' : ''}`}
+            type="button"
+            onClick={() => setShowFuture(v => !v)}
+          >{showFuture ? 'Shown' : 'Hidden'}</button>
         </div>
         <div className="search-bar">
           <input
