@@ -109,7 +109,7 @@ function CodeBlockView(props) {
   )
 }
 
-function createTaskListItemExtension({ readOnly, draggingState }) {
+function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggleInReadOnly, onStatusToggle }) {
   return ListItem.extend({
     name: 'listItem',
     draggable: !readOnly,
@@ -127,6 +127,8 @@ function createTaskListItemExtension({ readOnly, draggingState }) {
           {...props}
           readOnly={readOnly}
           draggingState={draggingState}
+          allowStatusToggleInReadOnly={allowStatusToggleInReadOnly}
+          onStatusToggle={onStatusToggle}
         />
       ))
     }
@@ -134,7 +136,7 @@ function createTaskListItemExtension({ readOnly, draggingState }) {
 }
 
 function ListItemView(props) {
-  const { node, updateAttributes, editor, getPos, readOnly = false, draggingState } = props
+  const { node, updateAttributes, editor, getPos, readOnly = false, draggingState, allowStatusToggleInReadOnly = false, onStatusToggle = null } = props
   const id = node.attrs.dataId
   const status = node.attrs.status || 'todo'
   const collapsed = !!node.attrs.collapsed
@@ -159,10 +161,14 @@ function ListItemView(props) {
   }
 
   const cycle = () => {
-    if (readOnly) return
+    if (readOnly && !allowStatusToggleInReadOnly) return
     const idx = STATUS_ORDER.indexOf(status)
     const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
     updateAttributes({ status: next })
+    if (readOnly && allowStatusToggleInReadOnly && typeof onStatusToggle === 'function') {
+      const realId = id || fallbackIdRef.current
+      if (realId) onStatusToggle(String(realId), next)
+    }
   }
 
   const handleDragStart = (event) => {
@@ -244,9 +250,9 @@ function ListItemView(props) {
         </button>
         <button
           className="status-chip inline"
-          onClick={readOnly ? undefined : cycle}
+          onClick={(readOnly && !allowStatusToggleInReadOnly) ? undefined : cycle}
           title="Click to change status"
-          disabled={readOnly}
+          disabled={readOnly && !allowStatusToggleInReadOnly}
         >
           {STATUS_ICON[status] || '○'}
         </button>
@@ -256,7 +262,7 @@ function ListItemView(props) {
   )
 }
 
-export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=false, readOnly = false, initialOutline = null, forceExpand = false }) {
+export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=false, readOnly = false, initialOutline = null, forceExpand = false, allowStatusToggleInReadOnly = false, onStatusToggle = null }) {
   const isReadOnly = !!readOnly
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -281,8 +287,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const pendingImageSrcRef = useRef(new Set())
 
   const taskListItemExtension = useMemo(
-    () => createTaskListItemExtension({ readOnly: isReadOnly, draggingState: draggingRef }),
-    [isReadOnly, draggingRef]
+    () => createTaskListItemExtension({ readOnly: isReadOnly, draggingState: draggingRef, allowStatusToggleInReadOnly, onStatusToggle }),
+    [isReadOnly, draggingRef, allowStatusToggleInReadOnly, onStatusToggle]
   )
 
   const updateSlashActive = useCallback((idx) => {

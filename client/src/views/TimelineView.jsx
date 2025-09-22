@@ -1,6 +1,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { getDays } from '../api.js'
+import { getDays, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
 
 function buildOutlineFromItems(items, seedIds = [], date = null) {
@@ -34,6 +34,15 @@ export default function TimelineView() {
   const [days, setDays] = useState([])
   useEffect(() => { (async () => { const data = await getDays(); setDays(data.days || []) })() }, [])
   if (!days?.length) return <div className="save-indicator">No work logs yet.</div>
+  const handleStatusToggle = async (id, nextStatus) => {
+    try {
+      await updateTask(id, { status: nextStatus })
+      const data = await getDays()
+      setDays(data.days || [])
+    } catch (e) {
+      console.error('[timeline] failed to update status', e)
+    }
+  }
   return (
     <div className="timeline">
       {days.map(day => {
@@ -42,7 +51,7 @@ export default function TimelineView() {
           <section key={day.date}>
             <h3>{day.date}</h3>
             <div className="history-inline-preview">
-              <OutlinerView readOnly={true} forceExpand={true} initialOutline={{ roots }} />
+              <OutlinerView readOnly={true} forceExpand={true} initialOutline={{ roots }} allowStatusToggleInReadOnly={true} onStatusToggle={handleStatusToggle} />
             </div>
           </section>
         )
