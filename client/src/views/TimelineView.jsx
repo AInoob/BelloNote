@@ -66,7 +66,7 @@ export default function TimelineView() {
   const [outlineRoots, setOutlineRoots] = useState([])
   const [showFuture, setShowFuture] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.future'); return v === '0' ? false : true } catch { return true } })
   const [showSoon, setShowSoon] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.soon'); return v === '0' ? false : true } catch { return true } })
-
+  const [showFilters, setShowFilters] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.filters'); return v === '0' ? false : true } catch { return true } })
 
   useEffect(() => {
     (async () => {
@@ -91,19 +91,29 @@ export default function TimelineView() {
   return (
     <div className="timeline">
       {/* Filter bar for timeline-specific toggles */}
-      <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8, display: 'flex', gap: 16 }}>
-        <div className="soon-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span className="meta">Soon:</span>
-          <button className={`btn pill ${showSoon ? 'active' : ''}`} type="button" onClick={() => { const next = !showSoon; try { localStorage.setItem('worklog.timeline.soon', next ? '1' : '0') } catch {}; setShowSoon(next) }}>
-            {showSoon ? 'Shown' : 'Hidden'}
+      <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8, display: 'flex', gap: 16, alignItems: 'center' }}>
+        <div className="filters-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span className="meta">Filters:</span>
+          <button className={`btn pill ${showFilters ? 'active' : ''}`} type="button" onClick={() => { const next = !showFilters; try { localStorage.setItem('worklog.timeline.filters', next ? '1' : '0') } catch {}; setShowFilters(next) }}>
+            {showFilters ? 'Shown' : 'Hidden'}
           </button>
         </div>
-        <div className="future-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span className="meta">Future:</span>
-          <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => { const next = !showFuture; try { localStorage.setItem('worklog.timeline.future', next ? '1' : '0') } catch {}; setShowFuture(next) }}>
-            {showFuture ? 'Shown' : 'Hidden'}
-          </button>
-        </div>
+        {showFilters && (
+          <>
+            <div className="future-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span className="meta">Future:</span>
+              <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => { const next = !showFuture; try { localStorage.setItem('worklog.timeline.future', next ? '1' : '0') } catch {}; setShowFuture(next) }}>
+                {showFuture ? 'Shown' : 'Hidden'}
+              </button>
+            </div>
+            <div className="soon-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span className="meta">Soon:</span>
+              <button className={`btn pill ${showSoon ? 'active' : ''}`} type="button" onClick={() => { const next = !showSoon; try { localStorage.setItem('worklog.timeline.soon', next ? '1' : '0') } catch {}; setShowSoon(next) }}>
+                {showSoon ? 'Shown' : 'Hidden'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Future bucket (should appear before Soon) */}

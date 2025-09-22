@@ -261,6 +261,18 @@ function ListItemView(props) {
     toggleCollapse()
   }
 
+  const rowRef = useRef(null)
+  const [showSoonBadge, setShowSoonBadge] = useState(!!node?.attrs?.soonSelf)
+  useEffect(() => {
+    const li = rowRef.current?.closest('li.li-node')
+    if (!li) return
+    const update = () => setShowSoonBadge(li.getAttribute('data-soon-self') === '1')
+    update()
+    const obs = new MutationObserver(update)
+    obs.observe(li, { attributes: true, attributeFilter: ['data-soon-self'] })
+    return () => obs.disconnect()
+  }, [])
+
   return (
     <NodeViewWrapper
       as="li"
@@ -276,7 +288,7 @@ function ListItemView(props) {
       draggable={!readOnly}
       onDragEnd={readOnly ? undefined : handleDragEnd}
     >
-      <div className="li-row">
+      <div className="li-row" ref={rowRef}>
         <button
           className="caret drag-toggle"
           onClick={handleToggleClick}
@@ -296,6 +308,9 @@ function ListItemView(props) {
         >
           {STATUS_ICON[status] || '○'}
         </button>
+        {showSoonBadge && (
+          <span className="tag-badge soon" style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 8, fontSize: 12, background: '#FFF3BF', color: '#7A5C00' }}>Soon</span>
+        )}
         <NodeViewContent className="li-content" />
       </div>
     </NodeViewWrapper>
@@ -874,6 +889,33 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       li.dataset.archivedSelf = selfArchived ? '1' : '0'
       li.dataset.futureSelf = selfFuture ? '1' : '0'
       li.dataset.soonSelf = selfSoon ? '1' : '0'
+
+      // Ensure a visual badge for @soon self-tag
+      const row = li.querySelector(':scope > .li-row')
+      if (row) {
+        const existingSoon = row.querySelector(':scope > .tag-badge.soon')
+        if (selfSoon) {
+          if (!existingSoon) {
+            const chip = row.querySelector(':scope > .status-chip.inline')
+            const badge = document.createElement('span')
+            badge.className = 'tag-badge soon'
+            badge.textContent = 'Soon'
+            badge.style.marginLeft = '6px'
+            badge.style.padding = '1px 6px'
+            badge.style.borderRadius = '8px'
+            badge.style.fontSize = '12px'
+            badge.style.background = '#FFF3BF'
+            badge.style.color = '#7A5C00'
+            if (chip && chip.nextSibling) {
+              chip.parentNode.insertBefore(badge, chip.nextSibling)
+            } else {
+              row.insertBefore(badge, row.querySelector(':scope > .li-content'))
+            }
+          }
+        } else if (existingSoon) {
+          existingSoon.remove()
+        }
+      }
     })
 
     // Second pass: propagate archived/future/soon from ancestors and apply visibility rules

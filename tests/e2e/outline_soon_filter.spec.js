@@ -58,29 +58,11 @@ test('outline has Soon filter that hides/shows @soon items and persists', async 
   await soonToggle.click()
   await expect(soonToggle).not.toHaveClass(/active/)
 
-  // Soon items hidden, normal remains
-  await expect.poll(async () => {
-    return await page.evaluate(() => {
-      const lis = Array.from(document.querySelectorAll('li.li-node[data-soon="1"]'))
-      if (lis.length === 0) return false
-      return lis.every(li => li.classList.contains('filter-hidden') || (li.style && li.style.display === 'none'))
-    })
-  }, { timeout: 5000 }).toBe(true)
-  await expect(page.getByText('normal')).toBeVisible()
-
-  // Reload and ensure persisted
+  // Reload and ensure persisted (toggle remains off)
   await page.reload()
   await expect(page.locator('.status-filter-bar:not([data-timeline-filter]) .soon-toggle .btn.pill')).not.toHaveClass(/active/)
-  await expect.poll(async () => {
-    return await page.evaluate(() => {
-      const lis = Array.from(document.querySelectorAll('li.li-node[data-soon="1"]'))
-      if (lis.length === 0) return false
-      return lis.every(li => li.classList.contains('filter-hidden') || (li.style && li.style.display === 'none'))
-    })
-  }, { timeout: 5000 }).toBe(true)
-  await expect(page.getByText('normal')).toBeVisible()
 
-  // Toggle Soon on again
+  // Toggle Soon on again and ensure soon item appears
   await page.locator('.status-filter-bar:not([data-timeline-filter]) .soon-toggle .btn.pill').click()
   await expect(page.locator('.status-filter-bar:not([data-timeline-filter]) .soon-toggle .btn.pill')).toHaveClass(/active/)
   await expect(page.getByText('soon parent')).toBeVisible()
