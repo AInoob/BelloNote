@@ -65,6 +65,8 @@ export default function TimelineView() {
   const [days, setDays] = useState([])
   const [outlineRoots, setOutlineRoots] = useState([])
   const [showFuture, setShowFuture] = useState(true)
+  const [showSoon, setShowSoon] = useState(true)
+
 
   useEffect(() => {
     (async () => {
@@ -89,9 +91,15 @@ export default function TimelineView() {
   return (
     <div className="timeline">
       {/* Filter bar for timeline-specific toggles */}
-      <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8 }}>
-        <div className="future-toggle" style={{ display: 'inline-block' }}>
-          <span style={{ marginRight: 6 }}>Future:</span>
+      <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8, display: 'flex', gap: 16 }}>
+        <div className="soon-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span className="meta">Soon:</span>
+          <button className={`btn pill ${showSoon ? 'active' : ''}`} type="button" onClick={() => setShowSoon(v => !v)}>
+            {showSoon ? 'Shown' : 'Hidden'}
+          </button>
+        </div>
+        <div className="future-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span className="meta">Future:</span>
           <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => setShowFuture(v => !v)}>
             {showFuture ? 'Shown' : 'Hidden'}
           </button>
@@ -99,7 +107,7 @@ export default function TimelineView() {
       </div>
 
       {/* Soon bucket */}
-      {soonRoots.length > 0 && (
+      {showSoon && soonRoots.length > 0 && (
         <section key="soon">
           <h3>Soon</h3>
           <div className="history-inline-preview">
