@@ -22,7 +22,7 @@ const BUILD_TIME = process.env.BUILD_TIME || new Date().toISOString()
 app.use(cors({
   origin: (origin, cb) => cb(null, true),
   methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
+  allowedHeaders: ['Content-Type','Authorization','x-playwright-test'],
   credentials: false,
   optionsSuccessStatus: 204
 }))

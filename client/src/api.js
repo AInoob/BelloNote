@@ -8,7 +8,10 @@ const defaultHeaders = {}
 try {
   if (typeof window !== 'undefined') {
     const host = window.location && window.location.host
-    if (host && (host.startsWith('127.0.0.1:4173') || host.startsWith('localhost:4173'))) {
+    if (host && (
+      host.startsWith('127.0.0.1:4173') || host.startsWith('localhost:4173') ||
+      host.startsWith('127.0.0.1:4175') || host.startsWith('localhost:4175')
+    )) {
       defaultHeaders['x-playwright-test'] = '1'
     }
   }

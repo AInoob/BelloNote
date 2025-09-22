@@ -2,10 +2,11 @@ const { defineConfig } = require('@playwright/test')
 const path = require('path')
 const fs = require('fs')
 
-const SERVER_PORT = 4000
-const CLIENT_PORT = 4173
+// Use non-default ports for E2E to avoid clashing with local dev servers
+const SERVER_PORT = 4100
+const CLIENT_PORT = 4175
 const API_URL = `http://127.0.0.1:${SERVER_PORT}`
-const DATA_DIR = path.join(__dirname, `.playwright-data-${Date.now()}`)
+const DATA_DIR = path.join(__dirname, 'test-data', `.playwright-data-${Date.now()}`)
 
 fs.rmSync(DATA_DIR, { recursive: true, force: true })
 fs.mkdirSync(DATA_DIR, { recursive: true })

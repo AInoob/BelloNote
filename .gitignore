@@ -19,6 +19,8 @@ server/dist/
 # Data
 server/data/*.db*
 
+test-data/
+
 # Misc
 start-all.log
 client.log

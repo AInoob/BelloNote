@@ -9,6 +9,10 @@ export default function HistoryModal({ onClose, onRestored }) {
   const [diff, setDiff] = useState(null)
   const [loading, setLoading] = useState(false)
   const [restoring, setRestoring] = useState(false)
+  // Custom confirm modal state
+  const [confirming, setConfirming] = useState(false)
+  const [confirmMessage, setConfirmMessage] = useState('')
+  const pendingRestoreIdRef = useRef(null)
   const [snapshotDoc, setSnapshotDoc] = useState(null)
   const [snapshotVersionId, setSnapshotVersionId] = useState(null)
   const [snapshotLoadingId, setSnapshotLoadingId] = useState(null)
@@ -36,12 +40,11 @@ export default function HistoryModal({ onClose, onRestored }) {
     }
   }
 
-  async function doRestore() {
-    if (!selected) return
-    if (!confirm('Restore this version? This will replace your current outline.')) return
+  async function doRestoreNow(versionId) {
+    if (!versionId) return
     setRestoring(true)
     try {
-      await restoreVersion(selected.id)
+      await restoreVersion(versionId)
       onRestored && onRestored()
     } finally {
       setRestoring(false)
@@ -211,7 +214,16 @@ export default function HistoryModal({ onClose, onRestored }) {
                 >
                   View snapshot
                 </button>
-                <button className="btn" onClick={doRestore} disabled={restoring}>{restoring ? 'Restoring…' : 'Restore'}</button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    if (!selected) return
+                    pendingRestoreIdRef.current = selected.id
+                    setConfirmMessage('Restore this version? This will replace your current outline.')
+                    setConfirming(true)
+                  }}
+                  disabled={restoring}
+                >{restoring ? 'Restoring…' : 'Restore'}</button>
               </div>
               <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px'}}>
                 <div>
@@ -257,13 +269,38 @@ export default function HistoryModal({ onClose, onRestored }) {
           hasPrev={hasNewerSnapshot}
           hasNext={hasOlderSnapshot}
           isLoading={isSnapshotLoading}
+          onRestore={async () => {
+            if (!snapshotVersionId) return
+            pendingRestoreIdRef.current = snapshotVersionId
+            setConfirmMessage('Restore this version? This will replace your current outline.')
+            setConfirming(true)
+          }}
+          restoring={restoring}
         />
       )}
+      {confirming && (
+        <div className="overlay" onClick={() => setConfirming(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{marginTop:0}}>Confirm restore</h3>
+            <div className="meta" style={{marginBottom:12}}>{confirmMessage || 'Are you sure?'}</div>
+            <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
+              <button className="btn ghost" type="button" onClick={() => setConfirming(false)}>Cancel</button>
+              <button
+                className="btn"
+                type="button"
+                onClick={async () => { const id = pendingRestoreIdRef.current; setConfirming(false); await doRestoreNow(id) }}
+                disabled={restoring}
+              >{restoring ? 'Restoring…' : 'Restore'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
 
-function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext = false, isLoading = false }) {
+function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext = false, isLoading = false, onRestore = null, restoring = false }) {
   if (!doc) return null
   const prevDisabled = !hasPrev || typeof onPrev !== 'function' || isLoading
   const nextDisabled = !hasNext || typeof onNext !== 'function' || isLoading
@@ -288,6 +325,14 @@ function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext
               disabled={nextDisabled}
             >
               Older
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => { if (typeof onRestore === 'function' && !isLoading && !restoring) onRestore() }}
+              disabled={isLoading || restoring}
+            >
+              {restoring ? 'Restoring…' : 'Restore'}
             </button>
             <button className="btn" type="button" onClick={onClose}>Close</button>
           </div>

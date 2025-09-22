@@ -118,7 +118,8 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
       return {
         dataId: { default: null },
         status: { default: 'todo' },
-        collapsed: { default: false }
+        collapsed: { default: false },
+        archivedSelf: { default: false }
       }
     },
     addNodeView() {
@@ -233,6 +234,8 @@ function ListItemView(props) {
       className={`li-node ${collapsed ? 'collapsed' : ''}`}
       data-status={status}
       data-id={id ? String(id) : fallbackIdRef.current}
+      data-archived-self={node.attrs.archivedSelf ? '1' : '0'}
+      data-archived={node.attrs.archivedSelf ? '1' : '0'}
       draggable={!readOnly}
       onDragEnd={readOnly ? undefined : handleDragEnd}
     >
@@ -273,6 +276,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const slashMarker = useRef(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState({ todo: true, 'in-progress': true, done: true })
+  const [showArchived, setShowArchived] = useState(true)
+  const applyStatusFilterRef = useRef(null)
   const [slashQuery, setSlashQuery] = useState('')
   const slashQueryRef = useRef('')
   const slashInputRef = useRef(null)
@@ -284,6 +289,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const [searchQuery, setSearchQuery] = useState('')
   const searchQueryRef = useRef('')
   const convertingImagesRef = useRef(false)
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
+  const datePickerValueRef = useRef(dayjs().format('YYYY-MM-DD'))
+  const datePickerCaretRef = useRef(null)
+
   const pendingImageSrcRef = useRef(new Set())
 
   const taskListItemExtension = useMemo(
@@ -343,8 +352,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     content: '<p>Loading…</p>',
     autofocus: !isReadOnly,
     editable: !isReadOnly,
-    onCreate: () => { pushDebug('editor: ready') },
-    onUpdate: () => { if (!isReadOnly) { markDirty(); queueSave() } },
+    onCreate: () => { pushDebug('editor: ready'); setTimeout(() => applyStatusFilter(), 50) },
+    onUpdate: () => { if (!isReadOnly) { markDirty(); queueSave() } setTimeout(() => applyStatusFilter(), 50) },
     editorProps: {
       handleTextInput(view, from, to, text) {
         if (isReadOnly) return false
@@ -384,6 +393,18 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       },
       handlePaste(view, event) {
         if (isReadOnly) return false
+        // 1) Prefer our lossless clipboard format when available
+        try {
+          const jsonStr = event.clipboardData?.getData('application/x-worklog-outline+json')
+          if (jsonStr) {
+            const parsed = JSON.parse(jsonStr)
+            event.preventDefault()
+            editor?.commands?.setContent(parsed)
+            pushDebug('paste: outline json restored')
+            return true
+          }
+        } catch {}
+        // 2) Smart-link paste when the clipboard is a single URL and there is a selection
         const text = event.clipboardData?.getData('text/plain') || ''
         const trimmed = text.trim()
         if (!trimmed || !isLikelyUrl(trimmed)) return false
@@ -453,6 +474,21 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           setSlashQuery('')
           pushDebug('popup: open (keydown)', { key: event.key, char, left: rect.left, top: rect.bottom })
           return true
+        }
+        if (event.key === 'Enter') {
+          // Ensure the newly created list item starts with status "todo"
+          const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
+          if (inCode) return false
+          event.preventDefault()
+          event.stopPropagation()
+          const didSplit = editor.chain().focus().splitListItem('listItem').run()
+          if (didSplit) {
+            // Update attributes on the newly created list item
+            editor.chain().focus().updateAttributes('listItem', { status: 'todo', dataId: null, collapsed: false }).run()
+            pushDebug('enter: split list item -> reset status to todo')
+            return true
+          }
+          return false
         }
         if (event.key === 'Tab') {
           const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
@@ -767,12 +803,37 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     const parentClass = 'filter-parent'
     const liNodes = Array.from(root.querySelectorAll('li.li-node'))
 
+    // First pass: clear classes and compute self-archived flag from body text (paragraph only)
     liNodes.forEach(li => {
       li.classList.remove(hiddenClass, parentClass)
-      const status = li.getAttribute('data-status') || 'todo'
-      if (statusFilter[status] === false) li.classList.add(hiddenClass)
+      const preset = li.getAttribute('data-archived-self')
+      let selfArchived = preset === '1' || preset === 'true'
+      if (!selfArchived) {
+        const body = li.querySelector(':scope > .li-row .li-content')
+        const bodyText = (body?.textContent || '').toLowerCase()
+        selfArchived = /@archived\b/.test(bodyText)
+      }
+      li.dataset.archivedSelf = selfArchived ? '1' : '0'
     })
 
+    // Second pass: propagate archived from ancestors and apply visibility rules
+    liNodes.forEach(li => {
+      // propagate archived from closest ancestor li
+      let archived = li.dataset.archivedSelf === '1'
+      let parent = li.parentElement
+      while (!archived && parent) {
+        if (parent.matches && parent.matches('li.li-node') && parent.dataset.archived === '1') { archived = true; break }
+        parent = parent.parentElement
+      }
+      li.dataset.archived = archived ? '1' : '0'
+
+      const status = li.getAttribute('data-status') || 'todo'
+      const hideByStatus = statusFilter[status] === false
+      const hideByArchive = !showArchived && archived
+      if (hideByStatus || hideByArchive) li.classList.add(hiddenClass)
+    })
+
+    // Third pass: ensure parents of visible descendants remain visible but dimmed
     const depthMap = new Map()
     const getDepth = (el) => {
       if (depthMap.has(el)) return depthMap.get(el)
@@ -795,9 +856,11 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
         li.classList.add(parentClass)
       }
     })
-  }, [editor, statusFilter])
+
+  }, [editor, statusFilter, showArchived])
 
   useEffect(() => { applyStatusFilter() }, [applyStatusFilter])
+  useEffect(() => { applyStatusFilterRef.current = applyStatusFilter }, [applyStatusFilter])
 
   useEffect(() => {
     if (!editor) return
@@ -805,12 +868,26 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     editor.on('update', handler)
     return () => editor.off?.('update', handler)
   }, [editor, applyStatusFilter])
+  // Observe DOM changes to ensure filters apply when NodeViews finish mounting (first load, etc.)
+  useEffect(() => {
+    if (!editor) return
+    const root = editor.view.dom
+    let t = null
+    const observer = new MutationObserver(() => {
+      if (t) clearTimeout(t)
+      t = setTimeout(() => applyStatusFilter(), 50)
+    })
+    observer.observe(root, { childList: true, subtree: true })
+    return () => { observer.disconnect(); if (t) clearTimeout(t) }
+  }, [editor, applyStatusFilter])
+
 
   useEffect(() => {
     if (!editor || isReadOnly) return
     const dom = editor.view.dom
     const handleDragOver = (event) => {
       if (!draggingRef.current) return
+
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
     }
@@ -820,23 +897,39 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       event.preventDefault()
       const dragEl = drag.element
       const pointerY = event.clientY
+      const dragList = dragEl ? dragEl.closest('ul') : null
       const candidates = Array.from(dom.querySelectorAll('li.li-node'))
-        .filter(el => el !== dragEl) // skip the node currently being dragged
+        .filter(el => el !== dragEl && (!dragList || el.closest('ul') === dragList)) // only same-level siblings
       let chosen = null
       let dropAfter = false
-      for (const el of candidates) {
-        const rect = el.getBoundingClientRect()
-        if (rect.height === 0) continue
-        const mid = rect.top + rect.height / 2
-        if (pointerY < mid) {
-          chosen = el
-          dropAfter = false
-          break
-        }
+      // Compute depth of an li by counting ancestor lis
+      const getDepth = (el) => {
+        let depth = 0; let cur = el.parentElement
+        while (cur) { if (cur.matches && cur.matches('li.li-node')) depth += 1; cur = cur.parentElement }
+        return depth
       }
-      if (!chosen && candidates.length) {
-        chosen = candidates[candidates.length - 1]
-        dropAfter = true
+      const infos = candidates.map(el => ({ el, rect: el.getBoundingClientRect(), depth: getDepth(el) }))
+        .filter(info => info.rect.height > 0)
+        .sort((a, b) => a.rect.top - b.rect.top)
+      const inside = infos.filter(info => pointerY >= info.rect.top && pointerY <= info.rect.bottom)
+      if (inside.length) {
+        // Prefer deepest element under the pointer
+        inside.sort((a, b) => b.depth - a.depth)
+        const pick = inside[0]
+        const mid = pick.rect.top + (pick.rect.height / 2)
+        chosen = pick.el
+        dropAfter = pointerY > mid
+      } else {
+        // Find first element below the pointer => drop before it
+        const below = infos.find(info => pointerY < info.rect.top)
+        if (below) {
+          chosen = below.el
+          dropAfter = false
+        } else if (infos.length) {
+          // Otherwise choose the last => drop after it
+          chosen = infos[infos.length - 1].el
+          dropAfter = true
+        }
       }
       const targetId = chosen?.getAttribute('data-id') || null
       if (dragEl && chosen && dragEl.contains(chosen)) {
@@ -942,7 +1035,29 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     applyStatusFilter()
   }, [editor, initialOutline, isReadOnly, applyStatusFilter])
 
+
   useEffect(() => {
+    if (!editor) return
+    const dom = editor.view.dom
+    const onCopy = (e) => {
+      try {
+        const json = editor.getJSON()
+        const html = editor.getHTML()
+        e.clipboardData?.setData('application/x-worklog-outline+json', JSON.stringify(json))
+        e.clipboardData?.setData('text/html', html)
+        // Provide a simple plain text fallback
+        const text = dom.innerText || ''
+        e.clipboardData?.setData('text/plain', text)
+        e.preventDefault()
+        pushDebug('copy: outline json placed')
+      } catch {}
+    }
+    dom.addEventListener('copy', onCopy)
+    return () => dom.removeEventListener('copy', onCopy)
+  }, [editor])
+
+  useEffect(() => {
+
     if (!editor || isReadOnly) return
     ;(async () => {
       const data = await getOutline()
@@ -952,6 +1067,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       dirtyRef.current = false
       setDirty(false)
       pushDebug('loaded outline', { roots: roots.length })
+      // Ensure filters (status/archive) apply on first load
+      setTimeout(() => applyStatusFilter(), 50)
     })()
   }, [editor, isReadOnly])
 
@@ -1011,9 +1128,12 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
         const children = [...bodyContent]
         if (n.children?.length) children.push(buildList(n.children))
         const idStr = String(n.id)
+        const titleLower = (titleText || '').toLowerCase()
+        const bodyLower = JSON.stringify(bodyContent || []).toLowerCase()
+        const archivedSelf = titleLower.includes('@archived') || bodyLower.includes('@archived')
         return {
           type: 'listItem',
-          attrs: { dataId: n.id, status: n.status || 'todo', collapsed: collapsedSet.has(idStr) },
+          attrs: { dataId: n.id, status: n.status || 'todo', collapsed: collapsedSet.has(idStr), archivedSelf },
           content: children
         }
       })
@@ -1307,18 +1427,25 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     pushDebug('insert date today')
   }
   const insertPick = () => {
-    const v = prompt('Date (YYYY-MM-DD)?', dayjs().format('YYYY-MM-DD'))
-    if (v) {
-      const removed = consumeSlashMarker()
-      const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-      if (caretPos !== null) {
-        editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-      }
-      editor.chain().focus().insertContent(' @' + v).run()
-      if (removed) cleanDanglingSlash(removed.from)
-      pushDebug('insert date picked', { v })
+    // Open our own lightweight date picker popup instead of browser prompt
+    const today = dayjs().format('YYYY-MM-DD')
+    datePickerValueRef.current = today
+    const selFrom = editor?.state?.selection?.from ?? null
+    datePickerCaretRef.current = selFrom
+
+    setDatePickerOpen(true)
+    closeSlash({ preserveMarker: true })
+  }
+  const insertArchived = () => {
+    const removed = consumeSlashMarker()
+    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+    if (caretPos !== null) {
+      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
     }
+    editor.chain().focus().insertContent(' @archived').run()
+    if (removed) cleanDanglingSlash(removed.from)
     closeSlash()
+    pushDebug('insert archived tag')
   }
   const insertCode = () => {
     const removed = consumeSlashMarker()
@@ -1333,6 +1460,19 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       pushDebug('insert code block fallback')
       editor.chain().focus().insertContent({ type: 'codeBlock' }).run()
     }
+  const applyPickedDate = useCallback(() => {
+    const v = datePickerValueRef.current
+    setDatePickerOpen(false)
+    if (!v) return
+    const caretPos = datePickerCaretRef.current ?? editor?.state?.selection?.from ?? null
+    if (caretPos !== null) {
+      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+    }
+    editor?.chain().focus().insertContent(' @' + v).run()
+    if (slashMarker.current?.pos != null) cleanDanglingSlash(slashMarker.current.pos)
+    pushDebug('insert date picked', { v })
+  }, [editor, pushDebug])
+
     if (removed) cleanDanglingSlash(removed.from)
     closeSlash()
     pushDebug('insert code block')
@@ -1372,10 +1512,11 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const slashCommands = useMemo(() => ([
     { id: 'today', label: 'Date worked on (today)', hint: 'Insert @YYYY-MM-DD for today', keywords: ['today', 'date', 'now'], run: insertToday },
     { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },
+    { id: 'archived', label: 'Archive (tag)', hint: 'Insert @archived tag to mark item (and its subtasks) archived', keywords: ['archive','archived','hide'], run: insertArchived },
     { id: 'code', label: 'Code block', hint: 'Insert a multiline code block', keywords: ['code', 'snippet', '```'], run: insertCode },
     { id: 'image', label: 'Upload image', hint: 'Upload and insert an image', keywords: ['image', 'photo', 'upload'], run: insertImage },
     { id: 'details', label: 'Details (inline)', hint: 'Collapsible details block', keywords: ['details', 'summary', 'toggle'], run: insertDetails }
-  ]), [insertToday, insertPick, insertCode, insertImage, insertDetails])
+  ]), [insertToday, insertPick, insertArchived, insertCode, insertImage, insertDetails])
 
   const normalizedSlashQuery = slashQuery.trim().toLowerCase()
   const filteredCommands = useMemo(() => {
@@ -1420,6 +1561,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           <button
             key={opt.key}
             className={`btn pill ${statusFilter[opt.key] ? 'active' : ''}`}
+            data-status={opt.key}
             type="button"
             onClick={() => toggleStatusFilter(opt.key)}
           >{opt.label}</button>
@@ -1428,6 +1570,14 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           <button className="btn ghost" type="button" onClick={() => applyPresetFilter('all')}>All</button>
           <button className="btn ghost" type="button" onClick={() => applyPresetFilter('active')}>Active</button>
           <button className="btn ghost" type="button" onClick={() => applyPresetFilter('completed')}>Completed</button>
+        </div>
+        <div className="archive-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="meta">Archived:</span>
+          <button
+            className={`btn pill ${showArchived ? 'active' : ''}`}
+            type="button"
+            onClick={() => setShowArchived(v => !v)}
+          >{showArchived ? 'Shown' : 'Hidden'}</button>
         </div>
         <div className="search-bar">
           <input
@@ -1519,6 +1669,21 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
           )}
         </div>
       )}
+      {datePickerOpen && (
+        <div className="date-picker-pop" style={{ left: slashPos.x, top: slashPos.y }} role="dialog" aria-modal="true">
+          <div className="date-picker-title">Pick a date</div>
+          <input
+            type="date"
+            defaultValue={datePickerValueRef.current}
+            onChange={(e) => { datePickerValueRef.current = e.target.value }}
+          />
+          <div className="date-picker-actions">
+            <button className="btn" type="button" onClick={applyPickedDate}>Insert</button>
+            <button className="btn ghost" type="button" onClick={() => setDatePickerOpen(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {showDebug && (
         <div className="debug-pane">
           {debugLines.slice(-40).map((l, i) => <div className="debug-line" key={i}>{l}</div>)}

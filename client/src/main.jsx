@@ -72,22 +72,24 @@ function App() {
   const statusText = saveState.saving ? 'Saving…' : (saveState.dirty ? 'Unsaved changes' : 'Saved')
   return (
     <>
-      <div className="version-banner">
-        <span>Client built {formatStamp(CLIENT_BUILD_TIME)}</span>
-        <span>Server built {formatStamp(serverBuildTime)}</span>
-        {healthFetchedAt && <span>Checked {formatStamp(healthFetchedAt)}</span>}
+      <div className="topbar">
+        <div className="version-banner">
+          <span>Client built {formatStamp(CLIENT_BUILD_TIME)}</span>
+          <span>Server built {formatStamp(serverBuildTime)}</span>
+          {healthFetchedAt && <span>Checked {formatStamp(healthFetchedAt)}</span>}
+        </div>
+        <header>
+          <h1>Daily Worklog</h1>
+          <div className="spacer" />
+          <button className={`btn ${tab==='outline' ? 'active' : ''}`} onClick={() => setTab('outline')}>Outline</button>
+          <button className={`btn ${tab==='timeline' ? 'active' : ''}`} onClick={() => setTab('timeline')}>Timeline</button>
+          <div className="spacer" />
+          <button className="btn" onClick={openCheckpoint}>Checkpoint</button>
+          <button className="btn" onClick={() => setShowHistory(true)}>History</button>
+          <button className="btn" onClick={() => { const v=!showDebug; setShowDebug(v); localStorage.setItem('WL_DEBUG', v?'1':'0') }}>{showDebug?'Hide':'Show'} Debug</button>
+          <div className="save-indicator">{statusText}</div>
+        </header>
       </div>
-      <header>
-        <h1>Daily Worklog</h1>
-        <div className="spacer" />
-        <button className={`btn ${tab==='outline' ? 'active' : ''}`} onClick={() => setTab('outline')}>Outline</button>
-        <button className={`btn ${tab==='timeline' ? 'active' : ''}`} onClick={() => setTab('timeline')}>Timeline</button>
-        <div className="spacer" />
-        <button className="btn" onClick={openCheckpoint}>Checkpoint</button>
-        <button className="btn" onClick={() => setShowHistory(true)}>History</button>
-        <button className="btn" onClick={() => { const v=!showDebug; setShowDebug(v); localStorage.setItem('WL_DEBUG', v?'1':'0') }}>{showDebug?'Hide':'Show'} Debug</button>
-        <div className="save-indicator">{statusText}</div>
-      </header>
       <main>
         {tab === 'outline'
           ? <OutlinerView onSaveStateChange={setSaveState} showDebug={showDebug} />
