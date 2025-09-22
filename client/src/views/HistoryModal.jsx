@@ -130,7 +130,7 @@ export default function HistoryModal({ onClose, onRestored }) {
   }
 
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay" style={{ zIndex: 900 }} onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="left">
           <h2 style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
@@ -260,7 +260,7 @@ export default function HistoryModal({ onClose, onRestored }) {
           )}
         </div>
       </div>
-      {snapshotDoc && (
+      {snapshotDoc && !confirming && (
         <SnapshotViewer
           doc={snapshotDoc}
           onClose={closeSnapshot}
@@ -272,14 +272,17 @@ export default function HistoryModal({ onClose, onRestored }) {
           onRestore={async () => {
             if (!snapshotVersionId) return
             pendingRestoreIdRef.current = snapshotVersionId
+            // Ensure snapshot overlay is closed so confirm sits on top and is clickable
+            closeSnapshot()
             setConfirmMessage('Restore this version? This will replace your current outline.')
             setConfirming(true)
           }}
           restoring={restoring}
+          isDimmed={confirming}
         />
       )}
       {confirming && (
-        <div className="overlay" onClick={() => setConfirming(false)}>
+        <div className="overlay" style={{ zIndex: 99999, position: 'fixed', inset: 0, pointerEvents: 'auto' }} onClick={() => setConfirming(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3 style={{marginTop:0}}>Confirm restore</h3>
             <div className="meta" style={{marginBottom:12}}>{confirmMessage || 'Are you sure?'}</div>
@@ -300,12 +303,12 @@ export default function HistoryModal({ onClose, onRestored }) {
   )
 }
 
-function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext = false, isLoading = false, onRestore = null, restoring = false }) {
+function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext = false, isLoading = false, onRestore = null, restoring = false, isDimmed = false }) {
   if (!doc) return null
   const prevDisabled = !hasPrev || typeof onPrev !== 'function' || isLoading
   const nextDisabled = !hasNext || typeof onNext !== 'function' || isLoading
   return (
-    <div className="snapshot-fullscreen" role="dialog" aria-modal="true" onClick={onClose}>
+    <div className="snapshot-fullscreen" role="dialog" aria-modal="true" onClick={onClose} style={{ zIndex: 1000, position: 'fixed', inset: 0, pointerEvents: isDimmed ? 'none' : 'auto' }}>
       <div className="snapshot-fullscreen-inner" onClick={e => e.stopPropagation()}>
         <div className="snapshot-fullscreen-bar">
           <div className="snapshot-fullscreen-title">Snapshot preview</div>

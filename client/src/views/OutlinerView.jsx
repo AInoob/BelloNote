@@ -890,32 +890,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       li.dataset.futureSelf = selfFuture ? '1' : '0'
       li.dataset.soonSelf = selfSoon ? '1' : '0'
 
-      // Ensure a visual badge for @soon self-tag
-      const row = li.querySelector(':scope > .li-row')
-      if (row) {
-        const existingSoon = row.querySelector(':scope > .tag-badge.soon')
-        if (selfSoon) {
-          if (!existingSoon) {
-            const chip = row.querySelector(':scope > .status-chip.inline')
-            const badge = document.createElement('span')
-            badge.className = 'tag-badge soon'
-            badge.textContent = 'Soon'
-            badge.style.marginLeft = '6px'
-            badge.style.padding = '1px 6px'
-            badge.style.borderRadius = '8px'
-            badge.style.fontSize = '12px'
-            badge.style.background = '#FFF3BF'
-            badge.style.color = '#7A5C00'
-            if (chip && chip.nextSibling) {
-              chip.parentNode.insertBefore(badge, chip.nextSibling)
-            } else {
-              row.insertBefore(badge, row.querySelector(':scope > .li-content'))
-            }
-          }
-        } else if (existingSoon) {
-          existingSoon.remove()
-        }
-      }
+      // Badge rendering moved to React (li-row) via showSoonBadge driven by data-soon-self
+      // No direct DOM mutation here to avoid duplication or stale badges.
     })
 
     // Second pass: propagate archived/future/soon from ancestors and apply visibility rules
