@@ -76,9 +76,15 @@ test('timeline soon toggle hides/shows Soon section', async ({ page, request }) 
   await expect(soonToggle).not.toHaveClass(/active/)
   await expect(page.locator('h3', { hasText: 'Soon' })).toHaveCount(0)
 
+  // Persistence: reload, Soon remains hidden
+  await page.reload()
+  await page.getByRole('button', { name: 'Timeline' }).click()
+  await expect(page.locator('[data-timeline-filter="1"] .soon-toggle .btn.pill')).not.toHaveClass(/active/)
+  await expect(page.locator('h3', { hasText: 'Soon' })).toHaveCount(0)
+
   // Toggle Soon on again
-  await soonToggle.click()
-  await expect(soonToggle).toHaveClass(/active/)
+  await page.locator('[data-timeline-filter="1"] .soon-toggle .btn.pill').click()
+  await expect(page.locator('[data-timeline-filter="1"] .soon-toggle .btn.pill')).toHaveClass(/active/)
   await expect(page.locator('h3', { hasText: 'Soon' })).toBeVisible()
 })
 

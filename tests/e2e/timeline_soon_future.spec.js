@@ -102,6 +102,14 @@ test('timeline shows Soon and Future and can hide Future', async ({ page, reques
   await expect(futureSection).toBeVisible()
   await expect(futureSection.locator('.history-inline-preview')).toContainText('future parent')
 
+  // Validate order: Future appears before Soon
+  const headers = await page.locator('h3').allTextContents()
+  const idxFuture = headers.indexOf('Future')
+  const idxSoon = headers.indexOf('Soon')
+  expect(idxFuture).toBeGreaterThanOrEqual(0)
+  expect(idxSoon).toBeGreaterThanOrEqual(0)
+  expect(idxFuture).toBeLessThan(idxSoon)
+
   // Dated section already visible
   const dateSection = page.locator('section', { has: page.locator('h3', { hasText: todayStr() }) })
   await expect(dateSection.locator('.history-inline-preview')).toContainText('worked on')
@@ -115,5 +123,11 @@ test('timeline shows Soon and Future and can hide Future', async ({ page, reques
   // Future section should disappear, Soon remains
   await expect(page.locator('h3', { hasText: 'Future' })).toHaveCount(0)
   await expect(page.locator('h3', { hasText: 'Soon' })).toBeVisible()
+
+  // Persistence: reload and ensure Future remains hidden
+  await page.reload()
+  await page.getByRole('button', { name: 'Timeline' }).click()
+  await expect(page.locator('[data-timeline-filter="1"] .future-toggle .btn.pill')).not.toHaveClass(/active/)
+  await expect(page.locator('h3', { hasText: 'Future' })).toHaveCount(0)
 })
 

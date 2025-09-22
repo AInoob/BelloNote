@@ -64,8 +64,8 @@ function collectSoonAndFuture(roots) {
 export default function TimelineView() {
   const [days, setDays] = useState([])
   const [outlineRoots, setOutlineRoots] = useState([])
-  const [showFuture, setShowFuture] = useState(true)
-  const [showSoon, setShowSoon] = useState(true)
+  const [showFuture, setShowFuture] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.future'); return v === '0' ? false : true } catch { return true } })
+  const [showSoon, setShowSoon] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.soon'); return v === '0' ? false : true } catch { return true } })
 
 
   useEffect(() => {
@@ -94,17 +94,27 @@ export default function TimelineView() {
       <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8, display: 'flex', gap: 16 }}>
         <div className="soon-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span className="meta">Soon:</span>
-          <button className={`btn pill ${showSoon ? 'active' : ''}`} type="button" onClick={() => setShowSoon(v => !v)}>
+          <button className={`btn pill ${showSoon ? 'active' : ''}`} type="button" onClick={() => { const next = !showSoon; try { localStorage.setItem('worklog.timeline.soon', next ? '1' : '0') } catch {}; setShowSoon(next) }}>
             {showSoon ? 'Shown' : 'Hidden'}
           </button>
         </div>
         <div className="future-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span className="meta">Future:</span>
-          <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => setShowFuture(v => !v)}>
+          <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => { const next = !showFuture; try { localStorage.setItem('worklog.timeline.future', next ? '1' : '0') } catch {}; setShowFuture(next) }}>
             {showFuture ? 'Shown' : 'Hidden'}
           </button>
         </div>
       </div>
+
+      {/* Future bucket (should appear before Soon) */}
+      {showFuture && futureRoots.length > 0 && (
+        <section key="future">
+          <h3>Future</h3>
+          <div className="history-inline-preview">
+            <OutlinerView readOnly={true} forceExpand={true} initialOutline={{ roots: futureRoots }} allowStatusToggleInReadOnly={true} onStatusToggle={handleStatusToggle} />
+          </div>
+        </section>
+      )}
 
       {/* Soon bucket */}
       {showSoon && soonRoots.length > 0 && (
@@ -112,16 +122,6 @@ export default function TimelineView() {
           <h3>Soon</h3>
           <div className="history-inline-preview">
             <OutlinerView readOnly={true} forceExpand={true} initialOutline={{ roots: soonRoots }} allowStatusToggleInReadOnly={true} onStatusToggle={handleStatusToggle} />
-          </div>
-        </section>
-      )}
-
-      {/* Future bucket */}
-      {showFuture && futureRoots.length > 0 && (
-        <section key="future">
-          <h3>Future</h3>
-          <div className="history-inline-preview">
-            <OutlinerView readOnly={true} forceExpand={true} initialOutline={{ roots: futureRoots }} allowStatusToggleInReadOnly={true} onStatusToggle={handleStatusToggle} />
           </div>
         </section>
       )}

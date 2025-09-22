@@ -22,6 +22,8 @@ const COLLAPSED_KEY = 'worklog.collapsed'
 const FILTER_STATUS_KEY = 'worklog.filter.status'
 const FILTER_ARCHIVED_KEY = 'worklog.filter.archived'
 const FILTER_FUTURE_KEY = 'worklog.filter.future'
+const FILTER_SOON_KEY = 'worklog.filter.soon'
+
 const LOG_ON = () => (localStorage.getItem('WL_DEBUG') === '1')
 const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
 
@@ -49,10 +51,10 @@ const loadArchivedVisible = () => {
   try { const v = localStorage.getItem(FILTER_ARCHIVED_KEY); return v === '0' ? false : true } catch { return true }
 }
 const saveArchivedVisible = (v) => { try { localStorage.setItem(FILTER_ARCHIVED_KEY, v ? '1' : '0') } catch {} }
-const loadFutureVisible = () => {
-  try { const v = localStorage.getItem(FILTER_FUTURE_KEY); return v === '0' ? false : true } catch { return true }
-}
+const loadFutureVisible = () => { try { const v = localStorage.getItem(FILTER_FUTURE_KEY); return v === '0' ? false : true } catch { return true } }
 const saveFutureVisible = (v) => { try { localStorage.setItem(FILTER_FUTURE_KEY, v ? '1' : '0') } catch {} }
+const loadSoonVisible = () => { try { const v = localStorage.getItem(FILTER_SOON_KEY); return v === '0' ? false : true } catch { return true } }
+const saveSoonVisible = (v) => { try { localStorage.setItem(FILTER_SOON_KEY, v ? '1' : '0') } catch {} }
 
 const URL_PROTOCOL_RE = /^[a-z][\w+.-]*:\/\//i
 const DOMAIN_LIKE_RE = /^[\w.-]+\.[a-z]{2,}(?:\/[\w#?=&%+@.\-]*)?$/i
@@ -310,6 +312,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const menuRef = useRef(null)
   const slashMarker = useRef(null)
   const [showFuture, setShowFuture] = useState(() => loadFutureVisible())
+  const [showSoon, setShowSoon] = useState(() => loadSoonVisible())
+
 
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
@@ -318,6 +322,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
 
   // Persist filters in localStorage
   useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
+  useEffect(() => { saveSoonVisible(showSoon) }, [showSoon])
+
   useEffect(() => { saveArchivedVisible(showArchived) }, [showArchived])
   useEffect(() => { saveFutureVisible(showFuture) }, [showFuture])
   const [slashQuery, setSlashQuery] = useState('')
@@ -894,7 +900,8 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       const hideByStatus = statusFilter[status] === false
       const hideByArchive = !showArchived && archived
       const hideByFuture = !showFuture && future
-      const shouldHide = hideByStatus || hideByArchive || hideByFuture
+      const hideBySoon = !showSoon && soon
+      const shouldHide = hideByStatus || hideByArchive || hideByFuture || hideBySoon
       if (shouldHide) {
         li.classList.add(hiddenClass)
         // Inline fallback to ensure visibility toggles even if stylesheet scoping changes
@@ -929,7 +936,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       }
     })
 
-  }, [editor, statusFilter, showArchived, showFuture])
+  }, [editor, statusFilter, showArchived, showFuture, showSoon])
 
   useEffect(() => { applyStatusFilter() }, [applyStatusFilter])
   useEffect(() => { applyStatusFilterRef.current = applyStatusFilter }, [applyStatusFilter])
@@ -1679,6 +1686,14 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
               type="button"
               onClick={() => { const next = !showArchived; try { saveArchivedVisible(next) } catch {}; setShowArchived(next) }}
             >{showArchived ? 'Shown' : 'Hidden'}</button>
+          </div>
+          <div className="soon-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="meta">Soon:</span>
+            <button
+              className={`btn pill ${showSoon ? 'active' : ''}`}
+              type="button"
+              onClick={() => { const next = !showSoon; try { saveSoonVisible(next) } catch {}; setShowSoon(next) }}
+            >{showSoon ? 'Shown' : 'Hidden'}</button>
           </div>
           <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
             <span className="meta">Future:</span>
