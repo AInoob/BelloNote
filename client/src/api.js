@@ -2,8 +2,18 @@
 import axios from 'axios'
 
 const RAW = (import.meta.env.VITE_API_URL ?? '').trim();
-export const API_ROOT = (RAW === '/' || RAW === '') ? '' : RAW.replace(/\/$/, '');
-export const api = axios.create({ baseURL: `${API_ROOT}/api` })
+let apiRoot = (RAW === '/' || RAW === '') ? '' : RAW.replace(/\/$/, '');
+export const API_ROOT = apiRoot;
+const defaultHeaders = {}
+try {
+  if (typeof window !== 'undefined') {
+    const host = window.location && window.location.host
+    if (host && (host.startsWith('127.0.0.1:4173') || host.startsWith('localhost:4173'))) {
+      defaultHeaders['x-playwright-test'] = '1'
+    }
+  }
+} catch {}
+export const api = axios.create({ baseURL: `${API_ROOT}/api`, headers: defaultHeaders })
 
 // Outline
 export async function getOutline() { const { data } = await api.get('/outline'); return data }

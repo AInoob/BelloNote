@@ -256,7 +256,7 @@ function ListItemView(props) {
   )
 }
 
-export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=false, readOnly = false, initialOutline = null }) {
+export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=false, readOnly = false, initialOutline = null, forceExpand = false }) {
   const isReadOnly = !!readOnly
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -982,7 +982,7 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }
 
   function buildList(nodes) {
-    const collapsedSet = loadCollapsed()
+    const collapsedSet = forceExpand ? new Set() : loadCollapsed()
     if (!nodes || !nodes.length) {
       return {
         type: 'bulletList',
@@ -1291,6 +1291,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   }, [editor, pushDebug])
   const insertToday = () => {
     const removed = consumeSlashMarker()
+    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+    if (caretPos !== null) {
+      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+    }
     editor.chain().focus().insertContent(' @' + dayjs().format('YYYY-MM-DD')).run()
     if (removed) cleanDanglingSlash(removed.from)
     closeSlash()
@@ -1300,6 +1304,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     const v = prompt('Date (YYYY-MM-DD)?', dayjs().format('YYYY-MM-DD'))
     if (v) {
       const removed = consumeSlashMarker()
+      const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+      if (caretPos !== null) {
+        editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+      }
       editor.chain().focus().insertContent(' @' + v).run()
       if (removed) cleanDanglingSlash(removed.from)
       pushDebug('insert date picked', { v })

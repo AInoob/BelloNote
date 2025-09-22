@@ -1,4 +1,6 @@
 const { test, expect } = require('@playwright/test')
+
+test.describe.configure({ mode: 'serial' })
 const path = require('path')
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
@@ -186,4 +188,23 @@ test('upload image into task 2 via slash command', async ({ page, request }) => 
     titles: ['task 1', 'task 2', 'task 3'],
     imageTotal: 1
   })
+})
+
+
+
+test('insert today date inline via slash command', async ({ page, request }) => {
+  await createThreeTasks(page, request)
+
+  const secondItem = page.locator('li.li-node').nth(1)
+  await secondItem.locator('p').first().click()
+  await placeCaretAtTaskEnd(page, 1)
+
+  await page.keyboard.type('/')
+  await expect(page.locator('.slash-menu')).toBeVisible()
+  await page.locator('.slash-menu button', { hasText: 'Date worked on (today)' }).click()
+
+  const today = new Date().toISOString().slice(0, 10)
+  await expect(secondItem).toContainText(`@${today}`)
+  await expect(page.locator('li.li-node').nth(2)).not.toContainText(`@${today}`)
+  await expect(page.locator('li.li-node')).toHaveCount(3)
 })
