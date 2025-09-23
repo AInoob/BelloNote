@@ -1,5 +1,5 @@
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor, ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
@@ -31,8 +31,56 @@ const SCROLL_STATE_KEY = 'worklog.lastScroll'
 const LOG_ON = () => (localStorage.getItem('WL_DEBUG') === '1')
 const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
 
-const loadCollapsed = () => { try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')) } catch { return new Set() } }
-const saveCollapsed = (s) => localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(s)))
+const COLLAPSED_CACHE = new Map()
+
+const collapsedStorageKey = (focusRootId) => focusRootId ? `${COLLAPSED_KEY}.${focusRootId}` : COLLAPSED_KEY
+
+const loadCollapsedSetForRoot = (focusRootId) => {
+  if (typeof window === 'undefined') return new Set()
+  const key = collapsedStorageKey(focusRootId)
+  if (!COLLAPSED_CACHE.has(key)) {
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(key) || '[]')
+      if (Array.isArray(raw)) {
+        COLLAPSED_CACHE.set(key, raw.map(String))
+      } else {
+        COLLAPSED_CACHE.set(key, [])
+      }
+    } catch {
+      COLLAPSED_CACHE.set(key, [])
+    }
+  }
+  return new Set(COLLAPSED_CACHE.get(key) || [])
+}
+
+const saveCollapsedSetForRoot = (focusRootId, set) => {
+  if (typeof window === 'undefined') return
+  const key = collapsedStorageKey(focusRootId)
+  const arr = Array.from(set || []).map(String)
+  COLLAPSED_CACHE.set(key, arr)
+  try {
+    window.localStorage.setItem(key, JSON.stringify(arr))
+  } catch {}
+}
+
+const focusContextDefaults = {
+  focusRootId: null,
+  requestFocus: () => {},
+  exitFocus: () => {},
+  loadCollapsedSet: loadCollapsedSetForRoot,
+  saveCollapsedSet: saveCollapsedSetForRoot,
+  forceExpand: false
+}
+
+const FocusContext = React.createContext(focusContextDefaults)
+
+const cssEscape = (value) => {
+  if (typeof value !== 'string') value = String(value ?? '')
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value)
+  }
+  return value.replace(/[^a-zA-Z0-9\-_]/g, (match) => `\\${match}`)
+}
 
 const DEFAULT_STATUS_FILTER = { none: true, todo: true, 'in-progress': true, done: true }
 const loadStatusFilter = () => {
@@ -205,6 +253,11 @@ function ListItemView(props) {
   const fallbackIdRef = useRef(id ? String(id) : `temp-${Math.random().toString(36).slice(2, 8)}`)
   const justDraggedRef = useRef(false)
   const draggingRef = draggingState || { current: null }
+  const focusConfig = useContext(FocusContext) || focusContextDefaults
+  const focusRootId = focusConfig.focusRootId ?? null
+  const loadCollapsedSet = focusConfig.loadCollapsedSet || loadCollapsedSetForRoot
+  const saveCollapsedSet = focusConfig.saveCollapsedSet || saveCollapsedSetForRoot
+  const requestFocus = focusConfig.requestFocus || (() => {})
   const { remindersByTask, scheduleReminder, dismissReminder, completeReminder, removeReminder } = useReminders()
   const reminderKey = id ? String(id) : null
   const reminder = reminderKey ? remindersByTask.get(reminderKey) || null : null
@@ -259,9 +312,11 @@ function ListItemView(props) {
   }, [editor, getPos, node])
 
   useEffect(() => {
-    const set = loadCollapsed()
-    if (id && set.has(String(id)) !== collapsed) updateAttributes({ collapsed: set.has(String(id)) })
-  }, [])
+    if (!id) return
+    const collapsedSet = loadCollapsedSet(focusRootId)
+    const shouldCollapse = collapsedSet.has(String(id))
+    if (shouldCollapse !== collapsed) updateAttributes({ collapsed: shouldCollapse })
+  }, [id, collapsed, updateAttributes, loadCollapsedSet, focusRootId])
 
   useEffect(() => {
     if (!reminderControlsEnabled) return
@@ -280,8 +335,12 @@ function ListItemView(props) {
   const toggleCollapse = () => {
     const next = !collapsed
     updateAttributes({ collapsed: next })
-    const set = loadCollapsed()
-    if (id) { next ? set.add(String(id)) : set.delete(String(id)); saveCollapsed(set) }
+    if (!id) return
+    const key = String(id)
+    const set = loadCollapsedSet(focusRootId)
+    if (next) set.add(key)
+    else set.delete(key)
+    saveCollapsedSet(focusRootId, set)
   }
 
   const readCurrentDomId = () => {
@@ -289,6 +348,21 @@ function ListItemView(props) {
     if (!li) return id ? String(id) : fallbackIdRef.current
     return li.getAttribute('data-id') || li.dataset?.id || (id ? String(id) : fallbackIdRef.current)
   }
+
+  const handleFocusShortcut = useCallback((event) => {
+    if (typeof requestFocus !== 'function') return
+    if (!event || event.button !== 0) return
+    const usingModifier = event.metaKey || (event.ctrlKey && !event.metaKey)
+    if (!usingModifier) return
+    if (event.target instanceof HTMLElement) {
+      if (event.target.closest('a')) return
+    }
+    const currentId = readCurrentDomId()
+    if (!currentId) return
+    event.preventDefault()
+    event.stopPropagation()
+    requestFocus(String(currentId))
+  }, [requestFocus, readCurrentDomId])
 
   const ensurePersistentTaskId = useCallback(async () => {
     let currentId = readCurrentDomId()
@@ -630,7 +704,7 @@ function ListItemView(props) {
         >
           {status === STATUS_EMPTY ? '' : (STATUS_ICON[status] ?? '○')}
         </button>
-        <div className="li-main">
+        <div className="li-main" onMouseDown={handleFocusShortcut}>
           {showSoonBadge && (
             <span className="tag-badge soon" style={{ marginTop: 1, padding: '1px 6px', borderRadius: 8, fontSize: 12, background: '#FFF3BF', color: '#7A5C00' }}>Soon</span>
           )}
@@ -757,6 +831,172 @@ export default function OutlinerView({
   const statusFilterRef = useRef(statusFilter)
   const restoredScrollRef = useRef(false)
   const scrollSaveFrameRef = useRef(null)
+  const [focusRootId, setFocusRootId] = useState(() => {
+    if (typeof window === 'undefined') return null
+    try {
+      const url = new URL(window.location.href)
+      return url.searchParams.get('focus')
+    } catch {
+      return null
+    }
+  })
+  const focusRootRef = useRef(focusRootId)
+  useEffect(() => { focusRootRef.current = focusRootId }, [focusRootId])
+  const [focusTitle, setFocusTitle] = useState('')
+  const suppressUrlSyncRef = useRef(false)
+  const initialFocusSyncRef = useRef(true)
+  const pendingFocusScrollRef = useRef(null)
+  const focusShortcutActiveRef = useRef(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const applyShortcutState = (active) => {
+      if (focusShortcutActiveRef.current === active) return
+      focusShortcutActiveRef.current = active
+      if (typeof document === 'undefined') return
+      const body = document.body
+      if (!body) return
+      body.classList.toggle('focus-shortcut-available', active)
+    }
+
+    const computeActive = (event) => {
+      if (!event) return false
+      return !!(event.metaKey || (event.ctrlKey && !event.metaKey))
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.metaKey || event.ctrlKey || event.key === 'Meta' || event.key === 'Control') {
+        applyShortcutState(computeActive(event))
+      }
+    }
+
+    const handleKeyUp = (event) => {
+      if (focusShortcutActiveRef.current || event.key === 'Meta' || event.key === 'Control') {
+        applyShortcutState(computeActive(event))
+      }
+    }
+
+    const handleBlur = () => applyShortcutState(false)
+
+    const handleVisibility = () => {
+      if (typeof document === 'undefined') return
+      if (document.visibilityState !== 'visible') applyShortcutState(false)
+    }
+
+    const doc = typeof document !== 'undefined' ? document : null
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    window.addEventListener('keyup', handleKeyUp, true)
+    window.addEventListener('blur', handleBlur)
+    if (doc) {
+      doc.addEventListener('keydown', handleKeyDown, true)
+      doc.addEventListener('keyup', handleKeyUp, true)
+      doc.addEventListener('visibilitychange', handleVisibility)
+    }
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+      window.removeEventListener('keyup', handleKeyUp, true)
+      window.removeEventListener('blur', handleBlur)
+      if (doc) {
+        doc.removeEventListener('keydown', handleKeyDown, true)
+        doc.removeEventListener('keyup', handleKeyUp, true)
+        doc.removeEventListener('visibilitychange', handleVisibility)
+      }
+      applyShortcutState(false)
+    }
+  }, [])
+
+  const readFocusFromLocation = useCallback(() => {
+    if (typeof window === 'undefined') return null
+    try {
+      const url = new URL(window.location.href)
+      return url.searchParams.get('focus')
+    } catch {
+      return null
+    }
+  }, [])
+
+  const migrateCollapsedSets = useCallback((idMapping) => {
+    if (!idMapping || typeof idMapping !== 'object') return
+    const entries = Object.entries(idMapping)
+    if (!entries.length) return
+    const normalize = (value) => String(value ?? '')
+    const replaceInArray = (arr) => arr.map(value => {
+      const mapped = idMapping[normalize(value)]
+      return mapped !== undefined ? normalize(mapped) : normalize(value)
+    })
+    const writeCacheAndStorage = (key, arrValues) => {
+      const normalized = arrValues.map(normalize)
+      COLLAPSED_CACHE.set(key, normalized)
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(key, JSON.stringify(normalized))
+        } catch {}
+      }
+    }
+
+    entries.forEach(([oldIdRaw, newIdRaw]) => {
+      const oldId = normalize(oldIdRaw)
+      const newId = normalize(newIdRaw)
+      const oldKey = collapsedStorageKey(oldId)
+      const newKey = collapsedStorageKey(newId)
+      if (COLLAPSED_CACHE.has(oldKey)) {
+        const cached = COLLAPSED_CACHE.get(oldKey) || []
+        writeCacheAndStorage(newKey, replaceInArray(cached))
+        COLLAPSED_CACHE.delete(oldKey)
+      }
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = window.localStorage.getItem(oldKey)
+          if (raw !== null) {
+            const parsed = JSON.parse(raw)
+            const arr = Array.isArray(parsed) ? replaceInArray(parsed) : []
+            window.localStorage.setItem(newKey, JSON.stringify(arr))
+          }
+          window.localStorage.removeItem(oldKey)
+        } catch {}
+      }
+    })
+
+    const cacheKeys = Array.from(COLLAPSED_CACHE.keys())
+    cacheKeys.forEach((key) => {
+      const current = COLLAPSED_CACHE.get(key) || []
+      const updated = replaceInArray(current)
+      let changed = updated.length !== current.length
+      if (!changed) {
+        for (let i = 0; i < updated.length; i += 1) {
+          if (updated[i] !== current[i]) { changed = true; break }
+        }
+      }
+      if (changed) writeCacheAndStorage(key, updated)
+    })
+
+    if (typeof window !== 'undefined') {
+      const keysToReview = []
+      for (let i = 0; i < window.localStorage.length; i += 1) {
+        const key = window.localStorage.key(i)
+        if (key && key.startsWith(COLLAPSED_KEY)) keysToReview.push(key)
+      }
+      keysToReview.forEach((key) => {
+        try {
+          const raw = window.localStorage.getItem(key)
+          if (raw === null) return
+          const parsed = JSON.parse(raw)
+          if (!Array.isArray(parsed)) return
+          const updated = replaceInArray(parsed)
+          let changed = updated.length !== parsed.length
+          if (!changed) {
+            for (let i = 0; i < updated.length; i += 1) {
+              if (updated[i] !== parsed[i]) { changed = true; break }
+            }
+          }
+          if (changed) window.localStorage.setItem(key, JSON.stringify(updated))
+        } catch {}
+      })
+    }
+  }, [])
 
   // Persist filters in localStorage
   useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
@@ -1266,6 +1506,29 @@ export default function OutlinerView({
     saveTimer.current = setTimeout(() => doSave(), delay)
   }
 
+  const applyCollapsedStateForRoot = useCallback((rootId) => {
+    if (!editor) return
+    const collapsedSet = forceExpand ? new Set() : loadCollapsedSetForRoot(rootId)
+    const { state, view } = editor
+    if (!state || !view) return
+    let tr = state.tr
+    let mutated = false
+    state.doc.descendants((node, pos) => {
+      if (node.type.name !== 'listItem') return
+      const dataId = node.attrs.dataId
+      if (!dataId) return
+      const shouldCollapse = collapsedSet.has(String(dataId))
+      if (!!node.attrs.collapsed !== shouldCollapse) {
+        tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, collapsed: shouldCollapse })
+        mutated = true
+      }
+    })
+    if (mutated) {
+      tr.setMeta('addToHistory', false)
+      view.dispatch(tr)
+    }
+  }, [editor, forceExpand])
+
   const availableFilters = useMemo(() => ([
     { key: 'none', label: 'No status' },
     { key: 'todo', label: 'To do' },
@@ -1309,6 +1572,15 @@ export default function OutlinerView({
     const showSoonCurrent = showSoonRef.current
     const showArchivedCurrent = showArchivedRef.current
     const statusFilterCurrent = statusFilterRef.current || {}
+    const focusId = focusRootRef.current
+    let focusElement = null
+    if (focusId) {
+      try {
+        focusElement = root.querySelector(`li.li-node[data-id="${cssEscape(focusId)}"]`)
+      } catch {
+        focusElement = null
+      }
+    }
 
     // First pass: clear classes and compute self flags from body text (paragraph only)
     const textNodeType = typeof Node !== 'undefined' ? Node.TEXT_NODE : 3
@@ -1333,7 +1605,11 @@ export default function OutlinerView({
     }
 
     liNodes.forEach(li => {
-      li.classList.remove(hiddenClass, parentClass)
+      li.classList.remove(hiddenClass, parentClass, 'focus-root', 'focus-descendant', 'focus-ancestor', 'focus-hidden')
+      li.removeAttribute('data-focus-role')
+      li.style.display = ''
+      const row = li.querySelector(':scope > .li-row')
+      if (row) row.style.display = ''
 
       const body = li.querySelector(':scope > .li-row .li-content')
       const bodyText = readDirectBodyText(body).toLowerCase()
@@ -1351,6 +1627,10 @@ export default function OutlinerView({
     })
 
     // Second pass: propagate archived/future/soon from ancestors and apply visibility rules
+    if (typeof document !== 'undefined') {
+      document.body.classList.toggle('focus-mode', !!focusElement)
+    }
+
     liNodes.forEach(li => {
       // propagate flags from closest ancestor li
       let archived = li.dataset.archivedSelf === '1'
@@ -1376,7 +1656,35 @@ export default function OutlinerView({
       const hideByArchive = !showArchivedCurrent && archived
       const hideByFuture = !showFutureCurrent && future
       const hideBySoon = !showSoonCurrent && soon
-      const shouldHide = hideByStatus || hideByArchive || hideByFuture || hideBySoon
+      const isFocusActive = !!focusElement
+      const isRoot = focusElement ? li === focusElement : false
+      const isDescendant = focusElement ? (focusElement.contains(li) && li !== focusElement) : false
+      const isAncestor = focusElement ? (!isRoot && li.contains(focusElement)) : false
+
+      if (isFocusActive) {
+        const role = isRoot ? 'root' : (isAncestor ? 'ancestor' : (isDescendant ? 'descendant' : 'other'))
+        li.dataset.focusRole = role
+        const row = li.querySelector(':scope > .li-row')
+        if (row && role !== 'ancestor') row.style.display = ''
+        if (role === 'root') li.classList.add('focus-root')
+        if (role === 'ancestor') {
+          li.classList.add('focus-ancestor')
+        }
+        if (role === 'descendant') li.classList.add('focus-descendant')
+        if (role === 'other') {
+          li.classList.add('focus-hidden')
+          li.classList.remove(parentClass)
+          li.classList.remove(hiddenClass)
+          li.style.display = 'none'
+          return
+        }
+      } else {
+        li.removeAttribute('data-focus-role')
+      }
+
+      const shouldHide = (isFocusActive && (isRoot || isDescendant || isAncestor))
+        ? false
+        : (hideByStatus || hideByArchive || hideByFuture || hideBySoon)
       if (shouldHide) {
         li.classList.add(hiddenClass)
         // Inline fallback to ensure visibility toggles even if stylesheet scoping changes
@@ -1403,6 +1711,7 @@ export default function OutlinerView({
 
     const sorted = [...liNodes].sort((a, b) => getDepth(b) - getDepth(a))
     sorted.forEach(li => {
+      if (focusElement) return
       if (!li.classList.contains(hiddenClass)) return
       const descendantVisible = li.querySelector('li.li-node:not(.filter-hidden)')
       if (descendantVisible) {
@@ -1413,7 +1722,93 @@ export default function OutlinerView({
 
   }, [editor, statusFilter, showArchived, showFuture, showSoon])
 
-  useEffect(() => { applyStatusFilter() }, [applyStatusFilter])
+  const handleRequestFocus = useCallback((taskId) => {
+    if (!taskId) return
+    const normalized = String(taskId)
+    pendingFocusScrollRef.current = normalized
+    setFocusRootId(prev => (prev === normalized ? prev : normalized))
+  }, [])
+
+  const exitFocus = useCallback(() => {
+    if (!focusRootRef.current) return
+    pendingFocusScrollRef.current = null
+    setFocusRootId(null)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handlePopState = () => {
+      const next = readFocusFromLocation()
+      suppressUrlSyncRef.current = true
+      setFocusRootId(next)
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [readFocusFromLocation])
+
+  useEffect(() => {
+    if (initialFocusSyncRef.current) {
+      initialFocusSyncRef.current = false
+      return
+    }
+    if (suppressUrlSyncRef.current) {
+      suppressUrlSyncRef.current = false
+      return
+    }
+    if (typeof window === 'undefined') return
+    try {
+      const url = new URL(window.location.href)
+      if (focusRootId) url.searchParams.set('focus', focusRootId)
+      else url.searchParams.delete('focus')
+      window.history.pushState({ focus: focusRootId }, '', url)
+    } catch {}
+  }, [focusRootId])
+
+  const computeFocusTitle = useCallback((targetId) => {
+    if (!editor || !targetId) return ''
+    try {
+      const json = editor.getJSON()
+      let title = ''
+      const visit = (node) => {
+        if (!node || !node.content) return false
+        for (const child of node.content) {
+          if (child.type === 'listItem') {
+            const dataId = child.attrs?.dataId
+            if (String(dataId) === String(targetId)) {
+              const body = child.content || []
+              const paragraph = body.find(n => n.type === 'paragraph')
+              title = extractTitle(paragraph)
+              return true
+            }
+            for (const nested of child.content || []) {
+              if (nested.type === 'bulletList' && visit(nested)) return true
+            }
+          } else if (child.type === 'bulletList' && visit(child)) {
+            return true
+          }
+        }
+        return false
+      }
+      visit(json)
+      return title || ''
+    } catch {
+      return ''
+    }
+  }, [editor])
+
+  const updateFocusTitle = useCallback(() => {
+    const currentId = focusRootRef.current
+    if (!currentId) {
+      setFocusTitle('')
+      return
+    }
+    const title = computeFocusTitle(currentId)
+    setFocusTitle(title)
+  }, [computeFocusTitle])
+
+  useEffect(() => {
+    applyStatusFilter()
+  }, [applyStatusFilter])
   useEffect(() => { applyStatusFilterRef.current = applyStatusFilter }, [applyStatusFilter])
 
   useEffect(() => {
@@ -1429,7 +1824,9 @@ export default function OutlinerView({
     let t = null
     const observer = new MutationObserver(() => {
       if (t) clearTimeout(t)
-      t = setTimeout(() => applyStatusFilter(), 50)
+      t = setTimeout(() => {
+        applyStatusFilter()
+      }, 50)
     })
     observer.observe(root, { childList: true, subtree: true })
     return () => { observer.disconnect(); if (t) clearTimeout(t) }
@@ -1557,6 +1954,19 @@ export default function OutlinerView({
           }
         })
         if (changed2) { tr2.setMeta('addToHistory', false); editor.view.dispatch(tr2) }
+        migrateCollapsedSets(mapping)
+        if (focusRootRef.current && mapping[focusRootRef.current]) {
+          const nextId = String(mapping[focusRootRef.current])
+          suppressUrlSyncRef.current = true
+          setFocusRootId(nextId)
+          if (typeof window !== 'undefined') {
+            try {
+              const url = new URL(window.location.href)
+              url.searchParams.set('focus', nextId)
+              window.history.replaceState({ focus: nextId }, '', url)
+            } catch {}
+          }
+        }
       }
       // Skip immediate refresh to avoid resetting the caret while editing
       if (!dirtyRef.current) setDirty(false)
@@ -1663,8 +2073,11 @@ export default function OutlinerView({
       dirtyRef.current = false
       setDirty(false)
       pushDebug('loaded outline', { roots: roots.length })
+      applyCollapsedStateForRoot(focusRootRef.current)
       // Ensure filters (status/archive) apply on first load
-      setTimeout(() => applyStatusFilter(), 50)
+      setTimeout(() => {
+        applyStatusFilter()
+      }, 50)
       setTimeout(() => {
         if (restoredScrollRef.current) return
         const state = loadScrollState()
@@ -1674,7 +2087,7 @@ export default function OutlinerView({
         restoredScrollRef.current = true
       }, 120)
     })()
-  }, [editor, isReadOnly])
+  }, [editor, isReadOnly, applyCollapsedStateForRoot, applyStatusFilter])
 
   useEffect(() => {
     if (isReadOnly) return
@@ -1745,7 +2158,7 @@ export default function OutlinerView({
   }
 
   function buildList(nodes) {
-    const collapsedSet = forceExpand ? new Set() : loadCollapsed()
+    const collapsedSet = forceExpand ? new Set() : loadCollapsedSetForRoot(null)
     if (!nodes || !nodes.length) {
       return {
         type: 'bulletList',
@@ -2221,6 +2634,41 @@ export default function OutlinerView({
     }
   }, [filteredCommands, updateSlashActive])
 
+  useEffect(() => {
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.body.classList.remove('focus-mode')
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    applyCollapsedStateForRoot(focusRootId)
+    applyStatusFilter()
+  }, [focusRootId, applyCollapsedStateForRoot, applyStatusFilter])
+
+  useEffect(() => {
+    if (!editor) return
+    const handler = () => updateFocusTitle()
+    editor.on('update', handler)
+    updateFocusTitle()
+    return () => editor.off('update', handler)
+  }, [editor, updateFocusTitle])
+
+  useEffect(() => {
+    updateFocusTitle()
+  }, [focusRootId, updateFocusTitle])
+
+  const focusDisplayTitle = focusTitle?.trim() ? focusTitle.trim() : 'Untitled task'
+  const focusContextValue = useMemo(() => ({
+    focusRootId,
+    requestFocus: handleRequestFocus,
+    exitFocus,
+    loadCollapsedSet: loadCollapsedSetForRoot,
+    saveCollapsedSet: saveCollapsedSetForRoot,
+    forceExpand
+  }), [focusRootId, handleRequestFocus, exitFocus, forceExpand])
+
   return (
     <div style={{ position:'relative' }}>
       {!isReadOnly && (
@@ -2304,7 +2752,18 @@ export default function OutlinerView({
           </div>
         </div>
       )}
-      <EditorContent editor={editor} className="tiptap" />
+      {focusRootId && (
+        <div className="focus-banner">
+          <div className="focus-banner-label">
+            Viewing focus
+            <span className="focus-banner-title">{focusDisplayTitle}</span>
+          </div>
+          <button className="btn ghost" type="button" onClick={exitFocus}>Exit focus</button>
+        </div>
+      )}
+      <FocusContext.Provider value={focusContextValue}>
+        <EditorContent editor={editor} className="tiptap" />
+      </FocusContext.Provider>
       {imagePreview && (
         <div className="overlay" onClick={() => setImagePreview(null)}>
           <div className="image-modal" onClick={e => e.stopPropagation()}>

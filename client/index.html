@@ -21,6 +21,10 @@
       main { height: calc(100vh - 86px); padding:.9rem; }
       /* Make the outline filter sticky below the topbar */
       .status-filter-bar { position: sticky; top: 86px; z-index: 65; background:#fff; display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px; padding:6px 4px; margin-top:-1px; border-top:1px solid var(--border); box-shadow: 0 1px 0 rgba(229,231,235,1) inset; }
+      .focus-banner { position: sticky; top: 126px; z-index: 64; background: rgba(79,70,229,.08); border:1px solid rgba(79,70,229,.18); border-radius:12px; padding:8px 12px; display:flex; align-items:center; gap:12px; margin:-2px 0 10px; backdrop-filter: blur(4px); }
+      .focus-banner-label { display:flex; align-items:center; gap:8px; font-size:.88rem; color:#1f2937; }
+      .focus-banner-title { font-weight:600; color:#1d4ed8; background:rgba(99,102,241,.12); padding:2px 10px; border-radius:999px; }
+      .focus-banner button { margin-left:auto; }
       .status-filter-bar .filter-presets { display:flex; gap:6px; margin-left:12px; }
       .search-bar { display:flex; align-items:center; gap:6px; margin-left:auto; }
       .search-bar input { border:1px solid var(--border); border-radius:999px; padding:0.28rem 0.75rem; font-size:.85rem; min-width:160px; }
@@ -81,6 +85,9 @@
       }
       .li-main .li-reminder-area { display:flex; align-items:center; gap:6px; flex:0 0 auto; align-self:center; position:relative; }
       .li-main .li-reminder-area.floating { position:absolute; top:0; }
+      body.focus-shortcut-available .li-main { cursor:pointer; }
+      body.focus-shortcut-available .li-main .li-content { cursor:pointer; }
+      body.focus-shortcut-available .li-main .li-content * { cursor:inherit; }
       .li-reminder-area .reminder-toggle { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border:1px solid var(--border); background:#fff; border-radius:999px; color:#4b5563; cursor:pointer; font-size:15px; line-height:1; transition:background-color .12s ease, border-color .12s ease, color .12s ease; }
       .li-reminder-area .reminder-toggle:hover { background:#f3f4f6; }
       .li-reminder-area.has-reminder .reminder-toggle { border-color:#6366F1; color:#312E81; }
@@ -143,6 +150,39 @@
       /* archived dim */
       .li-node[data-archived-self="1"] > .li-row { opacity:.78; }
       .li-node[data-archived-self="1"] > .li-row .li-content { color:#4b5563; }
+      body.focus-mode .status-filter-bar { box-shadow: 0 1px 0 rgba(79,70,229,.2) inset; }
+      body.focus-mode li.li-node.focus-hidden { display:none !important; }
+      body.focus-mode li.li-node.focus-ancestor { margin:0; padding:0; }
+      body.focus-mode li.li-node.focus-ancestor > .li-row {
+        display:block;
+        padding:0;
+        margin:0;
+        background:transparent;
+        box-shadow:none;
+        min-height:0;
+      }
+      body.focus-mode li.li-node.focus-ancestor > .li-row > .caret,
+      body.focus-mode li.li-node.focus-ancestor > .li-row > .status-chip.inline,
+      body.focus-mode li.li-node.focus-ancestor > .li-row > .li-main > .li-reminder-area {
+        display:none !important;
+      }
+      body.focus-mode li.li-node.focus-ancestor > .li-row > .li-main {
+        display:block;
+        padding:0;
+        margin:0;
+      }
+      body.focus-mode li.li-node.focus-ancestor > .li-row > .li-main > .li-content {
+        padding:0;
+        margin:0;
+      }
+      body.focus-mode li.li-node.focus-ancestor > .li-row > .li-main > .li-content > :not(div[data-node-view-content-react]) {
+        display:none !important;
+      }
+      body.focus-mode li.li-node.focus-ancestor > .li-row > .li-main > .li-content > div[data-node-view-content-react] > :not(ul):not(ol) {
+        display:none !important;
+      }
+      body.focus-mode li.li-node.focus-root > .li-row { background:rgba(79,70,229,.12); box-shadow:inset 0 0 0 1px rgba(79,70,229,.28); }
+      body.focus-mode li.li-node.focus-descendant > .li-row { background:rgba(79,70,229,.05); }
 
       .work-date { background:#DBEAFE; border:1px solid #93C5FD; padding:0 4px; border-radius:4px; }
       .timeline h3 { margin:.75rem 0 .25rem 0; font-size:.95rem; }
