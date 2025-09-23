@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import OutlinerView from './OutlinerView.jsx'
+import { getOutline } from '../api.js'
 import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 
 const FILTER_OPTIONS = [
@@ -27,7 +28,16 @@ function formatAbsolute(reminder) {
   return date.format('MMM D, YYYY h:mm A')
 }
 
-function buildOutlineRoots(reminders) {
+function cloneNodes(nodes) {
+  if (!Array.isArray(nodes)) return []
+  return nodes.map(node => ({
+    ...node,
+    content: Array.isArray(node.content) ? JSON.parse(JSON.stringify(node.content)) : node.content,
+    children: cloneNodes(node.children)
+  }))
+}
+
+function buildOutlineRoots(reminders, outlineMap) {
   return reminders.map(reminder => {
     const infoParts = []
     if (reminder.status === 'scheduled') {
@@ -53,19 +63,48 @@ function buildOutlineRoots(reminders) {
     if (infoText) {
       content.push({ type: 'paragraph', content: [{ type: 'text', text: infoText }] })
     }
-    return {
+    const baseNode = outlineMap.get(String(reminder.taskId))
+
+    const result = {
       id: reminder.taskId,
       title: titleText,
       status: reminder.taskStatus || 'todo',
       content,
       children: []
     }
+    if (baseNode && reminderStatusKey(reminder) === 'due') {
+      result.children = cloneNodes(baseNode.children)
+    }
+    return result
   })
 }
 
 export default function RemindersView() {
   const { reminders } = useReminders()
   const [statusFilters, setStatusFilters] = useState(() => new Set(STATUS_ORDER))
+  const [outlineMap, setOutlineMap] = useState(() => new Map())
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await getOutline()
+        const map = new Map()
+        const walk = (nodes) => {
+          nodes.forEach(node => {
+            if (!node || typeof node !== 'object') return
+            if (node.id != null) map.set(String(node.id), node)
+            if (Array.isArray(node.children)) walk(node.children)
+          })
+        }
+        if (data?.roots) walk(data.roots)
+        if (!cancelled) setOutlineMap(map)
+      } catch (err) {
+        console.error('[reminders] failed to fetch outline', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   const categorized = useMemo(() => {
     const buckets = {
@@ -90,7 +129,7 @@ export default function RemindersView() {
     return active.flatMap(key => categorized[key] || [])
   }, [categorized, statusFilters])
 
-  const outlineRoots = useMemo(() => buildOutlineRoots(filteredReminders), [filteredReminders])
+  const outlineRoots = useMemo(() => buildOutlineRoots(filteredReminders, outlineMap), [filteredReminders, outlineMap])
   const outlinePayload = useMemo(() => ({ roots: outlineRoots }), [outlineRoots])
 
   const toggleFilter = (key) => {

@@ -193,8 +193,9 @@ function ListItemView(props) {
   const reminderKey = id ? String(id) : null
   const reminder = reminderKey ? remindersByTask.get(reminderKey) || null : null
   const [reminderMenuOpen, setReminderMenuOpen] = useState(false)
+  const defaultCustomDate = () => dayjs().add(30, 'minute').format('YYYY-MM-DDTHH:mm')
   const [customMode, setCustomMode] = useState(false)
-  const [customDate, setCustomDate] = useState('')
+  const [customDate, setCustomDate] = useState(defaultCustomDate)
   const [reminderError, setReminderError] = useState('')
   const reminderMenuRef = useRef(null)
   const rowRef = useRef(null)
@@ -462,6 +463,7 @@ function ListItemView(props) {
               e.stopPropagation()
               setReminderError('')
               setCustomMode(false)
+              setCustomDate(defaultCustomDate())
               setReminderMenuOpen(v => !v)
             }}
           >
@@ -476,8 +478,18 @@ function ListItemView(props) {
                   <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(30)}>30 minutes</button>
                   <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(60)}>1 hour</button>
                   <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(180)}>3 hours</button>
+                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(1380)}>23 hours</button>
+                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(1440)}>24 hours</button>
                 </div>
-                <button type="button" className="btn small ghost" onClick={() => { setCustomMode(v => !v); setReminderError('') }}>Custom…</button>
+                <button
+                  type="button"
+                  className="btn small ghost"
+                  onClick={() => {
+                    setCustomMode(v => !v)
+                    setReminderError('')
+                    setCustomDate(defaultCustomDate())
+                  }}
+                >Custom…</button>
                 {customMode && (
                   <form className="menu-custom" onSubmit={handleCustomSubmit}>
                     <input
