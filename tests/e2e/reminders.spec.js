@@ -39,13 +39,12 @@ test('schedule reminder from outline and remove it', async ({ page, request }) =
   await expect(firstReminderToggle).toHaveText(/Reminds/i)
 
   await page.getByRole('button', { name: 'Reminders' }).click()
-  const scheduledTab = page.getByRole('button', { name: /Scheduled/ })
-  await scheduledTab.click()
-  const reminderCard = page.locator('.reminder-card').filter({ hasText: 'Task A' })
-  await expect(reminderCard).toBeVisible()
-
-  await reminderCard.getByRole('button', { name: /Remove/ }).click()
-  await expect(page.locator('.reminder-card').filter({ hasText: 'Task A' })).toHaveCount(0)
+  await page.locator('.reminder-toggle').first().waitFor({ state: 'visible' })
+  const reminderNode = page.locator('.tiptap .li-node', { hasText: 'Task A' })
+  const reminderToggle = reminderNode.locator('.reminder-toggle').first()
+  await reminderToggle.click()
+  await page.locator('.reminder-menu').getByRole('button', { name: /Remove reminder/i }).click()
+  await expect(page.locator('.tiptap .li-node', { hasText: 'Task A' })).toHaveCount(0)
 })
 
 test('due reminder surfaces notification and completes task', async ({ page, request }) => {
@@ -74,7 +73,5 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   await expect(reminderToggle).toHaveText(/Reminder completed/i)
 
   await page.getByRole('button', { name: 'Reminders' }).click()
-  const completedTab = page.getByRole('button', { name: /Completed/ })
-  await completedTab.click()
-  await expect(page.locator('.reminder-card').filter({ hasText: 'Follow up item' })).toHaveCount(1)
+  await expect(page.locator('.tiptap .li-node', { hasText: 'Follow up item' })).toHaveCount(1)
 })

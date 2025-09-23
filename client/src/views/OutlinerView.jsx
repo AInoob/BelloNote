@@ -141,7 +141,7 @@ function CodeBlockView(props) {
   )
 }
 
-function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggleInReadOnly, onStatusToggle }) {
+function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggleInReadOnly, onStatusToggle, reminderActionsEnabled }) {
   return ListItem.extend({
     name: 'listItem',
     draggable: !readOnly,
@@ -164,6 +164,7 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
           draggingState={draggingState}
           allowStatusToggleInReadOnly={allowStatusToggleInReadOnly}
           onStatusToggle={onStatusToggle}
+          reminderActionsEnabled={reminderActionsEnabled}
         />
       ))
     }
@@ -171,7 +172,17 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
 }
 
 function ListItemView(props) {
-  const { node, updateAttributes, editor, getPos, readOnly = false, draggingState, allowStatusToggleInReadOnly = false, onStatusToggle = null } = props
+  const {
+    node,
+    updateAttributes,
+    editor,
+    getPos,
+    readOnly = false,
+    draggingState,
+    allowStatusToggleInReadOnly = false,
+    onStatusToggle = null,
+    reminderActionsEnabled: reminderActionsEnabledProp = false
+  } = props
   const id = node.attrs.dataId
   const status = node.attrs.status || 'todo'
   const collapsed = !!node.attrs.collapsed
@@ -187,6 +198,7 @@ function ListItemView(props) {
   const [reminderError, setReminderError] = useState('')
   const reminderMenuRef = useRef(null)
   const rowRef = useRef(null)
+  const reminderControlsEnabled = reminderActionsEnabledProp
 
   useEffect(() => {
     if (id) fallbackIdRef.current = String(id)
@@ -198,6 +210,7 @@ function ListItemView(props) {
   }, [])
 
   useEffect(() => {
+    if (!reminderControlsEnabled) return
     if (!reminderMenuOpen) return
     const handleClick = (event) => {
       if (reminderMenuRef.current && !reminderMenuRef.current.contains(event.target)) {
@@ -208,7 +221,7 @@ function ListItemView(props) {
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
-  }, [reminderMenuOpen])
+  }, [reminderMenuOpen, reminderControlsEnabled])
 
   const toggleCollapse = () => {
     const next = !collapsed
@@ -243,6 +256,7 @@ function ListItemView(props) {
   }, [])
 
   const scheduleAfterMinutes = useCallback(async (minutes) => {
+    if (!reminderControlsEnabled) return
     try {
       setReminderError('')
       const realId = await ensurePersistentTaskId()
@@ -256,6 +270,7 @@ function ListItemView(props) {
 
   const handleCustomSubmit = useCallback(async (event) => {
     event.preventDefault()
+    if (!reminderControlsEnabled) return
     if (!customDate) {
       setReminderError('Select a date and time')
       return
@@ -273,6 +288,7 @@ function ListItemView(props) {
   }, [closeReminderMenu, customDate, ensurePersistentTaskId, scheduleReminder])
 
   const handleDismissReminder = useCallback(async () => {
+    if (!reminderControlsEnabled) return
     if (!reminder) return
     try {
       await dismissReminder(reminder.id)
@@ -283,6 +299,7 @@ function ListItemView(props) {
   }, [closeReminderMenu, dismissReminder, reminder])
 
   const handleCompleteReminder = useCallback(async () => {
+    if (!reminderControlsEnabled) return
     if (!reminder) return
     try {
       await completeReminder(reminder.id)
@@ -293,6 +310,7 @@ function ListItemView(props) {
   }, [closeReminderMenu, completeReminder, reminder])
 
   const handleRemoveReminder = useCallback(async () => {
+    if (!reminderControlsEnabled) return
     if (!reminder) return
     try {
       await removeReminder(reminder.id)
@@ -429,7 +447,7 @@ function ListItemView(props) {
           <span className="tag-badge soon" style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 8, fontSize: 12, background: '#FFF3BF', color: '#7A5C00' }}>Soon</span>
         )}
         <NodeViewContent className="li-content" />
-        {!readOnly && (
+        {reminderControlsEnabled && (
         <div
           className={`li-reminder-area ${reminder ? 'has-reminder' : ''} ${reminderDue ? 'due' : ''}`}
           contentEditable={false}
@@ -498,8 +516,18 @@ function ListItemView(props) {
   )
 }
 
-export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=false, readOnly = false, initialOutline = null, forceExpand = false, allowStatusToggleInReadOnly = false, onStatusToggle = null }) {
+export default function OutlinerView({
+  onSaveStateChange = () => {},
+  showDebug = false,
+  readOnly = false,
+  initialOutline = null,
+  forceExpand = false,
+  allowStatusToggleInReadOnly = false,
+  onStatusToggle = null,
+  reminderActionsEnabled: reminderActionsEnabledProp
+}) {
   const isReadOnly = !!readOnly
+  const reminderActionsEnabled = reminderActionsEnabledProp !== undefined ? reminderActionsEnabledProp : !isReadOnly
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [slashOpen, setSlashOpen] = useState(false)
@@ -546,8 +574,14 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const pendingImageSrcRef = useRef(new Set())
 
   const taskListItemExtension = useMemo(
-    () => createTaskListItemExtension({ readOnly: isReadOnly, draggingState: draggingRef, allowStatusToggleInReadOnly, onStatusToggle }),
-    [isReadOnly, draggingRef, allowStatusToggleInReadOnly, onStatusToggle]
+    () => createTaskListItemExtension({
+      readOnly: isReadOnly,
+      draggingState: draggingRef,
+      allowStatusToggleInReadOnly,
+      onStatusToggle,
+      reminderActionsEnabled
+    }),
+    [isReadOnly, draggingRef, allowStatusToggleInReadOnly, onStatusToggle, reminderActionsEnabled]
   )
 
   const updateSlashActive = useCallback((idx) => {
