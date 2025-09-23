@@ -3,15 +3,18 @@ const path = require('path')
 const fs = require('fs')
 
 // Use non-default ports for E2E to avoid clashing with local dev servers
-const SERVER_PORT = 4100
-const CLIENT_PORT = 4175
+const SERVER_PORT = 5231
+const CLIENT_PORT = 5232
 const API_URL = `http://127.0.0.1:${SERVER_PORT}`
+const CLIENT_URL = `http://127.0.0.1:${CLIENT_PORT}`
 const DATA_DIR = path.join(__dirname, 'test-data', `.playwright-data-${Date.now()}`)
 
 fs.rmSync(DATA_DIR, { recursive: true, force: true })
 fs.mkdirSync(DATA_DIR, { recursive: true })
 
 process.env.PLAYWRIGHT_API_URL = API_URL
+process.env.PLAYWRIGHT_ORIGIN = API_URL
+process.env.PLAYWRIGHT_CLIENT_URL = CLIENT_URL
 process.env.PLAYWRIGHT_DATA_DIR = DATA_DIR
 
 module.exports = defineConfig({

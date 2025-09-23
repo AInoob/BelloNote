@@ -328,12 +328,14 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
   const slashMarker = useRef(null)
   const [showFuture, setShowFuture] = useState(() => loadFutureVisible())
   const [showSoon, setShowSoon] = useState(() => loadSoonVisible())
-
-
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
   const [showArchived, setShowArchived] = useState(() => loadArchivedVisible())
   const applyStatusFilterRef = useRef(null)
+  const showFutureRef = useRef(showFuture)
+  const showSoonRef = useRef(showSoon)
+  const showArchivedRef = useRef(showArchived)
+  const statusFilterRef = useRef(statusFilter)
 
   // Persist filters in localStorage
   useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
@@ -341,6 +343,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
 
   useEffect(() => { saveArchivedVisible(showArchived) }, [showArchived])
   useEffect(() => { saveFutureVisible(showFuture) }, [showFuture])
+  useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
+  useEffect(() => { showSoonRef.current = showSoon }, [showSoon])
+  useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
+  useEffect(() => { showFutureRef.current = showFuture }, [showFuture])
   const [slashQuery, setSlashQuery] = useState('')
   const slashQueryRef = useRef('')
   const slashInputRef = useRef(null)
@@ -845,16 +851,23 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       next = { todo: true, 'in-progress': true, done: false }
     }
     try { saveStatusFilter(next) } catch {}
+    statusFilterRef.current = next
     setStatusFilter(next)
   }
 
   const applyPresetFilter = (preset) => {
     if (preset === 'all') {
-      setStatusFilter({ todo: true, 'in-progress': true, done: true })
+      const next = { todo: true, 'in-progress': true, done: true }
+      statusFilterRef.current = next
+      setStatusFilter(next)
     } else if (preset === 'active') {
-      setStatusFilter({ todo: true, 'in-progress': true, done: false })
+      const next = { todo: true, 'in-progress': true, done: false }
+      statusFilterRef.current = next
+      setStatusFilter(next)
     } else if (preset === 'completed') {
-      setStatusFilter({ todo: false, 'in-progress': false, done: true })
+      const next = { todo: false, 'in-progress': false, done: true }
+      statusFilterRef.current = next
+      setStatusFilter(next)
     }
   }
 
@@ -864,28 +877,22 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
     const hiddenClass = 'filter-hidden'
     const parentClass = 'filter-parent'
     const liNodes = Array.from(root.querySelectorAll('li.li-node'))
+    const showFutureCurrent = showFutureRef.current
+    const showSoonCurrent = showSoonRef.current
+    const showArchivedCurrent = showArchivedRef.current
+    const statusFilterCurrent = statusFilterRef.current || {}
 
     // First pass: clear classes and compute self flags from body text (paragraph only)
     liNodes.forEach(li => {
       li.classList.remove(hiddenClass, parentClass)
 
-      // archived
-      const presetA = li.getAttribute('data-archived-self')
-      let selfArchived = presetA === '1' || presetA === 'true'
-      // future
-      const presetF = li.getAttribute('data-future-self')
-      let selfFuture = presetF === '1' || presetF === 'true'
-      // soon
-      const presetS = li.getAttribute('data-soon-self')
-      let selfSoon = presetS === '1' || presetS === 'true'
+      const body = li.querySelector(':scope > .li-row .li-content')
+      const bodyText = (body?.textContent || '').toLowerCase()
 
-      if (!selfArchived || !selfFuture || !selfSoon) {
-        const body = li.querySelector(':scope > .li-row .li-content')
-        const bodyText = (body?.textContent || '').toLowerCase()
-        if (!selfArchived) selfArchived = /@archived\b/.test(bodyText)
-        if (!selfFuture) selfFuture = /@future\b/.test(bodyText)
-        if (!selfSoon) selfSoon = /@soon\b/.test(bodyText)
-      }
+      const selfArchived = /@archived\b/.test(bodyText)
+      const selfFuture = /@future\b/.test(bodyText)
+      const selfSoon = /@soon\b/.test(bodyText)
+
       li.dataset.archivedSelf = selfArchived ? '1' : '0'
       li.dataset.futureSelf = selfFuture ? '1' : '0'
       li.dataset.soonSelf = selfSoon ? '1' : '0'
@@ -915,10 +922,10 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       li.dataset.soon = soon ? '1' : '0'
 
       const status = li.getAttribute('data-status') || 'todo'
-      const hideByStatus = statusFilter[status] === false
-      const hideByArchive = !showArchived && archived
-      const hideByFuture = !showFuture && future
-      const hideBySoon = !showSoon && soon
+      const hideByStatus = statusFilterCurrent[status] === false
+      const hideByArchive = !showArchivedCurrent && archived
+      const hideByFuture = !showFutureCurrent && future
+      const hideBySoon = !showSoonCurrent && soon
       const shouldHide = hideByStatus || hideByArchive || hideByFuture || hideBySoon
       if (shouldHide) {
         li.classList.add(hiddenClass)
@@ -1702,7 +1709,12 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
             <button
               className={`btn pill ${showArchived ? 'active' : ''}`}
               type="button"
-              onClick={() => { const next = !showArchived; try { saveArchivedVisible(next) } catch {}; setShowArchived(next) }}
+              onClick={() => {
+                const next = !showArchived
+                try { saveArchivedVisible(next) } catch {}
+                showArchivedRef.current = next
+                setShowArchived(next)
+              }}
             >{showArchived ? 'Shown' : 'Hidden'}</button>
           </div>
           <div className="soon-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1710,7 +1722,24 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
             <button
               className={`btn pill ${showSoon ? 'active' : ''}`}
               type="button"
-              onClick={() => { const next = !showSoon; try { saveSoonVisible(next) } catch {}; setShowSoon(next) }}
+              onClick={() => {
+                const next = !showSoon
+                try { saveSoonVisible(next) } catch {}
+                showSoonRef.current = next
+                setShowSoon(next)
+                queueMicrotask(() => {
+                  try {
+                    if (next && editor?.view?.dom) {
+                      const root = editor.view.dom
+                      root.querySelectorAll('li.li-node[data-soon="1"]').forEach(li => {
+                        li.classList.remove('filter-hidden')
+                        li.style.display = ''
+                      })
+                    }
+                    applyStatusFilterRef.current?.()
+                  } catch {}
+                })
+              }}
             >{showSoon ? 'Shown' : 'Hidden'}</button>
           </div>
           <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1718,7 +1747,12 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
             <button
               className={`btn pill ${showFuture ? 'active' : ''}`}
               type="button"
-              onClick={() => { const next = !showFuture; try { saveFutureVisible(next) } catch {}; setShowFuture(next) }}
+              onClick={() => {
+                const next = !showFuture
+                try { saveFutureVisible(next) } catch {}
+                showFutureRef.current = next
+                setShowFuture(next)
+              }}
             >{showFuture ? 'Shown' : 'Hidden'}</button>
           </div>
           <div className="search-bar">

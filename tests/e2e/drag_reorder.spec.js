@@ -45,15 +45,29 @@ function childTitlesFromOutline(json, parentTitle) {
 }
 
 // Drag and drop helpers
+async function primeDrag(handle) {
+  await handle.evaluate(node => {
+    const dt = new DataTransfer()
+    const event = new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt })
+    node.dispatchEvent(event)
+  })
+}
+
 async function dndBefore(page, sourceLi, targetLi) {
   // Drop in upper part of target => before
-  await sourceLi.locator('.drag-toggle').dragTo(targetLi, { force: true, targetPosition: { x: 10, y: 4 } })
+  const handle = sourceLi.locator('.drag-toggle')
+  await primeDrag(handle)
+  const target = targetLi.locator('.li-row')
+  await handle.dragTo(target, { targetPosition: { x: 10, y: 4 } })
 }
 async function dndAfter(page, sourceLi, targetLi) {
   // Compute height and drop near bottom => after
-  const h = await targetLi.evaluate(el => el.getBoundingClientRect().height)
+  const handle = sourceLi.locator('.drag-toggle')
+  await primeDrag(handle)
+  const target = targetLi.locator('.li-row')
+  const h = await target.evaluate(el => el.getBoundingClientRect().height)
   const y = Math.max(4, Math.floor(h * 0.9))
-  await sourceLi.locator('.drag-toggle').dragTo(targetLi, { force: true, targetPosition: { x: 10, y } })
+  await handle.dragTo(target, { targetPosition: { x: 10, y } })
 }
 
 test.beforeEach(async ({ request }) => { await resetOutline(request) })
@@ -99,4 +113,3 @@ test('drag subtasks up and down within a parent', async ({ page, request }) => {
   await dndAfter(page, childC, childB)
   await expect.poll(async () => childTitlesFromOutline(await waitForOutline(request), 'Parent')).toEqual(['Child A', 'Child B', 'Child C'])
 })
-
