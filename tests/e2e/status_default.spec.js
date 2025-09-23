@@ -51,7 +51,7 @@ test('Enter creates a new item with status todo even if previous is done', async
 
   const items = page.locator('li.li-node')
   await expect(items).toHaveCount(2)
-  await expect(items.nth(1)).toHaveAttribute('data-status', 'todo')
+  await expect(items.nth(1)).toHaveAttribute('data-status', '')
 })
 
 // 2) New subtask sibling should start with todo even if previous child is done
@@ -75,6 +75,5 @@ test('Enter within a child creates next child with status todo', async ({ page }
   const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
   const children = parentLi.locator('li.li-node')
   await expect(children).toHaveCount(2)
-  await expect(children.nth(1)).toHaveAttribute('data-status', 'todo')
+  await expect(children.nth(1)).toHaveAttribute('data-status', '')
 })
-

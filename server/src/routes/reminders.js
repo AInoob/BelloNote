@@ -8,14 +8,18 @@ const router = Router()
 function serializeReminder(row) {
   if (!row) return null
   const remindAtIso = row.remind_at ? new Date(row.remind_at).toISOString() : null
+  const normalizedStatus = row.status === 'completed' ? 'completed' : 'incomplete'
   const now = dayjs()
-  const due = row.status === 'scheduled' && remindAtIso ? !dayjs(remindAtIso).isAfter(now) : false
+  const dismissed = Boolean(row.dismissed_at)
+  const due = normalizedStatus === 'incomplete' && !dismissed && remindAtIso
+    ? !dayjs(remindAtIso).isAfter(now)
+    : false
   return {
     id: row.id,
     taskId: row.task_id,
     projectId: row.project_id,
     remindAt: remindAtIso,
-    status: row.status,
+    status: normalizedStatus,
     message: row.message || null,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
@@ -48,9 +52,13 @@ router.get('/', (req, res) => {
   `
   if (pending === '1' || pending === 'true') {
     const nowIso = dayjs().toISOString()
-    rows = db.prepare(`${base} AND r.status = 'scheduled' AND r.remind_at <= ? ORDER BY r.remind_at ASC`).all(projectId, nowIso)
+    rows = db.prepare(`${base} AND r.status != 'completed' AND r.dismissed_at IS NULL AND r.remind_at <= ? ORDER BY r.remind_at ASC`).all(projectId, nowIso)
   } else if (status) {
-    rows = db.prepare(`${base} AND r.status = ? ORDER BY r.remind_at ASC`).all(projectId, status)
+    if (status === 'completed') {
+      rows = db.prepare(`${base} AND r.status = 'completed' ORDER BY r.remind_at ASC`).all(projectId)
+    } else {
+      rows = db.prepare(`${base} AND r.status != 'completed' ORDER BY r.remind_at ASC`).all(projectId)
+    }
   } else {
     rows = db.prepare(`${base} ORDER BY r.remind_at ASC`).all(projectId)
   }
@@ -79,14 +87,14 @@ router.post('/', (req, res) => {
     if (existing) {
       db.prepare(`
         UPDATE reminders
-        SET remind_at = ?, status = 'scheduled', message = ?, dismissed_at = NULL, completed_at = NULL, updated_at = ?
+        SET remind_at = ?, status = 'incomplete', message = ?, dismissed_at = NULL, completed_at = NULL, updated_at = ?
         WHERE id = ?
       `).run(remindIso, message ?? null, nowIso, existing.id)
       return getReminderWithTask(projectId, existing.id)
     }
     const info = db.prepare(`
       INSERT INTO reminders (project_id, task_id, remind_at, status, message, created_at, updated_at)
-      VALUES (?, ?, ?, 'scheduled', ?, ?, ?)
+      VALUES (?, ?, ?, 'incomplete', ?, ?, ?)
     `).run(projectId, taskId, remindIso, message ?? null, nowIso, nowIso)
     return getReminderWithTask(projectId, info.lastInsertRowid)
   })
@@ -104,7 +112,7 @@ router.post('/:id/dismiss', (req, res) => {
 
   db.prepare(`
     UPDATE reminders
-    SET status = 'dismissed', dismissed_at = ?, updated_at = ?
+    SET dismissed_at = ?, updated_at = ?
     WHERE id = ?
   `).run(nowIso, nowIso, reminderId)
 

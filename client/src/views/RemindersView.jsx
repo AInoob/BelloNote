@@ -7,16 +7,14 @@ import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 const FILTER_OPTIONS = [
   { key: 'due', label: 'Due / Overdue' },
   { key: 'upcoming', label: 'Scheduled' },
-  { key: 'completed', label: 'Completed' },
-  { key: 'dismissed', label: 'Dismissed' }
+  { key: 'completed', label: 'Completed' }
 ]
 
-const STATUS_ORDER = ['due', 'upcoming', 'completed', 'dismissed']
+const STATUS_ORDER = ['due', 'upcoming', 'completed']
 
 function reminderStatusKey(reminder) {
   if (!reminder) return 'upcoming'
   if (reminder.status === 'completed') return 'completed'
-  if (reminder.status === 'dismissed') return 'dismissed'
   const isDue = reminder.due || (reminder.remindAt && dayjs(reminder.remindAt).isBefore(dayjs()))
   return isDue ? 'due' : 'upcoming'
 }
@@ -40,17 +38,15 @@ function cloneNodes(nodes) {
 function buildOutlineRoots(reminders, outlineMap) {
   return reminders.map(reminder => {
     const infoParts = []
-    if (reminder.status === 'scheduled') {
-      if (reminder.due || (reminder.remindAt && dayjs(reminder.remindAt).isBefore(dayjs()))) {
-        infoParts.push('Reminder due')
-      } else {
-        const relative = describeTimeUntil(reminder)
-        if (relative) infoParts.push(`Reminds ${relative}`)
-      }
-    } else if (reminder.status === 'completed') {
+    if (reminder.status === 'completed') {
       infoParts.push('Reminder completed')
-    } else if (reminder.status === 'dismissed') {
+    } else if (reminder.dismissedAt) {
       infoParts.push('Reminder dismissed')
+    } else if (reminder.due || (reminder.remindAt && dayjs(reminder.remindAt).isBefore(dayjs()))) {
+      infoParts.push('Reminder due')
+    } else {
+      const relative = describeTimeUntil(reminder)
+      if (relative) infoParts.push(`Reminds ${relative}`)
     }
     const absolute = formatAbsolute(reminder)
     if (absolute) infoParts.push(absolute)
@@ -68,11 +64,11 @@ function buildOutlineRoots(reminders, outlineMap) {
     const result = {
       id: reminder.taskId,
       title: titleText,
-      status: reminder.taskStatus || 'todo',
+      status: reminder.taskStatus ?? '',
       content,
       children: []
     }
-    if (baseNode && reminderStatusKey(reminder) === 'due') {
+    if (baseNode) {
       result.children = cloneNodes(baseNode.children)
     }
     return result
@@ -110,8 +106,7 @@ export default function RemindersView() {
     const buckets = {
       due: [],
       upcoming: [],
-      completed: [],
-      dismissed: []
+      completed: []
     }
     reminders.forEach(reminder => {
       const key = reminderStatusKey(reminder)
@@ -120,7 +115,6 @@ export default function RemindersView() {
     buckets.due.sort((a, b) => new Date(a.remindAt || 0) - new Date(b.remindAt || 0))
     buckets.upcoming.sort((a, b) => new Date(a.remindAt || 0) - new Date(b.remindAt || 0))
     buckets.completed.sort((a, b) => new Date(b.completedAt || b.updatedAt || 0) - new Date(a.completedAt || a.updatedAt || 0))
-    buckets.dismissed.sort((a, b) => new Date(b.dismissedAt || b.updatedAt || 0) - new Date(a.dismissedAt || a.updatedAt || 0))
     return buckets
   }, [reminders])
 

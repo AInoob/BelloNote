@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS reminders (
   project_id INTEGER NOT NULL,
   task_id INTEGER NOT NULL,
   remind_at TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'scheduled',
+  status TEXT NOT NULL DEFAULT 'incomplete',
   message TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -103,3 +103,6 @@ const cols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name)
 if (!cols.includes('position')) {
   db.exec("ALTER TABLE tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0;")
 }
+
+// Migration: collapse legacy reminder statuses to the new incomplete/completed schema
+db.exec(`UPDATE reminders SET status = 'incomplete' WHERE status NOT IN ('completed', 'incomplete');`)

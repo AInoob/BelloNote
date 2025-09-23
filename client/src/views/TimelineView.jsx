@@ -9,7 +9,7 @@ function buildOutlineFromItems(items, seedIds = [], date = null) {
   const byId = new Map()
   const rootsSet = new Set()
   const ensureNode = (seg) => {
-    if (!byId.has(seg.id)) byId.set(seg.id, { id: seg.id, title: seg.title, status: seg.status || 'todo', content: seg.content ?? null, children: [], ownWorkedOnDates: [] })
+    if (!byId.has(seg.id)) byId.set(seg.id, { id: seg.id, title: seg.title, status: seg.status ?? '', content: seg.content ?? null, children: [], ownWorkedOnDates: [] })
     return byId.get(seg.id)
   }
   items.forEach(it => {

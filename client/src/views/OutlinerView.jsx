@@ -1,5 +1,5 @@
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor, ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
@@ -10,20 +10,23 @@ import Highlight from '@tiptap/extension-highlight'
 import { lowlight } from 'lowlight/lib/core.js'
 import dayjs from 'dayjs'
 import { TextSelection, NodeSelection } from 'prosemirror-state'
+import { DOMSerializer } from 'prosemirror-model'
 import { API_ROOT, absoluteUrl, getOutline, saveOutlineApi, uploadImage } from '../api.js'
 import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
 import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
 import { DetailsBlock } from '../extensions/detailsBlock.jsx'
 
-const STATUS_ORDER = ['todo','in-progress','done']
-const STATUS_ICON = { 'todo': '○', 'in-progress': '◐', 'done': '✓' }
+const STATUS_EMPTY = ''
+const STATUS_ORDER = ['todo', 'in-progress', 'done', STATUS_EMPTY]
+const STATUS_ICON = { [STATUS_EMPTY]: '', 'todo': '○', 'in-progress': '◐', 'done': '✓' }
 const DATE_RE = /@\d{4}-\d{2}-\d{2}/g
 const COLLAPSED_KEY = 'worklog.collapsed'
 const FILTER_STATUS_KEY = 'worklog.filter.status'
 const FILTER_ARCHIVED_KEY = 'worklog.filter.archived'
 const FILTER_FUTURE_KEY = 'worklog.filter.future'
 const FILTER_SOON_KEY = 'worklog.filter.soon'
+const SCROLL_STATE_KEY = 'worklog.lastScroll'
 
 const LOG_ON = () => (localStorage.getItem('WL_DEBUG') === '1')
 const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
@@ -31,12 +34,13 @@ const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
 const loadCollapsed = () => { try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')) } catch { return new Set() } }
 const saveCollapsed = (s) => localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(s)))
 
-const DEFAULT_STATUS_FILTER = { todo: true, 'in-progress': true, done: true }
+const DEFAULT_STATUS_FILTER = { none: true, todo: true, 'in-progress': true, done: true }
 const loadStatusFilter = () => {
   try {
     const raw = JSON.parse(localStorage.getItem(FILTER_STATUS_KEY) || 'null')
     const obj = (raw && typeof raw === 'object') ? raw : {}
     return {
+      none: typeof obj.none === 'boolean' ? obj.none : true,
       todo: typeof obj.todo === 'boolean' ? obj.todo : true,
       'in-progress': typeof obj['in-progress'] === 'boolean' ? obj['in-progress'] : true,
       done: typeof obj.done === 'boolean' ? obj.done : true,
@@ -56,6 +60,18 @@ const loadFutureVisible = () => { try { const v = localStorage.getItem(FILTER_FU
 const saveFutureVisible = (v) => { try { localStorage.setItem(FILTER_FUTURE_KEY, v ? '1' : '0') } catch {} }
 const loadSoonVisible = () => { try { const v = localStorage.getItem(FILTER_SOON_KEY); return v === '0' ? false : true } catch { return true } }
 const saveSoonVisible = (v) => { try { localStorage.setItem(FILTER_SOON_KEY, v ? '1' : '0') } catch {} }
+const loadScrollState = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(SCROLL_STATE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (typeof parsed.scrollY !== 'number') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
 
 const URL_PROTOCOL_RE = /^[a-z][\w+.-]*:\/\//i
 const DOMAIN_LIKE_RE = /^[\w.-]+\.[a-z]{2,}(?:\/[\w#?=&%+@.\-]*)?$/i
@@ -149,7 +165,7 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
     addAttributes() {
       return {
         dataId: { default: null },
-        status: { default: 'todo' },
+        status: { default: STATUS_EMPTY },
         collapsed: { default: false },
         archivedSelf: { default: false },
         futureSelf: { default: false },
@@ -184,7 +200,7 @@ function ListItemView(props) {
     reminderActionsEnabled: reminderActionsEnabledProp = false
   } = props
   const id = node.attrs.dataId
-  const status = node.attrs.status || 'todo'
+  const status = node.attrs.status ?? STATUS_EMPTY
   const collapsed = !!node.attrs.collapsed
   const fallbackIdRef = useRef(id ? String(id) : `temp-${Math.random().toString(36).slice(2, 8)}`)
   const justDraggedRef = useRef(false)
@@ -200,10 +216,47 @@ function ListItemView(props) {
   const reminderMenuRef = useRef(null)
   const rowRef = useRef(null)
   const reminderControlsEnabled = reminderActionsEnabledProp
+  const [isActive, setIsActive] = useState(false)
+  const reminderAreaRef = useRef(null)
+  const [reminderOffset, setReminderOffset] = useState(null)
+  const [reminderInlineGap, setReminderInlineGap] = useState(0)
+  const [reminderTop, setReminderTop] = useState(0)
 
   useEffect(() => {
     if (id) fallbackIdRef.current = String(id)
   }, [id])
+
+  useEffect(() => {
+    if (!editor || typeof getPos !== 'function') return
+    const updateSelectionState = () => {
+      try {
+        const pos = getPos()
+        if (typeof pos !== 'number') {
+          setIsActive(false)
+          return
+        }
+        const { from, to } = editor.state.selection
+        const end = pos + node.nodeSize
+        const intersects = (from >= pos && from <= end) || (to >= pos && to <= end) || (from <= pos && to >= end)
+        const hasFocus = editor?.view?.hasFocus?.()
+        setIsActive(Boolean(intersects && hasFocus))
+      } catch {
+        setIsActive(false)
+      }
+    }
+    const handleBlur = () => setIsActive(false)
+    updateSelectionState()
+    editor.on('selectionUpdate', updateSelectionState)
+    editor.on('transaction', updateSelectionState)
+    editor.on('focus', updateSelectionState)
+    editor.on('blur', handleBlur)
+    return () => {
+      editor.off('selectionUpdate', updateSelectionState)
+      editor.off('transaction', updateSelectionState)
+      editor.off('focus', updateSelectionState)
+      editor.off('blur', handleBlur)
+    }
+  }, [editor, getPos, node])
 
   useEffect(() => {
     const set = loadCollapsed()
@@ -323,7 +376,8 @@ function ListItemView(props) {
 
   const cycle = () => {
     if (readOnly && !allowStatusToggleInReadOnly) return
-    const idx = STATUS_ORDER.indexOf(status)
+    const currentIndex = STATUS_ORDER.indexOf(status)
+    const idx = currentIndex >= 0 ? currentIndex : 0
     const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
     updateAttributes({ status: next })
     if (readOnly && allowStatusToggleInReadOnly && typeof onStatusToggle === 'function') {
@@ -399,15 +453,147 @@ function ListItemView(props) {
     return () => obs.disconnect()
   }, [])
 
-  const reminderDue = reminder?.status === 'scheduled' && (reminder.due || (reminder.remindAt && dayjs(reminder.remindAt).isBefore(dayjs())))
-  const reminderLabel = useMemo(() => {
-    if (!reminder) return 'Set reminder'
-    if (reminder.status === 'completed') return 'Reminder completed'
-    if (reminder.status === 'dismissed') return 'Reminder dismissed'
+  const reminderDismissed = !!reminder?.dismissedAt
+  const activeReminder = reminder && reminder.status !== 'completed'
+  const reminderDue = activeReminder && !reminderDismissed && (
+    reminder?.due || (reminder?.remindAt && dayjs(reminder.remindAt).isBefore(dayjs()))
+  )
+  const reminderSummary = useMemo(() => {
+    if (!reminder) return ''
+    if (!activeReminder) return 'Reminder completed'
     if (reminderDue) return 'Reminder due'
+    if (reminderDismissed) return 'Reminder dismissed'
     const relative = describeTimeUntil(reminder)
     return relative ? `Reminds ${relative}` : 'Reminder scheduled'
-  }, [reminder, reminderDue])
+  }, [activeReminder, reminder, reminderDue, reminderDismissed])
+  const reminderButtonLabel = reminderSummary
+    ? `Reminder options (${reminderSummary})`
+    : 'Reminder options'
+  const reminderPillText = useMemo(() => {
+    if (!activeReminder) return ''
+    if (reminderDue) return 'Due soon'
+    if (reminderDismissed) return 'Dismissed'
+    const relative = describeTimeUntil(reminder)
+    return relative ? `Reminds ${relative}` : ''
+  }, [activeReminder, reminder, reminderDue, reminderDismissed])
+
+  useEffect(() => {
+    if (!reminderControlsEnabled) {
+      setReminderOffset(null)
+      setReminderInlineGap(0)
+      setReminderTop(0)
+    }
+  }, [reminderControlsEnabled])
+
+  useLayoutEffect(() => {
+    if (!reminderControlsEnabled) return
+    const measure = () => {
+      const areaEl = reminderAreaRef.current
+      const rowEl = rowRef.current
+      if (!areaEl || !rowEl) return
+      const rowRect = rowEl.getBoundingClientRect()
+      const mainEl = rowEl.querySelector(':scope > .li-main')
+      if (!mainEl) return
+      const mainRect = mainEl.getBoundingClientRect()
+      if (!mainRect || !mainRect.width) return
+      const areaRect = areaEl.getBoundingClientRect()
+      const areaWidth = areaRect?.width ?? 0
+      const contentEl = rowEl.querySelector(':scope > .li-main .li-content')
+      let firstRect = null
+      if (contentEl) {
+        const paragraph = contentEl.querySelector('p')
+        if (paragraph) {
+          const range = document.createRange()
+          range.selectNodeContents(paragraph)
+          const rects = range.getClientRects()
+          if (rects.length > 0) {
+            firstRect = Array.from(rects).reduce((acc, rect) => {
+              if (!acc) return rect
+              return rect.right > acc.right ? rect : acc
+            }, null)
+          } else {
+            const rect = range.getBoundingClientRect()
+            if (rect && rect.width) firstRect = rect
+          }
+          range.detach?.()
+        }
+        if (!firstRect) {
+          const fallbackCandidate = contentEl.querySelector(':scope > *:not(ul):not(ol)')
+          if (fallbackCandidate) {
+            const range = document.createRange()
+            range.selectNodeContents(fallbackCandidate)
+            const rects = range.getClientRects()
+            if (rects.length > 0) {
+              firstRect = Array.from(rects).reduce((acc, rect) => {
+                if (!acc) return rect
+                return rect.right > acc.right ? rect : acc
+              }, null)
+            } else {
+              const rect = range.getBoundingClientRect()
+              if (rect && rect.width) firstRect = rect
+            }
+            range.detach?.()
+          }
+        }
+        if (!firstRect) {
+          const fallbackRect = contentEl.getBoundingClientRect()
+          if (fallbackRect && fallbackRect.width) firstRect = fallbackRect
+        }
+      }
+      if (!firstRect) firstRect = mainRect
+      const textRight = firstRect?.right ?? mainRect.left
+      const spacing = 6
+      const hostWidth = Math.max(rowRect?.width ?? 0, mainRect.width)
+      const maxOffset = Math.max(0, hostWidth - areaWidth - 4)
+      const desiredOffset = Math.max(0, (textRight - mainRect.left) + spacing)
+      const offset = Math.min(maxOffset, desiredOffset)
+      setReminderOffset(prev => {
+        if (prev !== null && Math.abs(prev - offset) < 0.5) return prev
+        return offset
+      })
+      const reserveCeiling = Math.max(0, Math.floor(hostWidth - 20))
+      const reserveGap = areaWidth
+        ? Math.max(
+            0,
+            Math.min(
+              Math.ceil(Math.max(areaWidth + spacing, spacing + 6)),
+              reserveCeiling
+            )
+          )
+        : 0
+      setReminderInlineGap(prev => {
+        if (Math.abs(prev - reserveGap) < 0.5) return prev
+        return reserveGap
+      })
+
+      const textTop = firstRect?.top ?? mainRect.top
+      const textHeight = firstRect?.height ?? 0
+      const areaHeight = areaRect?.height ?? 0
+      let verticalOffset = Math.max(0, textTop - mainRect.top)
+      if (areaHeight && textHeight) {
+        const textMid = (textTop - mainRect.top) + textHeight / 2
+        verticalOffset = Math.max(0, textMid - areaHeight / 2)
+      }
+      setReminderTop(prev => {
+        if (Math.abs(prev - verticalOffset) < 0.5) return prev
+        return verticalOffset
+      })
+    }
+
+    measure()
+    const resizeObserver = new ResizeObserver(() => measure())
+    if (rowRef.current) resizeObserver.observe(rowRef.current)
+    if (reminderAreaRef.current) resizeObserver.observe(reminderAreaRef.current)
+    const contentEl = rowRef.current?.querySelector(':scope > .li-main .li-content')
+    const mutationObserver = contentEl ? new MutationObserver(() => measure()) : null
+    if (contentEl && mutationObserver) mutationObserver.observe(contentEl, { childList: true, subtree: true, characterData: true })
+    window.addEventListener('resize', measure)
+    return () => {
+      resizeObserver.disconnect()
+      mutationObserver?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [reminderControlsEnabled, reminderMenuOpen, reminderPillText, activeReminder, collapsed, showSoonBadge])
 
   return (
     <NodeViewWrapper
@@ -424,7 +610,7 @@ function ListItemView(props) {
       draggable={!readOnly}
       onDragEnd={readOnly ? undefined : handleDragEnd}
     >
-      <div className="li-row" ref={rowRef}>
+      <div className={`li-row ${isActive ? 'is-selected' : ''}`} ref={rowRef}>
         <button
           className="caret drag-toggle"
           onClick={handleToggleClick}
@@ -442,87 +628,99 @@ function ListItemView(props) {
           title="Click to change status"
           disabled={readOnly && !allowStatusToggleInReadOnly}
         >
-          {STATUS_ICON[status] || '○'}
+          {status === STATUS_EMPTY ? '' : (STATUS_ICON[status] ?? '○')}
         </button>
-        {showSoonBadge && (
-          <span className="tag-badge soon" style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 8, fontSize: 12, background: '#FFF3BF', color: '#7A5C00' }}>Soon</span>
-        )}
-        <NodeViewContent className="li-content" />
-        {reminderControlsEnabled && (
-        <div
-          className={`li-reminder-area ${reminder ? 'has-reminder' : ''} ${reminderDue ? 'due' : ''}`}
-          contentEditable={false}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="reminder-toggle"
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              setReminderError('')
-              setCustomMode(false)
-              setCustomDate(defaultCustomDate())
-              setReminderMenuOpen(v => !v)
-            }}
-          >
-            <span className="reminder-icon" aria-hidden>⏰</span>
-            <span className="reminder-label-text">{reminderLabel}</span>
-          </button>
-          {reminderMenuOpen && (
-            <div className="reminder-menu" ref={reminderMenuRef}>
-              <div className="reminder-menu-section">
-                <div className="menu-heading">Remind me in</div>
-                <div className="menu-buttons">
-                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(30)}>30 minutes</button>
-                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(60)}>1 hour</button>
-                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(180)}>3 hours</button>
-                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(1380)}>23 hours</button>
-                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(1440)}>24 hours</button>
-                </div>
-                <button
-                  type="button"
-                  className="btn small ghost"
-                  onClick={() => {
-                    setCustomMode(v => !v)
-                    setReminderError('')
-                    setCustomDate(defaultCustomDate())
-                  }}
-                >Custom…</button>
-                {customMode && (
-                  <form className="menu-custom" onSubmit={handleCustomSubmit}>
-                    <input
-                      type="datetime-local"
-                      value={customDate}
-                      onChange={(e) => setCustomDate(e.target.value)}
-                      required
-                    />
-                    <div className="menu-buttons">
-                      <button type="submit" className="btn small">Set reminder</button>
-                    </div>
-                  </form>
-                )}
-              </div>
-              {reminder && (
-                <div className="reminder-menu-section">
-                  <div className="menu-heading">Actions</div>
-                  {reminder.status === 'scheduled' && (
-                    <>
-                      <button type="button" className="btn small" onClick={handleCompleteReminder}>Mark complete</button>
-                      <button type="button" className="btn small ghost" onClick={handleDismissReminder}>Dismiss</button>
-                    </>
-                  )}
-                  <button type="button" className="btn small ghost" onClick={handleRemoveReminder}>Remove reminder</button>
-                </div>
+        <div className="li-main">
+          {showSoonBadge && (
+            <span className="tag-badge soon" style={{ marginTop: 1, padding: '1px 6px', borderRadius: 8, fontSize: 12, background: '#FFF3BF', color: '#7A5C00' }}>Soon</span>
+          )}
+          <NodeViewContent
+            className="li-content"
+            style={reminderControlsEnabled ? { '--reminder-inline-gap': `${reminderInlineGap}px` } : undefined}
+          />
+          {reminderControlsEnabled && (
+            <div
+              ref={reminderAreaRef}
+              className={`li-reminder-area ${reminderOffset !== null ? 'floating' : ''} ${activeReminder ? 'has-reminder' : ''} ${reminderDue ? 'due' : ''} ${reminderDismissed ? 'dismissed' : ''}`}
+              style={reminderOffset !== null ? { left: `${reminderOffset}px`, top: `${reminderTop}px` } : undefined}
+              contentEditable={false}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="reminder-toggle icon-only"
+                aria-label={reminderButtonLabel}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setReminderError('')
+                  setCustomMode(false)
+                  setCustomDate(defaultCustomDate())
+                  setReminderMenuOpen(v => !v)
+                }}
+              >
+                <span aria-hidden>⋮</span>
+              </button>
+              {activeReminder && reminderPillText && (
+                <span className="reminder-pill" title={reminderSummary || undefined}>{reminderPillText}</span>
               )}
-              {reminderError && (
-                <div className="reminder-error">{reminderError}</div>
+              {reminderMenuOpen && (
+                <div className="reminder-menu" ref={reminderMenuRef}>
+                  <div className="reminder-menu-section">
+                    <div className="menu-heading">Remind me in</div>
+                    <div className="menu-buttons">
+                      <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(30)}>30 minutes</button>
+                      <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(60)}>1 hour</button>
+                      <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(180)}>3 hours</button>
+                      <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(1380)}>23 hours</button>
+                      <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(1440)}>24 hours</button>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn small ghost"
+                      onClick={() => {
+                        setCustomMode(v => !v)
+                        setReminderError('')
+                        setCustomDate(defaultCustomDate())
+                      }}
+                    >Custom…</button>
+                    {customMode && (
+                      <form className="menu-custom" onSubmit={handleCustomSubmit}>
+                        <input
+                          type="datetime-local"
+                          value={customDate}
+                          onChange={(e) => setCustomDate(e.target.value)}
+                          required
+                        />
+                        <div className="menu-buttons">
+                          <button type="submit" className="btn small">Set reminder</button>
+                        </div>
+                      </form>
+                    )}
+                  </div>
+                  {reminder && (
+                    <div className="reminder-menu-section">
+                      <div className="menu-heading">Actions</div>
+                      {activeReminder && (
+                        <>
+                          <button type="button" className="btn small" onClick={handleCompleteReminder}>Mark complete</button>
+                          {!reminderDismissed && (
+                            <button type="button" className="btn small ghost" onClick={handleDismissReminder}>Dismiss</button>
+                          )}
+                        </>
+                      )}
+                      <button type="button" className="btn small ghost" onClick={handleRemoveReminder}>Remove reminder</button>
+                    </div>
+                  )}
+                  {reminderError && (
+                    <div className="reminder-error">{reminderError}</div>
+                  )}
+                </div>
               )}
             </div>
           )}
         </div>
-        )}
       </div>
     </NodeViewWrapper>
   )
@@ -557,6 +755,8 @@ export default function OutlinerView({
   const showSoonRef = useRef(showSoon)
   const showArchivedRef = useRef(showArchived)
   const statusFilterRef = useRef(statusFilter)
+  const restoredScrollRef = useRef(false)
+  const scrollSaveFrameRef = useRef(null)
 
   // Persist filters in localStorage
   useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
@@ -646,7 +846,7 @@ export default function OutlinerView({
     // disable default codeBlock to avoid duplicate name with CodeBlockLowlight
     extensions,
     content: '<p>Loading…</p>',
-    autofocus: !isReadOnly,
+    autofocus: false,
     editable: !isReadOnly,
     onCreate: () => { pushDebug('editor: ready'); setTimeout(() => applyStatusFilter(), 50) },
     onUpdate: () => { if (!isReadOnly) { markDirty(); queueSave() } setTimeout(() => applyStatusFilter(), 50) },
@@ -746,13 +946,13 @@ export default function OutlinerView({
             return true
           }
         }
-        const isSlashKey = event.key === '/' || event.key === '?' || event.code === 'Slash'
+        const isSlashKey = (event.key === '/' || event.code === 'Slash') && !event.shiftKey
         if (isSlashKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
           const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
           if (inCode) { pushDebug('keydown "/" ignored in code block'); return false }
           event.preventDefault()
           event.stopPropagation()
-          const char = event.shiftKey && event.key === '?' ? '?' : '/'
+          const char = '/'
           const { from } = editor.state.selection
           slashMarker.current = { pos: from, char }
           editor.chain().focus().insertContent(char).run()
@@ -780,8 +980,8 @@ export default function OutlinerView({
           const didSplit = editor.chain().focus().splitListItem('listItem').run()
           if (didSplit) {
             // Update attributes on the newly created list item
-            editor.chain().focus().updateAttributes('listItem', { status: 'todo', dataId: null, collapsed: false }).run()
-            pushDebug('enter: split list item -> reset status to todo')
+            editor.chain().focus().updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false }).run()
+            pushDebug('enter: split list item -> reset status to empty')
             return true
           }
           return false
@@ -1067,16 +1267,17 @@ export default function OutlinerView({
   }
 
   const availableFilters = useMemo(() => ([
+    { key: 'none', label: 'No status' },
     { key: 'todo', label: 'To do' },
     { key: 'in-progress', label: 'In progress' },
     { key: 'done', label: 'Done' }
   ]), [])
 
   const toggleStatusFilter = (key) => {
-    let next = { ...statusFilter, [key]: !statusFilter[key] }
-    if (!next.todo && !next['in-progress'] && !next.done) {
-      next = { todo: true, 'in-progress': true, done: false }
-    }
+    const updated = { ...statusFilter, [key]: !statusFilter[key] }
+    const keys = Object.keys(DEFAULT_STATUS_FILTER)
+    const anyEnabled = keys.some(k => updated[k])
+    const next = anyEnabled ? updated : { ...DEFAULT_STATUS_FILTER, done: false }
     try { saveStatusFilter(next) } catch {}
     statusFilterRef.current = next
     setStatusFilter(next)
@@ -1084,15 +1285,15 @@ export default function OutlinerView({
 
   const applyPresetFilter = (preset) => {
     if (preset === 'all') {
-      const next = { todo: true, 'in-progress': true, done: true }
+      const next = { ...DEFAULT_STATUS_FILTER }
       statusFilterRef.current = next
       setStatusFilter(next)
     } else if (preset === 'active') {
-      const next = { todo: true, 'in-progress': true, done: false }
+      const next = { none: true, todo: true, 'in-progress': true, done: false }
       statusFilterRef.current = next
       setStatusFilter(next)
     } else if (preset === 'completed') {
-      const next = { todo: false, 'in-progress': false, done: true }
+      const next = { none: false, todo: false, 'in-progress': false, done: true }
       statusFilterRef.current = next
       setStatusFilter(next)
     }
@@ -1110,11 +1311,32 @@ export default function OutlinerView({
     const statusFilterCurrent = statusFilterRef.current || {}
 
     // First pass: clear classes and compute self flags from body text (paragraph only)
+    const textNodeType = typeof Node !== 'undefined' ? Node.TEXT_NODE : 3
+    const elementNodeType = typeof Node !== 'undefined' ? Node.ELEMENT_NODE : 1
+
+    const readDirectBodyText = (bodyEl) => {
+      if (!bodyEl) return ''
+      const parts = []
+      bodyEl.childNodes.forEach(node => {
+        if (node.nodeType === textNodeType) {
+          if (node.textContent) parts.push(node.textContent)
+          return
+        }
+        if (node.nodeType === elementNodeType) {
+          const el = node
+          if (el.matches('ul,ol')) return
+          const text = el.textContent
+          if (text) parts.push(text)
+        }
+      })
+      return parts.join(' ')
+    }
+
     liNodes.forEach(li => {
       li.classList.remove(hiddenClass, parentClass)
 
       const body = li.querySelector(':scope > .li-row .li-content')
-      const bodyText = (body?.textContent || '').toLowerCase()
+      const bodyText = readDirectBodyText(body).toLowerCase()
 
       const selfArchived = /@archived\b/.test(bodyText)
       const selfFuture = /@future\b/.test(bodyText)
@@ -1148,8 +1370,9 @@ export default function OutlinerView({
       li.dataset.future = future ? '1' : '0'
       li.dataset.soon = soon ? '1' : '0'
 
-      const status = li.getAttribute('data-status') || 'todo'
-      const hideByStatus = statusFilterCurrent[status] === false
+      const statusAttr = li.getAttribute('data-status') || ''
+      const filterKey = statusAttr === '' ? 'none' : statusAttr
+      const hideByStatus = statusFilterCurrent[filterKey] === false
       const hideByArchive = !showArchivedCurrent && archived
       const hideByFuture = !showFutureCurrent && future
       const hideBySoon = !showSoonCurrent && soon
@@ -1372,20 +1595,62 @@ export default function OutlinerView({
     const dom = editor.view.dom
     const onCopy = (e) => {
       try {
-        const json = editor.getJSON()
-        const html = editor.getHTML()
+        const { state } = editor.view
+        const { doc, selection, schema } = state
+        if (selection.empty) return
+        const sliceDoc = doc.cut(selection.from, selection.to)
+        const json = sliceDoc.toJSON()
+        const serializer = DOMSerializer.fromSchema(schema)
+        const fragment = serializer.serializeFragment(sliceDoc.content)
+        const container = document.createElement('div')
+        container.appendChild(fragment)
+        const html = container.innerHTML
+        const selectionText = window.getSelection()?.toString() || sliceDoc.textContent || ''
+
         e.clipboardData?.setData('application/x-worklog-outline+json', JSON.stringify(json))
         e.clipboardData?.setData('text/html', html)
-        // Provide a simple plain text fallback
-        const text = dom.innerText || ''
-        e.clipboardData?.setData('text/plain', text)
+        e.clipboardData?.setData('text/plain', selectionText)
+        if (typeof window !== 'undefined') {
+          window.__WORKLOG_TEST_COPY__ = { text: selectionText, json: JSON.stringify(json) }
+        }
         e.preventDefault()
-        pushDebug('copy: outline json placed')
-      } catch {}
+        pushDebug('copy: selection exported')
+      } catch (err) {
+        console.error('[copy] failed', err)
+      }
     }
     dom.addEventListener('copy', onCopy)
     return () => dom.removeEventListener('copy', onCopy)
   }, [editor])
+
+  useEffect(() => {
+    if (!editor || isReadOnly) return
+    const performSave = () => {
+      if (typeof window === 'undefined') return
+      if (!restoredScrollRef.current) return
+      try {
+        const payload = {
+          scrollY: window.scrollY,
+          selectionFrom: editor?.state?.selection?.from ?? null,
+          timestamp: Date.now()
+        }
+        localStorage.setItem(SCROLL_STATE_KEY, JSON.stringify(payload))
+      } catch {}
+    }
+    const scheduleSave = () => {
+      if (scrollSaveFrameRef.current) cancelAnimationFrame(scrollSaveFrameRef.current)
+      scrollSaveFrameRef.current = requestAnimationFrame(performSave)
+    }
+    window.addEventListener('scroll', scheduleSave, { passive: true })
+    window.addEventListener('beforeunload', performSave)
+    editor.on('selectionUpdate', scheduleSave)
+    return () => {
+      window.removeEventListener('scroll', scheduleSave)
+      window.removeEventListener('beforeunload', performSave)
+      editor.off('selectionUpdate', scheduleSave)
+      if (scrollSaveFrameRef.current) cancelAnimationFrame(scrollSaveFrameRef.current)
+    }
+  }, [editor, isReadOnly])
 
   useEffect(() => {
 
@@ -1400,6 +1665,14 @@ export default function OutlinerView({
       pushDebug('loaded outline', { roots: roots.length })
       // Ensure filters (status/archive) apply on first load
       setTimeout(() => applyStatusFilter(), 50)
+      setTimeout(() => {
+        if (restoredScrollRef.current) return
+        const state = loadScrollState()
+        if (state && typeof state.scrollY === 'number') {
+          window.scrollTo({ top: state.scrollY, behavior: 'auto' })
+        }
+        restoredScrollRef.current = true
+      }, 120)
     })()
   }, [editor, isReadOnly])
 
@@ -1478,7 +1751,7 @@ export default function OutlinerView({
         type: 'bulletList',
         content: [{
           type: 'listItem',
-          attrs: { dataId: null, status: 'todo', collapsed: false },
+          attrs: { dataId: null, status: STATUS_EMPTY, collapsed: false },
           content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Start here' }] }]
         }]
       }
@@ -1502,7 +1775,7 @@ export default function OutlinerView({
         const soonSelf = titleLower.includes('@soon') || bodyLower.includes('@soon')
         return {
           type: 'listItem',
-          attrs: { dataId: n.id, status: n.status || 'todo', collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf, soonSelf },
+          attrs: { dataId: n.id, status: n.status ?? STATUS_EMPTY, collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf, soonSelf },
           content: children
         }
       })
@@ -1527,7 +1800,7 @@ export default function OutlinerView({
           const title = extractTitle(para)
           const dates = extractDates(li)
           const id = li.attrs?.dataId || null
-          const status = li.attrs?.status || 'todo'
+          const status = li.attrs?.status ?? STATUS_EMPTY
           const item = { id, title, status, dates, ownWorkedOnDates: dates, children: [] }
           if (bodyNodes.length) {
             try {

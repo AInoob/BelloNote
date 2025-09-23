@@ -75,13 +75,17 @@ router.post('/outline', (req, res) => {
     const rawBody = parseMaybeJson(node.body ?? node.content)
     const sanitizedBody = sanitizeRichText(rawBody, projectId, { title: node.title })
     const contentJson = stringifyNodes(sanitizedBody)
+    const normalizedStatus = (node.status ?? '').trim()
+    const statusValue = normalizedStatus === 'todo' || normalizedStatus === 'in-progress' || normalizedStatus === 'done' || normalizedStatus === ''
+      ? normalizedStatus
+      : ''
     if (!id || String(id).startsWith('new-')) {
-      const info = insertTask.run({ project_id: projectId, parent_id, title: node.title || 'Untitled', status: node.status || 'todo', content: contentJson, position })
+      const info = insertTask.run({ project_id: projectId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, position })
       realId = info.lastInsertRowid
       if (id) newIdMap[id] = realId
     } else {
       realId = Number(id)
-      updateTask.run({ id: realId, parent_id, title: node.title || 'Untitled', status: node.status || 'todo', content: contentJson, position })
+      updateTask.run({ id: realId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, position })
     }
     seen.add(realId)
 

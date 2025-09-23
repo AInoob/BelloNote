@@ -115,13 +115,9 @@ test('status color does not bleed to child', async ({ page, request }) => {
 
   // If server normalized status unexpectedly, cycle child's status to todo via UI
   const childChipLocator = page.locator('li.li-node:has(> .li-row .li-content:has-text("child todo")) .status-chip.inline').first()
-  await childChipLocator.click() // in-progress -> done
-  await childChipLocator.click() // done -> todo
-
   // Read computed color for the child after forcing todo
   const childBg = await childChipLocator.evaluate(el => getComputedStyle(el).backgroundColor)
 
   // Grey #e5e7eb -> rgb(229, 231, 235) for child todo (ensures no yellow bleed)
   expect(childBg).toBe('rgb(229, 231, 235)')
 })
-

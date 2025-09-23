@@ -69,6 +69,30 @@ function buildArchivedOutline() {
   ]
 }
 
+function buildChildArchivedOutline() {
+  return [
+    {
+      id: null,
+      title: 'parent stays bright',
+      status: 'todo',
+      dates: [],
+      ownWorkedOnDates: [],
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'parent stays bright' }] }],
+      children: [
+        {
+          id: null,
+          title: 'child archived @archived',
+          status: 'todo',
+          dates: [],
+          ownWorkedOnDates: [],
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'child archived @archived' }] }],
+          children: []
+        }
+      ]
+    }
+  ]
+}
+
 // This test ensures that archived dimming applies even on first load
 // and that the Archived: Hidden toggle hides archived items (with descendants)
 
@@ -111,3 +135,25 @@ test('archived items are dimmed on initial load and hide when toggled', async ({
   }).toBe('yes')
 })
 
+test('archived descendants do not dim parent rows', async ({ page, request }) => {
+  await ensureBackendReady(request)
+  await resetOutline(request)
+  await setOutlineNormalized(request, buildChildArchivedOutline())
+
+  await page.goto('/')
+
+  const nodes = page.locator('li.li-node')
+  await expect(nodes).toHaveCount(2)
+
+  const parent = nodes.nth(0)
+  const child = nodes.nth(1)
+
+  await expect.poll(async () => await parent.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('0')
+  await expect.poll(async () => await child.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('1')
+
+  const parentOpacity = await parent.locator('> .li-row').evaluate(el => Number.parseFloat(getComputedStyle(el).opacity))
+  const childOpacity = await child.locator('> .li-row').evaluate(el => Number.parseFloat(getComputedStyle(el).opacity))
+
+  expect(parentOpacity).toBeGreaterThanOrEqual(0.96)
+  expect(childOpacity).toBeLessThan(0.9)
+})

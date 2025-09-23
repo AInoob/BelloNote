@@ -7,6 +7,7 @@ import RemindersView from './views/RemindersView.jsx'
 import HistoryModal from './views/HistoryModal.jsx'
 import { createCheckpoint, getHealth } from './api.js'
 import { ReminderProvider, useReminders } from './context/ReminderContext.jsx'
+import dayjs from 'dayjs'
 const CLIENT_BUILD_TIME = typeof __APP_BUILD_TIME__ !== 'undefined' ? __APP_BUILD_TIME__ : null
 
 function App() {
@@ -152,7 +153,60 @@ function CheckpointModal({ note, onChange, status, onSubmit, onClose, onViewHist
 }
 
 function ReminderNotificationBar({ visible }) {
-  const { pendingReminders, dismissReminder, completeReminder } = useReminders()
+  const { pendingReminders, dismissReminder, completeReminder, scheduleReminder } = useReminders()
+  const [customEditingId, setCustomEditingId] = useState(null)
+  const [customDate, setCustomDate] = useState('')
+  const [customError, setCustomError] = useState('')
+
+  const defaultCustomDate = (reminder) => {
+    const base = reminder?.due || reminder?.remindAt
+    const fallback = dayjs().add(1, 'hour')
+    const source = base ? dayjs(base) : fallback
+    const value = source?.isValid() ? source : fallback
+    return value.startOf('minute').format('YYYY-MM-DDTHH:mm')
+  }
+
+  const openCustom = (reminder) => {
+    setCustomEditingId(reminder.id)
+    setCustomDate(defaultCustomDate(reminder))
+    setCustomError('')
+  }
+
+  const handleCustomSubmit = async (event, reminder) => {
+    event.preventDefault()
+    if (!reminder?.taskId) return
+    if (!customDate) {
+      setCustomError('Pick a date and time')
+      return
+    }
+    const parsed = dayjs(customDate)
+    if (!parsed.isValid()) {
+      setCustomError('Pick a valid date and time')
+      return
+    }
+    try {
+      await scheduleReminder({ taskId: reminder.taskId, remindAt: parsed.toISOString(), message: reminder.message || undefined })
+      setCustomEditingId(null)
+      setCustomError('')
+    } catch (err) {
+      console.error('[reminders] failed to schedule custom date', err)
+      setCustomError(err?.message || 'Unable to update reminder')
+    }
+  }
+
+  const reschedule = async (reminder, minutes) => {
+    if (!reminder?.taskId) return
+    try {
+      const remindAt = dayjs().add(minutes, 'minute').toISOString()
+      await scheduleReminder({ taskId: reminder.taskId, remindAt, message: reminder.message || undefined })
+      if (customEditingId === reminder.id) {
+        setCustomEditingId(null)
+        setCustomError('')
+      }
+    } catch (err) {
+      console.error('[reminders] failed to reschedule', err)
+    }
+  }
   if (!visible) return null
   return (
     <div className="reminder-banner">
@@ -164,6 +218,38 @@ function ReminderNotificationBar({ visible }) {
               <span className="reminder-title">{reminder.taskTitle || `Task #${reminder.taskId}`}</span>
               <span className="reminder-meta">{new Date(reminder.remindAt).toLocaleString()}</span>
               <div className="reminder-actions">
+                <div className="reminder-snooze" aria-label="Reschedule reminder">
+                  <button className="btn small ghost" onClick={() => reschedule(reminder, 10)}>+10m</button>
+                  <button className="btn small ghost" onClick={() => reschedule(reminder, 30)}>+30m</button>
+                  <button className="btn small ghost" onClick={() => reschedule(reminder, 60)}>+1h</button>
+                  <button className="btn small ghost" onClick={() => reschedule(reminder, 120)}>+2h</button>
+                </div>
+                <button className="btn small ghost" onClick={() => openCustom(reminder)}>Custom…</button>
+                {customEditingId === reminder.id && (
+                  <form className="reminder-custom" onSubmit={(event) => handleCustomSubmit(event, reminder)}>
+                    <input
+                      type="datetime-local"
+                      value={customDate}
+                      onChange={(e) => {
+                        setCustomDate(e.target.value)
+                        if (customError) setCustomError('')
+                      }}
+                      required
+                    />
+                    <button type="submit" className="btn small">Set</button>
+                    <button
+                      type="button"
+                      className="btn small ghost"
+                      onClick={() => {
+                        setCustomEditingId(null)
+                        setCustomError('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {customError && <span className="reminder-custom-error">{customError}</span>}
+                  </form>
+                )}
                 <button className="btn small" onClick={() => completeReminder(reminder.id)}>Mark complete</button>
                 <button className="btn small ghost" onClick={() => dismissReminder(reminder.id)}>Dismiss</button>
               </div>

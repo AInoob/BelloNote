@@ -34,7 +34,7 @@ function flatten(doc) {
       out.set(String(n.id), {
         id: String(n.id),
         title: n.title || '',
-        status: n.status || 'todo',
+        status: (n.status ?? ''),
         parent_id: n.parent_id ?? parentId,
         dates: new Set(n.ownWorkedOnDates || []),
       })
@@ -134,7 +134,8 @@ export function restoreVersion(projectId, versionId) {
   function insertNodes(nodes, parentId=null) {
     if (!nodes) return
     nodes.forEach((n, idx) => {
-      insTask.run(n.id, projectId, parentId, n.title || 'Untitled', n.status || 'todo', n.content || '', idx)
+      const statusValue = (n.status ?? '')
+      insTask.run(n.id, projectId, parentId, n.title || 'Untitled', statusValue, n.content || '', idx)
       for (const d of (n.ownWorkedOnDates || [])) insLog.run(n.id, d)
       if (n.children && n.children.length) insertNodes(n.children, n.id)
     })
