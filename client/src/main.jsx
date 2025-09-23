@@ -3,8 +3,10 @@ import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import OutlinerView from './views/OutlinerView.jsx'
 import TimelineView from './views/TimelineView.jsx'
+import RemindersView from './views/RemindersView.jsx'
 import HistoryModal from './views/HistoryModal.jsx'
 import { createCheckpoint, getHealth } from './api.js'
+import { ReminderProvider, useReminders } from './context/ReminderContext.jsx'
 const CLIENT_BUILD_TIME = typeof __APP_BUILD_TIME__ !== 'undefined' ? __APP_BUILD_TIME__ : null
 
 function App() {
@@ -24,6 +26,8 @@ function App() {
   })
   const [serverBuildTime, setServerBuildTime] = useState(null)
   const [healthFetchedAt, setHealthFetchedAt] = useState(null)
+
+  const { pendingReminders } = useReminders()
 
   useEffect(() => {
     let cancelled = false
@@ -83,6 +87,7 @@ function App() {
           <div className="spacer" />
           <button className={`btn ${tab==='outline' ? 'active' : ''}`} onClick={() => setTab('outline')}>Outline</button>
           <button className={`btn ${tab==='timeline' ? 'active' : ''}`} onClick={() => setTab('timeline')}>Timeline</button>
+          <button className={`btn ${tab==='reminders' ? 'active' : ''}`} onClick={() => setTab('reminders')}>Reminders</button>
           <div className="spacer" />
           <button className="btn" onClick={openCheckpoint}>Checkpoint</button>
           <button className="btn" onClick={() => setShowHistory(true)}>History</button>
@@ -91,10 +96,11 @@ function App() {
         </header>
       </div>
       <main>
-        {tab === 'outline'
-          ? <OutlinerView onSaveStateChange={setSaveState} showDebug={showDebug} />
-          : <TimelineView />}
+        {tab === 'outline' && <OutlinerView onSaveStateChange={setSaveState} showDebug={showDebug} />}
+        {tab === 'timeline' && <TimelineView />}
+        {tab === 'reminders' && <RemindersView />}
       </main>
+      <ReminderNotificationBar visible={pendingReminders.length > 0} />
       {showHistory && <HistoryModal onClose={() => setShowHistory(false)} onRestored={() => window.location.reload()} />}
       {checkpointOpen && (
         <CheckpointModal
@@ -145,4 +151,36 @@ function CheckpointModal({ note, onChange, status, onSubmit, onClose, onViewHist
   )
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+function ReminderNotificationBar({ visible }) {
+  const { pendingReminders, dismissReminder, completeReminder } = useReminders()
+  if (!visible) return null
+  return (
+    <div className="reminder-banner">
+      <div className="reminder-banner-inner">
+        <strong>{pendingReminders.length === 1 ? 'Reminder due' : `${pendingReminders.length} reminders due`}</strong>
+        <div className="reminder-items">
+          {pendingReminders.map(reminder => (
+            <div key={reminder.id} className="reminder-item">
+              <span className="reminder-title">{reminder.taskTitle || `Task #${reminder.taskId}`}</span>
+              <span className="reminder-meta">{new Date(reminder.remindAt).toLocaleString()}</span>
+              <div className="reminder-actions">
+                <button className="btn small" onClick={() => completeReminder(reminder.id)}>Mark complete</button>
+                <button className="btn small ghost" onClick={() => dismissReminder(reminder.id)}>Dismiss</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Root() {
+  return (
+    <ReminderProvider>
+      <App />
+    </ReminderProvider>
+  )
+}
+
+createRoot(document.getElementById('root')).render(<Root />)

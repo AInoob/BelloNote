@@ -79,6 +79,23 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash ON files(hash);
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS reminders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  task_id INTEGER NOT NULL,
+  remind_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  message TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  dismissed_at TEXT,
+  completed_at TEXT,
+  FOREIGN KEY(project_id) REFERENCES projects(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_task ON reminders(task_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_status_time ON reminders(project_id, status, remind_at);
 `)
 
 // Migration: add position column if missing

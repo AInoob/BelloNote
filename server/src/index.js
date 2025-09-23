@@ -10,6 +10,7 @@ import uploadRouter from './routes/upload.js'
 import outlineRouter from './routes/outline.js'
 import historyRouter from './routes/history.js'
 import filesRouter from './routes/files.js'
+import remindersRouter from './routes/reminders.js'
 
 const require = createRequire(import.meta.url)
 const { version: pkgVersion } = require('../package.json')
@@ -37,6 +38,7 @@ app.use('/api/tasks', tasksRouter)
 app.use('/api/day', dayRouter)
 app.use('/api/upload', uploadRouter)
 app.use('/api/history', historyRouter)
+app.use('/api/reminders', remindersRouter)
 
 app.get('/api/health', (req, res) => res.json({ ok: true, version: SERVER_VERSION, buildTime: BUILD_TIME }))
 

@@ -4,39 +4,12 @@ import { db } from '../lib/db.js'
 import { buildProjectTree } from '../util/tree.js'
 import { recordVersion } from '../lib/versioning.js'
 import { sanitizeRichText, parseMaybeJson, stringifyNodes, sanitizeHtmlContent } from '../lib/richtext.js'
-import { ensureDefaultProject } from '../lib/projects.js'
+import { resolveProjectId } from '../util/projectContext.js'
 
 const router = Router()
 
-function ensureProjectForTests(req) {
-  if (req.headers['x-playwright-test'] && process.env.NODE_ENV !== 'production') {
-    const project = db.prepare('SELECT id FROM projects WHERE name = ?').get('Playwright E2E')
-    if (!project) {
-      const info = db.prepare('INSERT INTO projects (name) VALUES (?)').run('Playwright E2E')
-      return info.lastInsertRowid
-    }
-    return project.id
-  }
-  return null
-}
-
-function inferTestProjectIdIfPlaywrightDataDir() {
-  try {
-    const dir = process.env.DATA_DIR || ''
-    if (dir.includes('.playwright-data')) {
-      const row = db.prepare('SELECT id FROM projects WHERE name = ?').get('Playwright E2E')
-      if (row?.id) return row.id
-      const info = db.prepare('INSERT INTO projects (name) VALUES (?)').run('Playwright E2E')
-      return info.lastInsertRowid
-    }
-  } catch {}
-  return null
-}
-
 router.get('/outline', (req, res) => {
-  const testProjectId = ensureProjectForTests(req)
-  const inferred = inferTestProjectIdIfPlaywrightDataDir()
-  const projectId = testProjectId || inferred || ensureDefaultProject()
+  const projectId = resolveProjectId(req)
   const tasks = db.prepare(`SELECT * FROM tasks WHERE project_id = ? ORDER BY position ASC, created_at ASC, id ASC`).all(projectId)
   const updateContent = db.prepare(`UPDATE tasks SET content=?, updated_at=datetime('now') WHERE id=?`)
   const dataUriRe = /data:[^;]+;base64,/i
@@ -76,9 +49,7 @@ router.get('/outline', (req, res) => {
 })
 
 router.post('/outline', (req, res) => {
-  const testProjectId = ensureProjectForTests(req)
-  const inferred = inferTestProjectIdIfPlaywrightDataDir()
-  const projectId = testProjectId || inferred || ensureDefaultProject()
+  const projectId = resolveProjectId(req)
   const { outline } = req.body
   if (!Array.isArray(outline)) return res.status(400).json({ error: 'outline array required' })
 
@@ -128,6 +99,7 @@ router.post('/outline', (req, res) => {
     const unseen = existing.filter(id => !seen.has(id))
     if (unseen.length) {
       const ph = unseen.map(_ => '?').join(',')
+      db.prepare(`DELETE FROM reminders WHERE task_id IN (${ph})`).run(...unseen)
       db.prepare(`DELETE FROM work_logs WHERE task_id IN (${ph})`).run(...unseen)
       db.prepare(`DELETE FROM tasks WHERE id IN (${ph})`).run(...unseen)
     }

@@ -11,6 +11,7 @@ import { lowlight } from 'lowlight/lib/core.js'
 import dayjs from 'dayjs'
 import { TextSelection, NodeSelection } from 'prosemirror-state'
 import { API_ROOT, absoluteUrl, getOutline, saveOutlineApi, uploadImage } from '../api.js'
+import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
 import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
 import { DetailsBlock } from '../extensions/detailsBlock.jsx'
@@ -177,6 +178,15 @@ function ListItemView(props) {
   const fallbackIdRef = useRef(id ? String(id) : `temp-${Math.random().toString(36).slice(2, 8)}`)
   const justDraggedRef = useRef(false)
   const draggingRef = draggingState || { current: null }
+  const { remindersByTask, scheduleReminder, dismissReminder, completeReminder, removeReminder } = useReminders()
+  const reminderKey = id ? String(id) : null
+  const reminder = reminderKey ? remindersByTask.get(reminderKey) || null : null
+  const [reminderMenuOpen, setReminderMenuOpen] = useState(false)
+  const [customMode, setCustomMode] = useState(false)
+  const [customDate, setCustomDate] = useState('')
+  const [reminderError, setReminderError] = useState('')
+  const reminderMenuRef = useRef(null)
+  const rowRef = useRef(null)
 
   useEffect(() => {
     if (id) fallbackIdRef.current = String(id)
@@ -187,12 +197,110 @@ function ListItemView(props) {
     if (id && set.has(String(id)) !== collapsed) updateAttributes({ collapsed: set.has(String(id)) })
   }, [])
 
+  useEffect(() => {
+    if (!reminderMenuOpen) return
+    const handleClick = (event) => {
+      if (reminderMenuRef.current && !reminderMenuRef.current.contains(event.target)) {
+        setReminderMenuOpen(false)
+        setCustomMode(false)
+        setReminderError('')
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [reminderMenuOpen])
+
   const toggleCollapse = () => {
     const next = !collapsed
     updateAttributes({ collapsed: next })
     const set = loadCollapsed()
     if (id) { next ? set.add(String(id)) : set.delete(String(id)); saveCollapsed(set) }
   }
+
+  const readCurrentDomId = () => {
+    const li = rowRef.current?.closest('li.li-node')
+    if (!li) return id ? String(id) : fallbackIdRef.current
+    return li.getAttribute('data-id') || li.dataset?.id || (id ? String(id) : fallbackIdRef.current)
+  }
+
+  const ensurePersistentTaskId = useCallback(async () => {
+    let currentId = readCurrentDomId()
+    if (currentId && !String(currentId).startsWith('new-')) return currentId
+    window.dispatchEvent(new CustomEvent('worklog:request-save'))
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 200))
+      currentId = readCurrentDomId()
+      if (currentId && !String(currentId).startsWith('new-')) return currentId
+    }
+    throw new Error('Task must be saved before setting a reminder')
+  }, [id])
+
+  const closeReminderMenu = useCallback(() => {
+    setReminderMenuOpen(false)
+    setCustomMode(false)
+    setCustomDate('')
+    setReminderError('')
+  }, [])
+
+  const scheduleAfterMinutes = useCallback(async (minutes) => {
+    try {
+      setReminderError('')
+      const realId = await ensurePersistentTaskId()
+      const remindAt = dayjs().add(minutes, 'minute').toDate().toISOString()
+      await scheduleReminder({ taskId: Number(realId), remindAt })
+      closeReminderMenu()
+    } catch (err) {
+      setReminderError(err?.message || 'Failed to schedule reminder')
+    }
+  }, [closeReminderMenu, ensurePersistentTaskId, scheduleReminder])
+
+  const handleCustomSubmit = useCallback(async (event) => {
+    event.preventDefault()
+    if (!customDate) {
+      setReminderError('Select a date and time')
+      return
+    }
+    try {
+      const realId = await ensurePersistentTaskId()
+      const dateValue = new Date(customDate)
+      if (Number.isNaN(dateValue.valueOf())) throw new Error('Invalid date')
+      const remindAt = dateValue.toISOString()
+      await scheduleReminder({ taskId: Number(realId), remindAt })
+      closeReminderMenu()
+    } catch (err) {
+      setReminderError(err?.message || 'Failed to schedule reminder')
+    }
+  }, [closeReminderMenu, customDate, ensurePersistentTaskId, scheduleReminder])
+
+  const handleDismissReminder = useCallback(async () => {
+    if (!reminder) return
+    try {
+      await dismissReminder(reminder.id)
+      closeReminderMenu()
+    } catch (err) {
+      setReminderError(err?.message || 'Unable to dismiss reminder')
+    }
+  }, [closeReminderMenu, dismissReminder, reminder])
+
+  const handleCompleteReminder = useCallback(async () => {
+    if (!reminder) return
+    try {
+      await completeReminder(reminder.id)
+      closeReminderMenu()
+    } catch (err) {
+      setReminderError(err?.message || 'Unable to mark complete')
+    }
+  }, [closeReminderMenu, completeReminder, reminder])
+
+  const handleRemoveReminder = useCallback(async () => {
+    if (!reminder) return
+    try {
+      await removeReminder(reminder.id)
+      closeReminderMenu()
+    } catch (err) {
+      setReminderError(err?.message || 'Unable to remove reminder')
+    }
+  }, [closeReminderMenu, removeReminder, reminder])
 
   const cycle = () => {
     if (readOnly && !allowStatusToggleInReadOnly) return
@@ -261,7 +369,6 @@ function ListItemView(props) {
     toggleCollapse()
   }
 
-  const rowRef = useRef(null)
   const [showSoonBadge, setShowSoonBadge] = useState(!!node?.attrs?.soonSelf)
   useEffect(() => {
     const li = rowRef.current?.closest('li.li-node')
@@ -272,6 +379,16 @@ function ListItemView(props) {
     obs.observe(li, { attributes: true, attributeFilter: ['data-soon-self'] })
     return () => obs.disconnect()
   }, [])
+
+  const reminderDue = reminder?.status === 'scheduled' && (reminder.due || (reminder.remindAt && dayjs(reminder.remindAt).isBefore(dayjs())))
+  const reminderLabel = useMemo(() => {
+    if (!reminder) return 'Set reminder'
+    if (reminder.status === 'completed') return 'Reminder completed'
+    if (reminder.status === 'dismissed') return 'Reminder dismissed'
+    if (reminderDue) return 'Reminder due'
+    const relative = describeTimeUntil(reminder)
+    return relative ? `Reminds ${relative}` : 'Reminder scheduled'
+  }, [reminder, reminderDue])
 
   return (
     <NodeViewWrapper
@@ -312,6 +429,70 @@ function ListItemView(props) {
           <span className="tag-badge soon" style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 8, fontSize: 12, background: '#FFF3BF', color: '#7A5C00' }}>Soon</span>
         )}
         <NodeViewContent className="li-content" />
+        {!readOnly && (
+        <div
+          className={`li-reminder-area ${reminder ? 'has-reminder' : ''} ${reminderDue ? 'due' : ''}`}
+          contentEditable={false}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="reminder-toggle"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setReminderError('')
+              setCustomMode(false)
+              setReminderMenuOpen(v => !v)
+            }}
+          >
+            <span className="reminder-icon" aria-hidden>⏰</span>
+            <span className="reminder-label-text">{reminderLabel}</span>
+          </button>
+          {reminderMenuOpen && (
+            <div className="reminder-menu" ref={reminderMenuRef}>
+              <div className="reminder-menu-section">
+                <div className="menu-heading">Remind me in</div>
+                <div className="menu-buttons">
+                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(30)}>30 minutes</button>
+                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(60)}>1 hour</button>
+                  <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(180)}>3 hours</button>
+                </div>
+                <button type="button" className="btn small ghost" onClick={() => { setCustomMode(v => !v); setReminderError('') }}>Custom…</button>
+                {customMode && (
+                  <form className="menu-custom" onSubmit={handleCustomSubmit}>
+                    <input
+                      type="datetime-local"
+                      value={customDate}
+                      onChange={(e) => setCustomDate(e.target.value)}
+                      required
+                    />
+                    <div className="menu-buttons">
+                      <button type="submit" className="btn small">Set reminder</button>
+                    </div>
+                  </form>
+                )}
+              </div>
+              {reminder && (
+                <div className="reminder-menu-section">
+                  <div className="menu-heading">Actions</div>
+                  {reminder.status === 'scheduled' && (
+                    <>
+                      <button type="button" className="btn small" onClick={handleCompleteReminder}>Mark complete</button>
+                      <button type="button" className="btn small ghost" onClick={handleDismissReminder}>Dismiss</button>
+                    </>
+                  )}
+                  <button type="button" className="btn small ghost" onClick={handleRemoveReminder}>Remove reminder</button>
+                </div>
+              )}
+              {reminderError && (
+                <div className="reminder-error">{reminderError}</div>
+              )}
+            </div>
+          )}
+        </div>
+        )}
       </div>
     </NodeViewWrapper>
   )
@@ -1175,6 +1356,42 @@ export default function OutlinerView({ onSaveStateChange = () => {}, showDebug=f
       setTimeout(() => applyStatusFilter(), 50)
     })()
   }, [editor, isReadOnly])
+
+  useEffect(() => {
+    if (isReadOnly) return
+    const handler = () => queueSave(0)
+    window.addEventListener('worklog:request-save', handler)
+    return () => window.removeEventListener('worklog:request-save', handler)
+  }, [isReadOnly])
+
+  useEffect(() => {
+    if (!editor) return
+    const handler = (event) => {
+      const detail = event.detail || {}
+      const taskId = detail.taskId
+      const status = detail.status
+      if (!taskId || !status) return
+      const view = editor.view
+      const { state } = view
+      let tr = state.tr
+      let mutated = false
+      state.doc.descendants((node, pos) => {
+        if (node.type.name !== 'listItem') return
+        if (String(node.attrs.dataId) === String(taskId)) {
+          tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, status })
+          mutated = true
+          return false
+        }
+        return undefined
+      })
+      if (mutated) {
+        view.dispatch(tr)
+        setTimeout(() => applyStatusFilter(), 50)
+      }
+    }
+    window.addEventListener('worklog:task-status-change', handler)
+    return () => window.removeEventListener('worklog:task-status-change', handler)
+  }, [editor, applyStatusFilter])
 
   function normalizeBodyNodes(nodes) {
     return nodes.map(node => {
