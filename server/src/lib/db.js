@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo',
   content TEXT DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
   position INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -102,6 +103,9 @@ CREATE INDEX IF NOT EXISTS idx_reminders_status_time ON reminders(project_id, st
 const cols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name)
 if (!cols.includes('position')) {
   db.exec("ALTER TABLE tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0;")
+}
+if (!cols.includes('tags')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';")
 }
 
 // Migration: collapse legacy reminder statuses to the new incomplete/completed schema

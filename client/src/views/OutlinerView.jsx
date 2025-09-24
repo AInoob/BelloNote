@@ -28,6 +28,35 @@ const FILTER_FUTURE_KEY = 'worklog.filter.future'
 const FILTER_SOON_KEY = 'worklog.filter.soon'
 const SCROLL_STATE_KEY = 'worklog.lastScroll'
 
+const FILTER_TAG_INCLUDE_KEY = 'worklog.filter.tags.include'
+const FILTER_TAG_EXCLUDE_KEY = 'worklog.filter.tags.exclude'
+const TAG_VALUE_RE = /^[a-zA-Z0-9][\w-]{0,63}$/
+const TAG_SCAN_RE = /(^|[^0-9A-Za-z_\/])#([a-zA-Z0-9][\w-]{0,63})\b/g
+
+const parseTagInput = (value = '') => {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const withoutHash = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
+  if (!TAG_VALUE_RE.test(withoutHash)) return null
+  const canonical = withoutHash.toLowerCase()
+  return { canonical, display: withoutHash }
+}
+
+const extractTagsFromText = (text = '') => {
+  if (typeof text !== 'string' || !text) return []
+  const seen = new Map()
+  TAG_SCAN_RE.lastIndex = 0
+  let match
+  while ((match = TAG_SCAN_RE.exec(text)) !== null) {
+    const raw = match[2]
+    if (!raw) continue
+    const canonical = raw.toLowerCase()
+    if (!seen.has(canonical)) seen.set(canonical, raw)
+  }
+  return Array.from(seen, ([canonical, display]) => ({ canonical, display }))
+}
+
 const LOG_ON = () => (localStorage.getItem('WL_DEBUG') === '1')
 const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
 
@@ -107,6 +136,40 @@ const saveArchivedVisible = (v) => { try { localStorage.setItem(FILTER_ARCHIVED_
 const loadFutureVisible = () => { try { const v = localStorage.getItem(FILTER_FUTURE_KEY); return v === '0' ? false : true } catch { return true } }
 const saveFutureVisible = (v) => { try { localStorage.setItem(FILTER_FUTURE_KEY, v ? '1' : '0') } catch {} }
 const loadSoonVisible = () => { try { const v = localStorage.getItem(FILTER_SOON_KEY); return v === '0' ? false : true } catch { return true } }
+const DEFAULT_TAG_FILTER = { include: [], exclude: [] }
+const normalizeTagArray = (input) => {
+  const set = new Set()
+  if (Array.isArray(input)) {
+    input.forEach(item => {
+      if (typeof item !== 'string') return
+      const parsed = parseTagInput(item)
+      if (parsed) set.add(parsed.canonical)
+    })
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b))
+}
+const loadTagFilters = () => {
+  if (typeof window === 'undefined') return { ...DEFAULT_TAG_FILTER }
+  try {
+    const includeRaw = JSON.parse(localStorage.getItem(FILTER_TAG_INCLUDE_KEY) || '[]')
+    const excludeRaw = JSON.parse(localStorage.getItem(FILTER_TAG_EXCLUDE_KEY) || '[]')
+    const include = normalizeTagArray(includeRaw)
+    const includeSet = new Set(include)
+    const exclude = normalizeTagArray(excludeRaw).filter(tag => !includeSet.has(tag))
+    return { include, exclude }
+  } catch {
+    return { ...DEFAULT_TAG_FILTER }
+  }
+}
+const saveTagFilters = (filters) => {
+  try {
+    const include = normalizeTagArray(filters?.include)
+    const includeSet = new Set(include)
+    const exclude = normalizeTagArray(filters?.exclude).filter(tag => !includeSet.has(tag))
+    localStorage.setItem(FILTER_TAG_INCLUDE_KEY, JSON.stringify(include))
+    localStorage.setItem(FILTER_TAG_EXCLUDE_KEY, JSON.stringify(exclude))
+  } catch {}
+}
 const saveSoonVisible = (v) => { try { localStorage.setItem(FILTER_SOON_KEY, v ? '1' : '0') } catch {} }
 const loadScrollState = () => {
   if (typeof window === 'undefined') return null
@@ -217,7 +280,8 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
         collapsed: { default: false },
         archivedSelf: { default: false },
         futureSelf: { default: false },
-        soonSelf: { default: false }
+        soonSelf: { default: false },
+        tags: { default: [] }
       }
     },
     addNodeView() {
@@ -250,6 +314,7 @@ function ListItemView(props) {
   const id = node.attrs.dataId
   const status = node.attrs.status ?? STATUS_EMPTY
   const collapsed = !!node.attrs.collapsed
+  const tags = Array.isArray(node.attrs.tags) ? node.attrs.tags.map(t => String(t || '').toLowerCase()) : []
   const fallbackIdRef = useRef(id ? String(id) : `temp-${Math.random().toString(36).slice(2, 8)}`)
   const justDraggedRef = useRef(false)
   const draggingRef = draggingState || { current: null }
@@ -551,6 +616,7 @@ function ListItemView(props) {
     return relative ? `Reminds ${relative}` : ''
   }, [activeReminder, reminder, reminderDue, reminderDismissed])
 
+
   useEffect(() => {
     if (!reminderControlsEnabled) {
       setReminderOffset(null)
@@ -681,6 +747,7 @@ function ListItemView(props) {
       data-soon-self={node.attrs.soonSelf ? '1' : '0'}
       data-future={node.attrs.futureSelf ? '1' : '0'}
       data-soon={node.attrs.soonSelf ? '1' : '0'}
+      data-tags-self={tags.join(',')}
       draggable={!readOnly}
       onDragEnd={readOnly ? undefined : handleDragEnd}
     >
@@ -824,11 +891,17 @@ export default function OutlinerView({
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
   const [showArchived, setShowArchived] = useState(() => loadArchivedVisible())
+  const [tagFilters, setTagFilters] = useState(() => loadTagFilters())
+  const [includeTagInput, setIncludeTagInput] = useState('')
+  const [excludeTagInput, setExcludeTagInput] = useState('')
   const applyStatusFilterRef = useRef(null)
   const showFutureRef = useRef(showFuture)
   const showSoonRef = useRef(showSoon)
   const showArchivedRef = useRef(showArchived)
   const statusFilterRef = useRef(statusFilter)
+  const tagFiltersRef = useRef(tagFilters)
+  const includeInputRef = useRef(null)
+  const excludeInputRef = useRef(null)
   const restoredScrollRef = useRef(false)
   const scrollSaveFrameRef = useRef(null)
   const [focusRootId, setFocusRootId] = useState(() => {
@@ -1024,6 +1097,9 @@ export default function OutlinerView({
   const datePickerCaretRef = useRef(null)
 
   const pendingImageSrcRef = useRef(new Set())
+  const includeFilterList = Array.isArray(tagFilters?.include) ? tagFilters.include : []
+  const excludeFilterList = Array.isArray(tagFilters?.exclude) ? tagFilters.exclude : []
+  const hasTagFilters = includeFilterList.length > 0 || excludeFilterList.length > 0
 
   const taskListItemExtension = useMemo(
     () => createTaskListItemExtension({
@@ -1562,6 +1638,119 @@ export default function OutlinerView({
     }
   }
 
+  const addTagFilter = useCallback((mode, value) => {
+    const parsed = parseTagInput(value)
+    if (!parsed) return false
+    let added = false
+    setTagFilters(prev => {
+      const current = prev && typeof prev === 'object'
+        ? prev
+        : { include: [], exclude: [] }
+      const includeSet = new Set(Array.isArray(current.include) ? current.include : [])
+      const excludeSet = new Set(Array.isArray(current.exclude) ? current.exclude : [])
+      if (mode === 'include') {
+        if (includeSet.has(parsed.canonical)) return current
+        includeSet.add(parsed.canonical)
+        excludeSet.delete(parsed.canonical)
+      } else {
+        if (excludeSet.has(parsed.canonical)) return current
+        excludeSet.add(parsed.canonical)
+        includeSet.delete(parsed.canonical)
+      }
+      added = true
+      return {
+        include: Array.from(includeSet).sort((a, b) => a.localeCompare(b)),
+        exclude: Array.from(excludeSet).sort((a, b) => a.localeCompare(b))
+      }
+    })
+    return added
+  }, [])
+
+  const removeTagFilter = useCallback((mode, tag) => {
+    const canonical = typeof tag === 'string' ? tag.toLowerCase() : ''
+    if (!canonical) return false
+    let removed = false
+    setTagFilters(prev => {
+      const current = prev && typeof prev === 'object'
+        ? prev
+        : { include: [], exclude: [] }
+      const include = Array.isArray(current.include) ? current.include : []
+      const exclude = Array.isArray(current.exclude) ? current.exclude : []
+      if (mode === 'include') {
+        if (!include.includes(canonical)) return current
+        removed = true
+        return { include: include.filter(t => t !== canonical), exclude: [...exclude] }
+      }
+      if (!exclude.includes(canonical)) return current
+      removed = true
+      return { include: [...include], exclude: exclude.filter(t => t !== canonical) }
+    })
+    return removed
+  }, [])
+
+  const clearTagFilters = useCallback(() => {
+    setTagFilters(prev => {
+      const include = Array.isArray(prev?.include) ? prev.include : []
+      const exclude = Array.isArray(prev?.exclude) ? prev.exclude : []
+      if (!include.length && !exclude.length) return prev
+      return { include: [], exclude: [] }
+    })
+    setIncludeTagInput('')
+    setExcludeTagInput('')
+  }, [])
+
+  const handleTagInputChange = useCallback((mode) => (event) => {
+    const value = event.target.value
+    if (mode === 'include') setIncludeTagInput(value)
+    else setExcludeTagInput(value)
+  }, [])
+
+  const handleTagInputKeyDown = useCallback((mode) => (event) => {
+    const commitKeys = ['Enter', 'Tab', ',', ' ']
+    if (commitKeys.includes(event.key)) {
+      const value = event.currentTarget.value
+      const added = addTagFilter(mode, value)
+      if (added) {
+        event.preventDefault()
+        if (mode === 'include') setIncludeTagInput('')
+        else setExcludeTagInput('')
+      } else if (event.key !== 'Tab') {
+        // Prevent stray characters when value is empty or invalid
+        event.preventDefault()
+      }
+      return
+    }
+    if (event.key === 'Backspace' && !event.currentTarget.value) {
+      const current = tagFiltersRef.current || DEFAULT_TAG_FILTER
+      const list = Array.isArray(current[mode]) ? current[mode] : []
+      if (list.length) {
+        event.preventDefault()
+        removeTagFilter(mode, list[list.length - 1])
+        if (mode === 'include') setIncludeTagInput('')
+        else setExcludeTagInput('')
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      event.currentTarget.blur()
+    }
+  }, [addTagFilter, removeTagFilter])
+
+  const handleTagInputBlur = useCallback((mode) => (event) => {
+    const value = event.currentTarget.value
+    const trimmed = value.trim()
+    if (!trimmed) {
+      if (mode === 'include') setIncludeTagInput('')
+      else setExcludeTagInput('')
+      return
+    }
+    const added = addTagFilter(mode, trimmed)
+    if (added) {
+      if (mode === 'include') setIncludeTagInput('')
+      else setExcludeTagInput('')
+    }
+  }, [addTagFilter])
+
   const applyStatusFilter = useCallback(() => {
     if (!editor) return
     const root = editor.view.dom
@@ -1572,6 +1761,14 @@ export default function OutlinerView({
     const showSoonCurrent = showSoonRef.current
     const showArchivedCurrent = showArchivedRef.current
     const statusFilterCurrent = statusFilterRef.current || {}
+    const tagFiltersCurrent = tagFiltersRef.current || DEFAULT_TAG_FILTER
+    const includeTags = Array.isArray(tagFiltersCurrent.include) ? tagFiltersCurrent.include : []
+    const excludeTags = Array.isArray(tagFiltersCurrent.exclude) ? tagFiltersCurrent.exclude : []
+    const includeSet = new Set(includeTags.map(tag => String(tag || '').toLowerCase()))
+    const excludeSet = new Set(excludeTags.map(tag => String(tag || '').toLowerCase()))
+    const includeRequired = includeSet.size > 0
+    const infoMap = new Map()
+    const parentMap = new Map()
     const focusId = focusRootRef.current
     let focusElement = null
     if (focusId) {
@@ -1582,7 +1779,6 @@ export default function OutlinerView({
       }
     }
 
-    // First pass: clear classes and compute self flags from body text (paragraph only)
     const textNodeType = typeof Node !== 'undefined' ? Node.TEXT_NODE : 3
     const elementNodeType = typeof Node !== 'undefined' ? Node.ELEMENT_NODE : 1
 
@@ -1612,7 +1808,11 @@ export default function OutlinerView({
       if (row) row.style.display = ''
 
       const body = li.querySelector(':scope > .li-row .li-content')
-      const bodyText = readDirectBodyText(body).toLowerCase()
+      const bodyTextRaw = readDirectBodyText(body)
+      const bodyText = bodyTextRaw.toLowerCase()
+      const tagsFound = extractTagsFromText(bodyTextRaw)
+      const canonicalTags = tagsFound.map(t => t.canonical)
+      li.dataset.tagsSelf = canonicalTags.join(',')
 
       const selfArchived = /@archived\b/.test(bodyText)
       const selfFuture = /@future\b/.test(bodyText)
@@ -1622,17 +1822,44 @@ export default function OutlinerView({
       li.dataset.futureSelf = selfFuture ? '1' : '0'
       li.dataset.soonSelf = selfSoon ? '1' : '0'
 
-      // Badge rendering moved to React (li-row) via showSoonBadge driven by data-soon-self
-      // No direct DOM mutation here to avoid duplication or stale badges.
+      const parentLi = li.parentElement?.closest?.('li.li-node') || null
+      parentMap.set(li, parentLi)
+
+      const ownTagSet = new Set(canonicalTags)
+      const includeSelf = includeRequired ? canonicalTags.some(tag => includeSet.has(tag)) : false
+      const excludeSelf = canonicalTags.some(tag => excludeSet.has(tag))
+      infoMap.set(li, {
+        tags: ownTagSet,
+        includeSelf,
+        includeDescendant: false,
+        includeAncestor: false,
+        excludeSelf,
+        excludeAncestor: false
+      })
     })
 
-    // Second pass: propagate archived/future/soon from ancestors and apply visibility rules
-    if (typeof document !== 'undefined') {
-      document.body.classList.toggle('focus-mode', !!focusElement)
-    }
+    const liReverse = [...liNodes].reverse()
+    liReverse.forEach(li => {
+      const parent = parentMap.get(li)
+      if (!parent) return
+      const info = infoMap.get(li)
+      const parentInfo = infoMap.get(parent)
+      if (!info || !parentInfo) return
+      if (info.includeSelf || info.includeDescendant) parentInfo.includeDescendant = true
+    })
 
     liNodes.forEach(li => {
-      // propagate flags from closest ancestor li
+      const parent = parentMap.get(li)
+      if (!parent) return
+      const info = infoMap.get(li)
+      const parentInfo = infoMap.get(parent)
+      if (!info || !parentInfo) return
+      if (parentInfo.includeSelf || parentInfo.includeAncestor) info.includeAncestor = true
+      if (parentInfo.excludeSelf || parentInfo.excludeAncestor) info.excludeAncestor = true
+    })
+
+    liNodes.forEach(li => {
+      const info = infoMap.get(li) || { tags: new Set(), includeSelf: false, includeDescendant: false, includeAncestor: false, excludeSelf: false, excludeAncestor: false }
       let archived = li.dataset.archivedSelf === '1'
       let future = li.dataset.futureSelf === '1'
       let soon = li.dataset.soonSelf === '1'
@@ -1656,6 +1883,13 @@ export default function OutlinerView({
       const hideByArchive = !showArchivedCurrent && archived
       const hideByFuture = !showFutureCurrent && future
       const hideBySoon = !showSoonCurrent && soon
+      const includeVisible = includeRequired ? (info.includeSelf || info.includeDescendant || info.includeAncestor) : true
+      const hideByInclude = includeRequired && !includeVisible
+      const hideByExclude = info.excludeSelf || info.excludeAncestor
+      const hideByTags = hideByInclude || hideByExclude
+      li.dataset.tagInclude = includeVisible ? '1' : '0'
+      li.dataset.tagExclude = hideByExclude ? '1' : '0'
+
       const isFocusActive = !!focusElement
       const isRoot = focusElement ? li === focusElement : false
       const isDescendant = focusElement ? (focusElement.contains(li) && li !== focusElement) : false
@@ -1684,10 +1918,9 @@ export default function OutlinerView({
 
       const shouldHide = (isFocusActive && (isRoot || isDescendant || isAncestor))
         ? false
-        : (hideByStatus || hideByArchive || hideByFuture || hideBySoon)
+        : (hideByStatus || hideByArchive || hideByFuture || hideBySoon || hideByTags)
       if (shouldHide) {
         li.classList.add(hiddenClass)
-        // Inline fallback to ensure visibility toggles even if stylesheet scoping changes
         li.style.display = 'none'
       } else {
         li.classList.remove(hiddenClass)
@@ -1695,7 +1928,6 @@ export default function OutlinerView({
       }
     })
 
-    // Third pass: ensure parents of visible descendants remain visible but dimmed
     const depthMap = new Map()
     const getDepth = (el) => {
       if (depthMap.has(el)) return depthMap.get(el)
@@ -1721,6 +1953,12 @@ export default function OutlinerView({
     })
 
   }, [editor, statusFilter, showArchived, showFuture, showSoon])
+
+  useEffect(() => {
+    tagFiltersRef.current = tagFilters
+    saveTagFilters(tagFilters)
+    applyStatusFilter()
+  }, [tagFilters, applyStatusFilter])
 
   const handleRequestFocus = useCallback((taskId) => {
     if (!taskId) return
@@ -2186,9 +2424,10 @@ export default function OutlinerView({
         const archivedSelf = titleLower.includes('@archived') || bodyLower.includes('@archived')
         const futureSelf = titleLower.includes('@future') || bodyLower.includes('@future')
         const soonSelf = titleLower.includes('@soon') || bodyLower.includes('@soon')
+        const tags = Array.isArray(n.tags) ? n.tags.map(tag => String(tag || '').toLowerCase()) : []
         return {
           type: 'listItem',
-          attrs: { dataId: n.id, status: n.status ?? STATUS_EMPTY, collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf, soonSelf },
+          attrs: { dataId: n.id, status: n.status ?? STATUS_EMPTY, collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf, soonSelf, tags },
           content: children
         }
       })
@@ -2525,6 +2764,28 @@ export default function OutlinerView({
     pushDebug('insert soon tag')
   }
 
+  const insertTagFromSlash = useCallback((tagInfo) => {
+    if (!tagInfo) return
+    const removed = consumeSlashMarker()
+    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
+    if (caretPos !== null) {
+      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
+    }
+    let insertion = `#${tagInfo.display}`
+    try {
+      const { doc } = editor?.state || {}
+      const pos = caretPos ?? 0
+      if (doc && pos > 0) {
+        const prevChar = doc.textBetween(pos - 1, pos, '\n', '\n') || ''
+        if (prevChar && !/\s/.test(prevChar)) insertion = ' ' + insertion
+      }
+    } catch {}
+    editor?.chain().focus().insertContent(insertion).run()
+    if (removed) cleanDanglingSlash(removed.from)
+    closeSlash()
+    pushDebug('insert tag', { tag: tagInfo.canonical })
+  }, [editor, consumeSlashMarker, cleanDanglingSlash, closeSlash, pushDebug])
+
 
   const insertCode = () => {
     const removed = consumeSlashMarker()
@@ -2539,6 +2800,10 @@ export default function OutlinerView({
       pushDebug('insert code block fallback')
       editor.chain().focus().insertContent({ type: 'codeBlock' }).run()
     }
+    if (removed) cleanDanglingSlash(removed.from)
+    closeSlash()
+    pushDebug('insert code block')
+  }
   const applyPickedDate = useCallback(() => {
     const v = datePickerValueRef.current
     setDatePickerOpen(false)
@@ -2551,11 +2816,6 @@ export default function OutlinerView({
     if (slashMarker.current?.pos != null) cleanDanglingSlash(slashMarker.current.pos)
     pushDebug('insert date picked', { v })
   }, [editor, pushDebug])
-
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert code block')
-  }
   const insertImage = async () => {
     const input = document.createElement('input'); input.type='file'; input.accept='image/*'
     closeSlash({ preserveMarker: true })
@@ -2588,7 +2848,7 @@ export default function OutlinerView({
     pushDebug('insert details block')
   }
 
-  const slashCommands = useMemo(() => ([
+  const baseSlashCommands = useMemo(() => ([
     { id: 'today', label: 'Date worked on (today)', hint: 'Insert @YYYY-MM-DD for today', keywords: ['today', 'date', 'now'], run: insertToday },
     { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },
     { id: 'archived', label: 'Archive (tag)', hint: 'Insert @archived tag to mark item (and its subtasks) archived', keywords: ['archive','archived','hide'], run: insertArchived },
@@ -2598,6 +2858,27 @@ export default function OutlinerView({
     { id: 'image', label: 'Upload image', hint: 'Upload and insert an image', keywords: ['image', 'photo', 'upload'], run: insertImage },
     { id: 'details', label: 'Details (inline)', hint: 'Collapsible details block', keywords: ['details', 'summary', 'toggle'], run: insertDetails }
   ]), [insertToday, insertPick, insertArchived, insertFuture, insertSoon, insertCode, insertImage, insertDetails])
+
+  const parsedTagQuery = useMemo(() => {
+    const trimmed = slashQuery.trim()
+    if (!trimmed || !trimmed.startsWith('#')) return null
+    return parseTagInput(trimmed)
+  }, [slashQuery])
+
+  const dynamicTagCommand = useMemo(() => {
+    if (!parsedTagQuery) return null
+    return {
+      id: `tag:${parsedTagQuery.canonical}`,
+      label: `Add tag #${parsedTagQuery.display}`,
+      hint: 'Insert a tag for this task',
+      keywords: ['tag', 'hash', parsedTagQuery.canonical],
+      run: () => insertTagFromSlash(parsedTagQuery)
+    }
+  }, [parsedTagQuery, insertTagFromSlash])
+
+  const slashCommands = useMemo(() => (
+    dynamicTagCommand ? [dynamicTagCommand, ...baseSlashCommands] : baseSlashCommands
+  ), [dynamicTagCommand, baseSlashCommands])
 
   const normalizedSlashQuery = slashQuery.trim().toLowerCase()
   const filteredCommands = useMemo(() => {
@@ -2701,6 +2982,19 @@ export default function OutlinerView({
               }}
             >{showArchived ? 'Shown' : 'Hidden'}</button>
           </div>
+          <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="meta">Future:</span>
+            <button
+              className={`btn pill ${showFuture ? 'active' : ''}`}
+              type="button"
+              onClick={() => {
+                const next = !showFuture
+                try { saveFutureVisible(next) } catch {}
+                showFutureRef.current = next
+                setShowFuture(next)
+              }}
+            >{showFuture ? 'Shown' : 'Hidden'}</button>
+          </div>
           <div className="soon-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
             <span className="meta">Soon:</span>
             <button
@@ -2726,18 +3020,62 @@ export default function OutlinerView({
               }}
             >{showSoon ? 'Shown' : 'Hidden'}</button>
           </div>
-          <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span className="meta">Future:</span>
-            <button
-              className={`btn pill ${showFuture ? 'active' : ''}`}
-              type="button"
-              onClick={() => {
-                const next = !showFuture
-                try { saveFutureVisible(next) } catch {}
-                showFutureRef.current = next
-                setShowFuture(next)
-              }}
-            >{showFuture ? 'Shown' : 'Hidden'}</button>
+          <div className="tag-filter-group">
+            <div className="tag-filter include">
+              <span className="meta">With:</span>
+              {includeFilterList.map(tag => (
+                <button
+                  key={`tag-include-${tag}`}
+                  type="button"
+                  className="tag-chip"
+                  onClick={() => removeTagFilter('include', tag)}
+                  aria-label={`Remove include filter #${tag}`}
+                >
+                  #{tag}<span aria-hidden className="tag-chip-remove">×</span>
+                </button>
+              ))}
+              <input
+                ref={includeInputRef}
+                className="tag-input"
+                type="text"
+                value={includeTagInput}
+                placeholder="#tag"
+                onChange={handleTagInputChange('include')}
+                onKeyDown={handleTagInputKeyDown('include')}
+                onBlur={handleTagInputBlur('include')}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </div>
+            <div className="tag-filter exclude">
+              <span className="meta">Without:</span>
+              {excludeFilterList.map(tag => (
+                <button
+                  key={`tag-exclude-${tag}`}
+                  type="button"
+                  className="tag-chip"
+                  onClick={() => removeTagFilter('exclude', tag)}
+                  aria-label={`Remove exclude filter #${tag}`}
+                >
+                  #{tag}<span aria-hidden className="tag-chip-remove">×</span>
+                </button>
+              ))}
+              <input
+                ref={excludeInputRef}
+                className="tag-input"
+                type="text"
+                value={excludeTagInput}
+                placeholder="#tag"
+                onChange={handleTagInputChange('exclude')}
+                onKeyDown={handleTagInputKeyDown('exclude')}
+                onBlur={handleTagInputBlur('exclude')}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </div>
+            {hasTagFilters && (
+              <button type="button" className="btn ghost" onClick={clearTagFilters}>Clear</button>
+            )}
           </div>
           <div className="search-bar">
             <input

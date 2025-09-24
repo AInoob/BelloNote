@@ -1,7 +1,9 @@
 
 import crypto from 'crypto'
 import { db } from './db.js'
+import { parseMaybeJson } from './richtext.js'
 import { buildProjectTree } from '../util/tree.js'
+import { computeTaskTags, parseTagsField } from '../util/tags.js'
 
 function canonicalOutline(projectId) {
   const tasks = db.prepare(`SELECT * FROM tasks WHERE project_id = ? ORDER BY position ASC, created_at ASC, id ASC`).all(projectId)
@@ -128,14 +130,38 @@ export function restoreVersion(projectId, versionId) {
   db.prepare(`DELETE FROM work_logs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?);`).run(projectId)
   db.prepare(`DELETE FROM tasks WHERE project_id = ?;`).run(projectId)
 
-  const insTask = db.prepare(`INSERT INTO tasks (id, project_id, parent_id, title, status, content, position, created_at, updated_at) VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
+  const insTask = db.prepare(`INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))`)
   const insLog = db.prepare(`INSERT OR IGNORE INTO work_logs (task_id, date) VALUES (?, ?)`)
 
   function insertNodes(nodes, parentId=null) {
     if (!nodes) return
     nodes.forEach((n, idx) => {
       const statusValue = (n.status ?? '')
-      insTask.run(n.id, projectId, parentId, n.title || 'Untitled', statusValue, n.content || '', idx)
+      let contentValue = ''
+      let nodesForTags = null
+      if (Array.isArray(n.content)) {
+        nodesForTags = n.content
+        try {
+          contentValue = JSON.stringify(n.content)
+        } catch {
+          contentValue = ''
+        }
+      } else if (typeof n.content === 'string') {
+        contentValue = n.content
+        const parsed = parseMaybeJson(n.content)
+        if (Array.isArray(parsed)) nodesForTags = parsed
+      } else {
+        contentValue = ''
+      }
+      let tags = parseTagsField(n.tags)
+      if (!tags.length) {
+        tags = computeTaskTags({
+          title: n.title || 'Untitled',
+          nodes: nodesForTags,
+          html: nodesForTags ? '' : contentValue
+        })
+      }
+      insTask.run(n.id, projectId, parentId, n.title || 'Untitled', statusValue, contentValue || '', JSON.stringify(tags), idx)
       for (const d of (n.ownWorkedOnDates || [])) insLog.run(n.id, d)
       if (n.children && n.children.length) insertNodes(n.children, n.id)
     })

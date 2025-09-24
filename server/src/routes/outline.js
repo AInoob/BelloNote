@@ -4,6 +4,7 @@ import { db } from '../lib/db.js'
 import { buildProjectTree } from '../util/tree.js'
 import { recordVersion } from '../lib/versioning.js'
 import { sanitizeRichText, parseMaybeJson, stringifyNodes, sanitizeHtmlContent } from '../lib/richtext.js'
+import { computeTaskTags } from '../util/tags.js'
 import { resolveProjectId } from '../util/projectContext.js'
 
 const router = Router()
@@ -63,8 +64,8 @@ router.post('/outline', (req, res) => {
   const seen = new Set()
   const newIdMap = {}
 
-  const insertTask = db.prepare(`INSERT INTO tasks (project_id, parent_id, title, status, content, position) VALUES (@project_id, @parent_id, @title, @status, @content, @position)`)
-  const updateTask = db.prepare(`UPDATE tasks SET parent_id=@parent_id, title=@title, status=@status, content=@content, position=@position, updated_at=datetime('now') WHERE id=@id`)
+  const insertTask = db.prepare(`INSERT INTO tasks (project_id, parent_id, title, status, content, tags, position) VALUES (@project_id, @parent_id, @title, @status, @content, @tags, @position)`)
+  const updateTask = db.prepare(`UPDATE tasks SET parent_id=@parent_id, title=@title, status=@status, content=@content, tags=@tags, position=@position, updated_at=datetime('now') WHERE id=@id`)
   const listLogs = db.prepare(`SELECT date FROM work_logs WHERE task_id = ?`)
   const addLog = db.prepare(`INSERT OR IGNORE INTO work_logs (task_id, date) VALUES (?, ?)`)
   const delLog = db.prepare(`DELETE FROM work_logs WHERE task_id = ? AND date = ?`)
@@ -75,17 +76,24 @@ router.post('/outline', (req, res) => {
     const rawBody = parseMaybeJson(node.body ?? node.content)
     const sanitizedBody = sanitizeRichText(rawBody, projectId, { title: node.title })
     const contentJson = stringifyNodes(sanitizedBody)
+    const tagNodes = Array.isArray(sanitizedBody) ? sanitizedBody : null
+    const tags = computeTaskTags({
+      title: node.title || 'Untitled',
+      nodes: tagNodes,
+      html: tagNodes ? '' : contentJson
+    })
+    const tagsJson = JSON.stringify(tags)
     const normalizedStatus = (node.status ?? '').trim()
     const statusValue = normalizedStatus === 'todo' || normalizedStatus === 'in-progress' || normalizedStatus === 'done' || normalizedStatus === ''
       ? normalizedStatus
       : ''
     if (!id || String(id).startsWith('new-')) {
-      const info = insertTask.run({ project_id: projectId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, position })
+      const info = insertTask.run({ project_id: projectId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, tags: tagsJson, position })
       realId = info.lastInsertRowid
       if (id) newIdMap[id] = realId
     } else {
       realId = Number(id)
-      updateTask.run({ id: realId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, position })
+      updateTask.run({ id: realId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, tags: tagsJson, position })
     }
     seen.add(realId)
 

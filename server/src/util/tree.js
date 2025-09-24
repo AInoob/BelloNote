@@ -1,10 +1,14 @@
 
+import { parseTagsField } from './tags.js'
+
 export function buildProjectTree(tasks, workLogsByTaskId) {
   const byId = new Map()
   const roots = []
   tasks.forEach(t => {
+    const tags = parseTagsField(t.tags)
     byId.set(t.id, {
       ...t,
+      tags,
       children: [],
       ownWorkedOn: new Set(workLogsByTaskId.get(t.id) || []),
       aggWorkedOn: new Set()

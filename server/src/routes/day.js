@@ -2,6 +2,7 @@
 import { Router } from 'express'
 import { db } from '../lib/db.js'
 import { ensureDefaultProject } from '../lib/projects.js'
+import { parseTagsField } from '../util/tags.js'
 
 const router = Router()
 
@@ -31,7 +32,7 @@ function inferTestProjectIdIfPlaywrightDataDir() {
 }
 
 function loadAllTasks(projectId) {
-  return db.prepare(`SELECT id, parent_id, title, status, content, project_id, created_at FROM tasks WHERE project_id = ?`).all(projectId)
+  return db.prepare(`SELECT id, parent_id, title, status, content, tags, project_id, created_at FROM tasks WHERE project_id = ?`).all(projectId)
 }
 function pathToRoot(task, byId) {
   const path = []
@@ -40,7 +41,7 @@ function pathToRoot(task, byId) {
   while (cur) {
     if (guard.has(cur.id)) break
     guard.add(cur.id)
-    path.push({ id: cur.id, title: cur.title, status: cur.status, parent_id: cur.parent_id, content: cur.content })
+    path.push({ id: cur.id, title: cur.title, status: cur.status, parent_id: cur.parent_id, content: cur.content, tags: parseTagsField(cur.tags) })
     cur = cur.parent_id ? byId.get(cur.parent_id) : null
   }
   path.reverse()
