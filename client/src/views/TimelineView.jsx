@@ -1,5 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import dayjs from 'dayjs'
 import { getDays, getOutline, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
 
@@ -80,6 +81,9 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
   const pendingFocusRef = useRef(null)
   const lastFocusedTaskIdRef = useRef(null)
   const activeElementRef = useRef(null)
+  const todaySectionRef = useRef(null)
+  const todayScrollDoneRef = useRef(false)
+  const todayKeyRef = useRef(dayjs().format('YYYY-MM-DD'))
 
   const refreshData = useCallback(async () => {
     try {
@@ -132,6 +136,18 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
   useEffect(() => {
     refreshData()
   }, [refreshData])
+
+  useEffect(() => {
+    if (todayScrollDoneRef.current) return
+    const target = todaySectionRef.current
+    if (!target) return
+    todayScrollDoneRef.current = true
+    requestAnimationFrame(() => {
+      const el = todaySectionRef.current
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [days])
 
   const focusRequestTaskId = focusRequest?.taskId ? String(focusRequest.taskId) : null
 
@@ -282,8 +298,9 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       {/* Dated days */}
       {hasTimelineData && days.map(day => {
         const roots = buildOutlineFromItems(day.items || [], day.seedIds || [], day.date)
+        const isToday = day.date && todayKeyRef.current && day.date === todayKeyRef.current
         return (
-          <section key={day.date}>
+          <section key={day.date} ref={isToday ? todaySectionRef : undefined} data-timeline-date={day.date}>
             <h3>{day.date}</h3>
             <div className="history-inline-preview">
               <OutlinerView
