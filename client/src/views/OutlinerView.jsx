@@ -946,6 +946,9 @@ export default function OutlinerView({
   const excludeInputRef = useRef(null)
   const restoredScrollRef = useRef(false)
   const scrollSaveFrameRef = useRef(null)
+  const filterScheduleRef = useRef(null)
+  const lastFilterRunAtRef = useRef(0)
+  const filterRunCounterRef = useRef(0)
   const [focusRootId, setFocusRootId] = useState(() => {
     if (typeof window === 'undefined') return null
     try {
@@ -1209,13 +1212,13 @@ export default function OutlinerView({
     content: '<p>Loading…</p>',
     autofocus: false,
     editable: !isReadOnly,
-    onCreate: () => { pushDebug('editor: ready'); setTimeout(() => applyStatusFilter(), 50) },
+    onCreate: () => { pushDebug('editor: ready'); scheduleApplyStatusFilter('editor.onCreate') },
     onUpdate: () => {
       if (!isReadOnly) {
         markDirty()
         queueSave()
       }
-      setTimeout(() => applyStatusFilter(), 50)
+      scheduleApplyStatusFilter('editor.onUpdate')
     },
     editorProps: {
       handleTextInput(view, from, to, text) {
@@ -1317,6 +1320,15 @@ export default function OutlinerView({
           }
         }
         const isSlashKey = (event.key === '/' || event.code === 'Slash') && !event.shiftKey
+        if (!slashOpen && event.key === 'Escape') {
+          if (focusRootRef.current) {
+            event.preventDefault()
+            event.stopPropagation()
+            pendingFocusScrollRef.current = null
+            setFocusRootId(null)
+            return true
+          }
+        }
         if (isSlashKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
           const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
           if (inCode) { pushDebug('keydown "/" ignored in code block'); return false }
@@ -1359,6 +1371,7 @@ export default function OutlinerView({
           return true
         }
         if (event.key === 'Enter') {
+          const enterStartedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now()
           const { state, view } = editor
           const { $from } = view.state.selection
           const inCode = $from.parent.type.name === 'codeBlock'
@@ -1415,10 +1428,28 @@ export default function OutlinerView({
             return tr.setSelection(TextSelection.create(tr.doc, paragraphEnd))
           }
 
+          const onlyParagraph = listItemNode.childCount === 1 && listItemNode.child(0)?.type?.name === 'paragraph'
+          const paragraphEmpty = paragraphNode.content.size === 0
+
+          if (onlyParagraph && paragraphEmpty && isAtStart && isAtEnd) {
+            const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
+            const insertPos = listItemPos + listItemNode.nodeSize
+            let tr = state.tr.insert(insertPos, newSibling)
+            tr = placeCursorAtEnd(tr, insertPos)
+            view.dispatch(tr.scrollIntoView())
+            view.focus()
+            requestAnimationFrame(() => view.focus())
+            logCursorTiming('empty-sibling', enterStartedAt)
+            return true
+          }
+
           if (isChild && isAtStart) {
             let tr = state.tr.insert(listItemPos, listItemType.create(defaultAttrs, Fragment.from(paragraphType.create())))
             tr = placeCursorAtEnd(tr, listItemPos)
             view.dispatch(tr)
+            view.focus()
+            requestAnimationFrame(() => view.focus())
+            logCursorTiming('prepend-child', enterStartedAt)
             return true
           }
 
@@ -1428,12 +1459,18 @@ export default function OutlinerView({
             let tr = state.tr.insert(insertPos, newSibling)
             tr = placeCursorAtEnd(tr, insertPos)
             view.dispatch(tr.scrollIntoView())
+            view.focus()
+            requestAnimationFrame(() => view.focus())
+            logCursorTiming('append-root-sibling', enterStartedAt)
             return true
           }
 
           const didSplit = editor.commands.splitListItem('listItem')
           if (didSplit) {
             editor.commands.updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false })
+            view.focus()
+            requestAnimationFrame(() => view.focus())
+            logCursorTiming('split-list-item', enterStartedAt)
             return true
           }
           return false
@@ -2104,6 +2141,73 @@ export default function OutlinerView({
 
   }, [editor, statusFilter, showArchived, showFuture, showSoon])
 
+  const cancelScheduledFilter = useCallback(() => {
+    const handle = filterScheduleRef.current
+    if (!handle) return
+    filterScheduleRef.current = null
+    if (handle.type === 'raf') {
+      if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(handle.id)
+      }
+    } else if (handle.type === 'timeout') {
+      clearTimeout(handle.id)
+    }
+  }, [])
+
+  const scheduleApplyStatusFilter = useCallback((reason = 'unknown') => {
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now()
+    const runFilter = () => {
+      filterScheduleRef.current = null
+      const runId = filterRunCounterRef.current = filterRunCounterRef.current + 1
+      const start = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now()
+      try {
+        applyStatusFilter()
+      } finally {
+        const end = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now()
+        lastFilterRunAtRef.current = end
+      }
+    }
+
+    cancelScheduledFilter()
+
+    const scheduledAt = now
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      const rafId = window.requestAnimationFrame(() => {
+        runFilter()
+      })
+      filterScheduleRef.current = { type: 'raf', id: rafId, reason, scheduledAt }
+    } else {
+      const timeoutId = setTimeout(() => {
+        runFilter()
+      }, 16)
+      filterScheduleRef.current = { type: 'timeout', id: timeoutId, reason, scheduledAt }
+    }
+  }, [applyStatusFilter, cancelScheduledFilter])
+
+  useEffect(() => () => { cancelScheduledFilter() }, [cancelScheduledFilter])
+
+  const logCursorTiming = useCallback((label, startedAt) => {
+    if (!editor || !editor.view) return
+    const now = () => (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now()
+    const base = typeof startedAt === 'number' ? startedAt : now()
+    const view = editor.view
+    const emit = (phase, ts) => {
+      const selection = view.state.selection
+      const data = {
+        label,
+        elapsed: Math.max(0, ts - base),
+        from: selection?.from ?? null,
+        to: selection?.to ?? null
+      }
+      console.log('[cursor]', phase, data)
+    }
+    emit('post-dispatch', now())
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => emit('raf', now()))
+    }
+    setTimeout(() => emit('timeout-32ms', now()), 32)
+  }, [editor])
+
   const computeActiveTask = useCallback(() => {
     if (!editor) return null
     try {
@@ -2246,13 +2350,13 @@ export default function OutlinerView({
         }
       }
       requestAnimationFrame(centerTask)
-      setTimeout(() => applyStatusFilter(), 50)
+      scheduleApplyStatusFilter('focusTaskById')
       return true
     } catch (err) {
       console.error('[outline] failed to focus task', err)
       return false
     }
-  }, [editor, forceExpand, applyStatusFilter])
+  }, [editor, forceExpand, scheduleApplyStatusFilter])
 
   const requestFocusRef = useRef(handleRequestFocus)
   useEffect(() => { requestFocusRef.current = handleRequestFocus }, [handleRequestFocus])
@@ -2376,27 +2480,37 @@ export default function OutlinerView({
     applyStatusFilter()
   }, [applyStatusFilter])
   useEffect(() => { applyStatusFilterRef.current = applyStatusFilter }, [applyStatusFilter])
-
-  useEffect(() => {
-    if (!editor) return
-    const handler = () => applyStatusFilter()
-    editor.on('update', handler)
-    return () => editor.off?.('update', handler)
-  }, [editor, applyStatusFilter])
   // Observe DOM changes to ensure filters apply when NodeViews finish mounting (first load, etc.)
   useEffect(() => {
     if (!editor) return
     const root = editor.view.dom
     let t = null
     const observer = new MutationObserver(() => {
-      if (t) clearTimeout(t)
-      t = setTimeout(() => {
-        applyStatusFilter()
+      if (t) {
+        clearTimeout(t.id)
+      }
+      const timeoutId = setTimeout(() => {
+        t = null
+        const now = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now()
+        const lastRunAt = lastFilterRunAtRef.current || 0
+        const sinceLast = now - lastRunAt
+        if (filterScheduleRef.current) {
+          return
+        }
+        if (sinceLast >= 0 && sinceLast < 30) {
+          return
+        }
+        scheduleApplyStatusFilter('mutation-observer')
+        t = null
       }, 50)
+      t = { id: timeoutId }
     })
     observer.observe(root, { childList: true, subtree: true })
-    return () => { observer.disconnect(); if (t) clearTimeout(t) }
-  }, [editor, applyStatusFilter])
+    return () => {
+      observer.disconnect()
+      if (t) clearTimeout(t.id)
+    }
+  }, [editor, scheduleApplyStatusFilter])
 
 
   useEffect(() => {
@@ -2641,9 +2755,7 @@ export default function OutlinerView({
       pushDebug('loaded outline', { roots: roots.length })
       applyCollapsedStateForRoot(focusRootRef.current)
       // Ensure filters (status/archive) apply on first load
-      setTimeout(() => {
-        applyStatusFilter()
-      }, 50)
+      scheduleApplyStatusFilter('initial-outline-load')
       setTimeout(() => {
         if (restoredScrollRef.current) return
         const state = loadScrollState()
@@ -2653,7 +2765,7 @@ export default function OutlinerView({
         restoredScrollRef.current = true
       }, 120)
     })()
-  }, [editor, isReadOnly, applyCollapsedStateForRoot, applyStatusFilter])
+  }, [editor, isReadOnly, applyCollapsedStateForRoot, scheduleApplyStatusFilter])
 
   useEffect(() => {
     if (isReadOnly) return
@@ -2684,12 +2796,12 @@ export default function OutlinerView({
       })
       if (mutated) {
         view.dispatch(tr)
-        setTimeout(() => applyStatusFilter(), 50)
+        scheduleApplyStatusFilter('status-change-event')
       }
     }
     window.addEventListener('worklog:task-status-change', handler)
     return () => window.removeEventListener('worklog:task-status-change', handler)
-  }, [editor, applyStatusFilter])
+  }, [editor, scheduleApplyStatusFilter])
 
   function normalizeBodyNodes(nodes) {
     return nodes.map(node => {
@@ -3259,6 +3371,37 @@ export default function OutlinerView({
     applyCollapsedStateForRoot(focusRootId)
     applyStatusFilter()
   }, [focusRootId, applyCollapsedStateForRoot, applyStatusFilter])
+
+  useEffect(() => {
+    if (!focusRootId) return
+    if (!editor || !editor.view || !editor.view.dom) return
+    const targetId = focusRootId
+    const runScroll = () => {
+      try {
+        const rootEl = editor.view.dom
+        let targetEl = null
+        try {
+          targetEl = rootEl.querySelector(`li.li-node[data-id="${cssEscape(String(targetId))}"]`)
+        } catch {
+          targetEl = null
+        }
+        if (!targetEl) return
+        const rect = targetEl.getBoundingClientRect()
+        const viewportHeight = window.innerHeight || 0
+        const desired = Math.max(0, (rect.top + window.scrollY) - Math.max(0, (viewportHeight / 2) - (rect.height / 2)))
+        window.scrollTo({ top: desired, behavior: 'smooth' })
+      } finally {
+        pendingFocusScrollRef.current = null
+      }
+    }
+    const requestedId = pendingFocusScrollRef.current
+    if (requestedId && requestedId !== focusRootId) {
+      pendingFocusScrollRef.current = focusRootId
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(runScroll)
+    })
+  }, [focusRootId, editor])
 
   useEffect(() => {
     if (!editor) return

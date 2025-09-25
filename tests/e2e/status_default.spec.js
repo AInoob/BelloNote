@@ -17,10 +17,6 @@ async function openOutline(page) {
   await expect(page.locator('li.li-node').first()).toBeVisible()
 }
 
-function statusOf(li) {
-  return li.getAttribute('data-status')
-}
-
 async function typeIntoFirstItem(page, text) {
   const first = page.locator('li.li-node').first()
   await first.locator('p').first().click()
@@ -221,4 +217,25 @@ test('Enter at end of collapsed parent keeps children under original task', asyn
   await expect(parentChildren).toHaveCount(1)
   await expect(parentChildren.first()).toContainText('Child 1')
   await expect(sibling.locator('li.li-node')).toHaveCount(0)
+})
+
+test('Enter on empty task creates a new task and focuses it', async ({ page }) => {
+  await openOutline(page)
+
+  await typeIntoFirstItem(page, 'Task 1')
+  await page.keyboard.press('Enter')
+
+  const itemsAfterFirstEnter = page.locator('li.li-node')
+  await expect(itemsAfterFirstEnter).toHaveCount(2)
+  await expect(itemsAfterFirstEnter.first()).toContainText('Task 1')
+  await expect(itemsAfterFirstEnter.nth(1)).toHaveAttribute('data-status', '')
+
+  await page.keyboard.press('Enter')
+
+  const items = page.locator('li.li-node')
+  await expect(items).toHaveCount(3)
+  await expect(items.first()).toContainText('Task 1')
+
+  await page.keyboard.type('Task 2')
+  await expect(items.nth(2)).toContainText('Task 2')
 })
