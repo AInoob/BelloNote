@@ -4,6 +4,7 @@ const { test, expect } = require('./test-base')
 test.describe.configure({ mode: 'serial' })
 
 const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+const SHORT_TIMEOUT = 1000
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -72,7 +73,7 @@ test('timeline day container has no inner scroll (no max-height/overflow)', asyn
   // Find the history-inline-preview within the section for 'today'
   const daySection = page.locator('section', { has: page.locator('h3', { hasText: today }) })
   const preview = daySection.locator('.history-inline-preview')
-  await expect(preview).toBeVisible()
+  await expect(preview).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const styles = await preview.evaluate((el) => {
     const cs = getComputedStyle(el)
@@ -93,22 +94,22 @@ test('status filter buttons dim when not selected', async ({ page, request }) =>
 
   await page.goto('/')
 
-  const bar = page.locator('.status-filter-bar')
-  await expect(bar).toBeVisible()
+  const bar = page.locator('.status-filter-bar:not([data-timeline-filter])').first()
+  await expect(bar).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const todoBtn = bar.locator('.btn.pill[data-status="todo"]')
   const inProgBtn = bar.locator('.btn.pill[data-status="in-progress"]')
   const doneBtn = bar.locator('.btn.pill[data-status="done"]')
 
-  await expect(todoBtn).toHaveClass(/active/)
-  await expect(inProgBtn).toHaveClass(/active/)
-  await expect(doneBtn).toHaveClass(/active/)
+  await expect(todoBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(inProgBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(doneBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
 
   // Toggle In progress OFF
   await inProgBtn.click()
 
   // After toggle, it should not have 'active'
-  await expect(inProgBtn).not.toHaveClass(/active/)
+  await expect(inProgBtn).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
 
   const opacities = await Promise.all([todoBtn, inProgBtn, doneBtn].map(async (loc) => {
     return await loc.evaluate((el) => getComputedStyle(el).opacity)
@@ -118,4 +119,3 @@ test('status filter buttons dim when not selected', async ({ page, request }) =>
   expect(opacities[1], 'in-progress (deselected) should be dimmed').toBe('0.55')
   expect(opacities[2], 'done should be fully opaque').toBe('1')
 })
-

@@ -4,6 +4,7 @@ const { test, expect } = require('./test-base')
 test.describe.configure({ mode: 'serial' })
 
 const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+const SHORT_TIMEOUT = 1000
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -152,8 +153,12 @@ test('hiding archived children does not hide the parent', async ({ page, request
 
   await page.goto('/')
 
+  const editor = page.locator('.tiptap.ProseMirror').first()
+  await expect(editor).toBeVisible({ timeout: SHORT_TIMEOUT })
+
   const firstParagraph = page.locator('li.li-node p').first()
-  await expect(firstParagraph).toBeVisible({ timeout: 15000 })
+  await expect(firstParagraph).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await firstParagraph.click()
   await page.evaluate(() => {
     const paragraph = document.querySelector('li.li-node p')
     if (!paragraph) return
@@ -163,29 +168,37 @@ test('hiding archived children does not hide the parent', async ({ page, request
     selection.removeAllRanges()
     selection.addRange(range)
   })
+
   await page.keyboard.type('Parent stays bright')
+
+  const listItems = page.locator('li.li-node')
+  await expect(listItems.nth(0)).toContainText('Parent stays bright', { timeout: SHORT_TIMEOUT })
+
   await page.keyboard.press('Enter')
+  await expect(listItems).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+
   await page.keyboard.press('Tab')
+  await listItems.nth(1).locator('p').first().click()
   await page.keyboard.type('Child archived @archived')
 
   const parent = page.locator('li.li-node[data-body-text="Parent stays bright"]').first()
   const child = page.locator('li.li-node[data-body-text="Child archived @archived"]').first()
-  await expect(parent).toBeVisible({ timeout: 15000 })
-  await expect(child).toBeVisible({ timeout: 15000 })
+  await expect(parent).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(child).toBeVisible({ timeout: SHORT_TIMEOUT })
 
-  await expect.poll(async () => await child.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('1')
-  await expect.poll(async () => await parent.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('0')
+  await expect.poll(async () => await child.getAttribute('data-archived-self'), { timeout: SHORT_TIMEOUT }).toBe('1')
+  await expect.poll(async () => await parent.getAttribute('data-archived-self'), { timeout: SHORT_TIMEOUT }).toBe('0')
 
   const archivedToggle = page.locator('.archive-toggle .btn.pill')
-  await expect(archivedToggle).toBeVisible()
+  await expect(archivedToggle).toBeVisible({ timeout: SHORT_TIMEOUT })
   const label = (await archivedToggle.textContent())?.trim()
   if (label === 'Shown') {
     await archivedToggle.click()
   }
-  await expect.poll(async () => (await archivedToggle.textContent())?.trim(), { timeout: 5000 })
+  await expect.poll(async () => (await archivedToggle.textContent())?.trim(), { timeout: SHORT_TIMEOUT })
     .toBe('Hidden')
 
-  await expect(child).toBeHidden()
-  await expect(parent, 'parent should remain visible when only child is archived').toBeVisible()
-  await expect.poll(async () => await parent.getAttribute('data-archived'), { timeout: 5000 }).toBe('0')
+  await expect(child).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(parent, 'parent should remain visible when only child is archived').toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect.poll(async () => await parent.getAttribute('data-archived'), { timeout: SHORT_TIMEOUT }).toBe('0')
 })

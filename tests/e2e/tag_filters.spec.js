@@ -3,6 +3,7 @@ const { test, expect } = require('./test-base')
 test.describe.configure({ mode: 'serial' })
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
+const SHORT_TIMEOUT = 1000
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -40,7 +41,7 @@ async function waitForEditorReady(page) {
     if (!text) return 'ready'
     return text.includes('Loading…') ? 'loading' : 'ready'
   }, { timeout: 10000 }).toBe('ready')
-  await expect(editor.locator('li.li-node').first()).toBeVisible()
+  await expect.poll(async () => editor.locator('li.li-node').count(), { timeout: SHORT_TIMEOUT }).toBeGreaterThan(0)
   return editor
 }
 
@@ -58,7 +59,8 @@ async function placeCaretAtTaskEnd(page, index) {
 }
 
 async function createTasks(page, titles) {
-  const listItems = page.locator('li.li-node')
+  const editor = page.locator('.tiptap.ProseMirror')
+  const listItems = editor.locator('li.li-node')
   const firstParagraph = listItems.first().locator('p').first()
   await firstParagraph.click()
   // Replace starter text
@@ -74,9 +76,10 @@ async function createTasks(page, titles) {
   for (let i = 0; i < titles.length; i += 1) {
     if (i > 0) {
       await page.keyboard.press('Enter')
+      await listItems.nth(i).locator('p').first().click()
     }
     await page.keyboard.type(titles[i])
-    await expect(listItems.nth(i)).toContainText(titles[i])
+    await expect(listItems.nth(i)).toContainText(titles[i], { timeout: SHORT_TIMEOUT })
   }
 }
 
@@ -93,18 +96,28 @@ test('slash tagging and tag filters support include/exclude with persistence', a
 
   // Tag task 2 with #urgent via slash
   await placeCaretAtTaskEnd(page, 1)
-  await page.keyboard.type('/#urgent')
+  await page.keyboard.type('/')
+  const slashMenu = page.locator('.slash-menu')
+  await expect(slashMenu).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await page.keyboard.type('#urgent')
+  const urgentOption = slashMenu.locator('button', { hasText: 'Add tag #urgent' }).first()
+  await expect(urgentOption).toBeVisible({ timeout: SHORT_TIMEOUT })
   await page.keyboard.press('Enter')
-  await expect.poll(async () => await page.locator('li.li-node').nth(1).getAttribute('data-tags-self'), {
-    timeout: 10000
+  const outlineItems = page.locator('.tiptap.ProseMirror li.li-node')
+  await expect.poll(async () => await outlineItems.nth(1).getAttribute('data-tags-self'), {
+    timeout: SHORT_TIMEOUT
   }).toBe('urgent')
 
   // Tag task 3 with #later via slash
   await placeCaretAtTaskEnd(page, 2)
-  await page.keyboard.type('/#later')
+  await page.keyboard.type('/')
+  await expect(page.locator('.slash-menu')).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await page.keyboard.type('#later')
+  const laterOption = page.locator('.slash-menu button', { hasText: 'Add tag #later' }).first()
+  await expect(laterOption).toBeVisible({ timeout: SHORT_TIMEOUT })
   await page.keyboard.press('Enter')
-  await expect.poll(async () => await page.locator('li.li-node').nth(2).getAttribute('data-tags-self'), {
-    timeout: 10000
+  await expect.poll(async () => await outlineItems.nth(2).getAttribute('data-tags-self'), {
+    timeout: SHORT_TIMEOUT
   }).toBe('later')
 
   // Ensure tags persisted to API
@@ -129,55 +142,56 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await includeInput.fill('#urgent')
   await includeInput.press('Enter')
   const includeChip = page.locator('.tag-filter.include .tag-chip', { hasText: '#urgent' })
-  await expect(includeChip).toBeVisible()
+  await expect(includeChip).toBeVisible({ timeout: SHORT_TIMEOUT })
 
-  const task1 = page.locator('li.li-node', { hasText: 'Task 1 root' })
-  const task2 = page.locator('li.li-node', { hasText: 'Task 2 urgent' })
-  const task3 = page.locator('li.li-node', { hasText: 'Task 3 later' })
+  const task1 = outlineItems.filter({ hasText: 'Task 1 root' }).first()
+  const task2 = outlineItems.filter({ hasText: 'Task 2 urgent' }).first()
+  const task3 = outlineItems.filter({ hasText: 'Task 3 later' }).first()
 
-  await expect(task2).toBeVisible()
-  await expect(task1).toBeHidden()
-  await expect(task3).toBeHidden()
+  await expect(task2).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(task1).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(task3).toBeHidden({ timeout: SHORT_TIMEOUT })
 
   // Remove include chip by clicking it
   await includeChip.click()
-  await expect(includeChip).toHaveCount(0)
+  await expect(includeChip).toHaveCount(0, { timeout: SHORT_TIMEOUT })
 
   // Apply exclude filter for #later
   await excludeInput.fill('#later')
   await excludeInput.press('Enter')
   const excludeChip = page.locator('.tag-filter.exclude .tag-chip', { hasText: '#later' })
-  await expect(excludeChip).toBeVisible()
-  await expect(task3).toBeHidden()
-  await expect(task1).toBeVisible()
-  await expect(task2).toBeVisible()
+  await expect(excludeChip).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(task3).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(task1).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(task2).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   // Add include filter again so both are active
   await includeInput.fill('#urgent')
   await includeInput.press('Enter')
-  await expect(includeChip).toBeVisible()
-  await expect(clearButton).toBeVisible()
+  await expect(includeChip).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(clearButton).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   // Reload to confirm persistence
   await page.reload()
   await waitForEditorReady(page)
-  await expect(page.locator('.tag-filter.include .tag-chip', { hasText: '#urgent' })).toBeVisible()
-  await expect(page.locator('.tag-filter.exclude .tag-chip', { hasText: '#later' })).toBeVisible()
+  await expect(page.locator('.tag-filter.include .tag-chip', { hasText: '#urgent' })).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(page.locator('.tag-filter.exclude .tag-chip', { hasText: '#later' })).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   // Filters should remain in effect after reload
-  const task1Reloaded = page.locator('li.li-node', { hasText: 'Task 1 root' })
-  const task2Reloaded = page.locator('li.li-node', { hasText: 'Task 2 urgent' })
-  const task3Reloaded = page.locator('li.li-node', { hasText: 'Task 3 later' })
-  await expect(task2Reloaded).toBeVisible()
-  await expect(task1Reloaded).toBeHidden()
-  await expect(task3Reloaded).toBeHidden()
+  const reloadedItems = page.locator('.tiptap.ProseMirror li.li-node')
+  const task1Reloaded = reloadedItems.filter({ hasText: 'Task 1 root' }).first()
+  const task2Reloaded = reloadedItems.filter({ hasText: 'Task 2 urgent' }).first()
+  const task3Reloaded = reloadedItems.filter({ hasText: 'Task 3 later' }).first()
+  await expect(task2Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(task1Reloaded).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(task3Reloaded).toBeHidden({ timeout: SHORT_TIMEOUT })
 
   // Clear filters
   await page.locator('.tag-filter-group .btn.ghost', { hasText: 'Clear' }).click()
-  await expect(page.locator('.tag-filter .tag-chip')).toHaveCount(0)
-  await expect(task1Reloaded).toBeVisible()
-  await expect(task2Reloaded).toBeVisible()
-  await expect(task3Reloaded).toBeVisible()
+  await expect(page.locator('.tag-filter .tag-chip')).toHaveCount(0, { timeout: SHORT_TIMEOUT })
+  await expect(task1Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(task2Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(task3Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
 })
 
 test('excluding a tag hides matching child but keeps parent visible', async ({ page, request }) => {
@@ -217,17 +231,18 @@ test('excluding a tag hides matching child but keeps parent visible', async ({ p
   await page.goto('/')
   await waitForEditorReady(page)
 
-  const parent = page.locator('li.li-node[data-body-text="Parent without tag"]').first()
-  const child = page.locator('li.li-node[data-body-text="Child secret #secret"]').first()
-  await expect(parent).toBeVisible()
-  await expect(child).toBeVisible()
+  const outline = page.locator('.tiptap.ProseMirror')
+  const parent = outline.locator('li.li-node[data-body-text="Parent without tag"]').first()
+  const child = outline.locator('li.li-node[data-body-text="Child secret #secret"]').first()
+  await expect(parent).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(child).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const excludeInput = page.locator('.tag-filter-group .tag-filter.exclude .tag-input')
   await excludeInput.fill('#secret')
   await excludeInput.press('Enter')
 
-  await expect(page.locator('.tag-filter.exclude .tag-chip', { hasText: '#secret' })).toBeVisible()
-  await expect(child).toBeHidden()
-  await expect(parent, 'parent should remain visible when only child matches excluded tag').toBeVisible()
-  await expect.poll(async () => await parent.getAttribute('data-tag-exclude'), { timeout: 5000 }).toBe('0')
+  await expect(page.locator('.tag-filter.exclude .tag-chip', { hasText: '#secret' })).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(child).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(parent, 'parent should remain visible when only child matches excluded tag').toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect.poll(async () => await parent.getAttribute('data-tag-exclude'), { timeout: SHORT_TIMEOUT }).toBe('0')
 })

@@ -5,6 +5,7 @@ const path = require('path')
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
 const TEST_IMAGE = path.join(__dirname, '..', 'assets', 'test-image.png')
+const SHORT_TIMEOUT = 1000
 
 async function resetOutline(request) {
   const response = await request.post(`${API_URL}/api/outline`, {
@@ -52,7 +53,7 @@ async function createThreeTasks(page, request) {
     return text?.includes('Loading…') ? 'loading' : 'ready'
   }, { timeout: 10000 }).not.toBe('loading')
   const listItems = page.locator('li.li-node')
-  await expect(listItems.first()).toBeVisible()
+  await expect(listItems.first()).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const firstParagraph = listItems.first().locator('p').first()
   await firstParagraph.click()
@@ -66,19 +67,21 @@ async function createThreeTasks(page, request) {
     selection.addRange(range)
   })
   await page.keyboard.type('task 1')
-  await expect(listItems.nth(0)).toContainText('task 1')
+  await expect(listItems.nth(0)).toContainText('task 1', { timeout: SHORT_TIMEOUT })
 
   await page.keyboard.press('Enter')
-  await expect(listItems).toHaveCount(2)
+  await expect(listItems).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await listItems.nth(1).locator('p').first().click()
 
   await page.keyboard.type('task 2')
-  await expect(listItems.nth(1)).toContainText('task 2')
+  await expect(listItems.nth(1)).toContainText('task 2', { timeout: SHORT_TIMEOUT })
 
   await page.keyboard.press('Enter')
-  await expect(listItems).toHaveCount(3)
+  await expect(listItems).toHaveCount(3, { timeout: SHORT_TIMEOUT })
+  await listItems.nth(2).locator('p').first().click()
 
   await page.keyboard.type('task 3')
-  await expect(listItems.nth(2)).toContainText('task 3')
+  await expect(listItems.nth(2)).toContainText('task 3', { timeout: SHORT_TIMEOUT })
 }
 
 async function placeCaretAtTaskEnd(page, index) {
@@ -122,9 +125,9 @@ test('create task 1, task 2, and task 3', async ({ page, request }) => {
   await createThreeTasks(page, request)
 
   const items = page.locator('li.li-node')
-  await expect(items.nth(0)).toContainText('task 1')
-  await expect(items.nth(1)).toContainText('task 2')
-  await expect(items.nth(2)).toContainText('task 3')
+  await expect(items.nth(0)).toContainText('task 1', { timeout: SHORT_TIMEOUT })
+  await expect(items.nth(1)).toContainText('task 2', { timeout: SHORT_TIMEOUT })
+  await expect(items.nth(2)).toContainText('task 3', { timeout: SHORT_TIMEOUT })
 
   await expectOutlineTitles(request, ['task 1', 'task 2', 'task 3'])
 })
@@ -203,8 +206,9 @@ test('insert today date inline via slash command', async ({ page, request }) => 
   await expect(page.locator('.slash-menu')).toBeVisible()
   await page.locator('.slash-menu button', { hasText: 'Date worked on (today)' }).click()
 
-  const today = new Date().toISOString().slice(0, 10)
-  await expect(secondItem).toContainText(`@${today}`)
-  await expect(page.locator('li.li-node').nth(2)).not.toContainText(`@${today}`)
-  await expect(page.locator('li.li-node')).toHaveCount(3)
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  await expect(secondItem).toContainText(`@${today}`, { timeout: SHORT_TIMEOUT })
+  await expect(page.locator('li.li-node').nth(2)).not.toContainText(`@${today}`, { timeout: SHORT_TIMEOUT })
+  await expect(page.locator('li.li-node')).toHaveCount(3, { timeout: SHORT_TIMEOUT })
 })

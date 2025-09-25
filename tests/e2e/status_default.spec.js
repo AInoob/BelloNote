@@ -1,6 +1,7 @@
 const { test, expect } = require('./test-base')
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4100'
+const SHORT_TIMEOUT = 1000
 
 async function resetOutline(request) {
   const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
@@ -14,7 +15,7 @@ async function openOutline(page) {
     const text = await editor.evaluate(el => el.textContent || '')
     return text.includes('Loading…') ? 'loading' : 'ready'
   }).toBe('ready')
-  await expect(page.locator('li.li-node').first()).toBeVisible()
+  await expect(page.locator('li.li-node').first()).toBeVisible({ timeout: SHORT_TIMEOUT })
 }
 
 async function typeIntoFirstItem(page, text) {
@@ -41,20 +42,24 @@ test('Enter creates a new item with status todo even if previous is done', async
   await statusBtn.click() // empty -> todo
   await statusBtn.click() // todo -> in-progress
   await statusBtn.click() // in-progress -> done
-  await expect(firstLi).toHaveAttribute('data-status', 'done')
+  await expect(firstLi).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
 
   // Press Enter to create next item
   await page.keyboard.press('Enter')
 
   const items = page.locator('li.li-node')
-  await expect(items).toHaveCount(2)
-  await expect(items.nth(1)).toHaveAttribute('data-status', '')
+  await expect(items).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect(items.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
 })
 
 async function createParentWithChild(page, { parentTitle = 'Parent', childTitle = 'Child A' } = {}) {
   await typeIntoFirstItem(page, parentTitle)
+  const items = page.locator('li.li-node')
   await page.keyboard.press('Enter')
+  await expect(items).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await items.nth(1).locator('p').first().click()
   await page.keyboard.type(childTitle)
+  await expect(items.nth(1)).toContainText(childTitle, { timeout: SHORT_TIMEOUT })
   await page.keyboard.press('Tab')
 }
 
@@ -94,8 +99,8 @@ test('Enter at end of child inserts next sibling child with empty status', async
 
   const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
   const children = parentLi.locator('li.li-node')
-  await expect(children).toHaveCount(2)
-  await expect(children.nth(1)).toHaveAttribute('data-status', '')
+  await expect(children).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect(children.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
 })
 
 test('Enter at beginning of child inserts preceding child sibling', async ({ page }) => {
@@ -108,8 +113,8 @@ test('Enter at beginning of child inserts preceding child sibling', async ({ pag
 
   const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
   const children = parentLi.locator('li.li-node')
-  await expect(children).toHaveCount(2)
-  await expect(children.first()).toHaveAttribute('data-status', '')
+  await expect(children).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect(children.first()).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
 })
 
 async function findRootIndexes(page) {
@@ -137,16 +142,18 @@ test('Enter at end of parent creates new parent sibling and keeps child with ori
     return rootIndexes.length
   }).toBe(2)
 
+  const allNodes = page.locator('li.li-node')
+  const secondRoot = allNodes.nth(rootIndexes[1])
+  await secondRoot.locator('p').first().click()
+
   const debugDoc = await page.evaluate(() => window.__WORKLOG_EDITOR?.getJSON?.())
   console.log('doc after enter (expanded)', JSON.stringify(debugDoc, null, 2))
 
-  const allNodes = page.locator('li.li-node')
   const firstRoot = allNodes.nth(rootIndexes[0])
-  await expect(firstRoot.locator('li.li-node')).toHaveCount(1)
-  await expect(firstRoot.locator('li.li-node').first()).toContainText('Child A')
+  await expect(firstRoot.locator('li.li-node')).toHaveCount(1, { timeout: SHORT_TIMEOUT })
+  await expect(firstRoot.locator('li.li-node').first()).toContainText('Child A', { timeout: SHORT_TIMEOUT })
 
-  const secondRoot = allNodes.nth(rootIndexes[1])
-  await expect(secondRoot).toHaveAttribute('data-status', '')
+  await expect(secondRoot).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
   await expect(secondRoot.locator('li.li-node')).toHaveCount(0)
 })
 
@@ -154,12 +161,12 @@ test('Enter at end of collapsed parent keeps children under original task', asyn
   await openOutline(page)
   await createParentWithChild(page, { parentTitle: 'Parent Collapsed', childTitle: 'Child 1' })
 
-  await expect(page.locator('li.li-node p', { hasText: 'Parent Collapsed' }).first()).toBeVisible()
+  await expect(page.locator('li.li-node p', { hasText: 'Parent Collapsed' }).first()).toBeVisible({ timeout: SHORT_TIMEOUT })
   await setSelectionToParagraph(page, 'Parent Collapsed', { position: 'end' })
 
   const parent = page.locator('li.li-node', { hasText: 'Parent Collapsed' }).first()
   await parent.locator('.caret.drag-toggle').first().click()
-  await expect(parent).toHaveClass(/collapsed/)
+  await expect(parent).toHaveClass(/collapsed/, { timeout: SHORT_TIMEOUT })
 
   await setSelectionToParagraph(page, 'Parent Collapsed', { position: 'end' })
   await parent.locator('p').first().click()
@@ -205,17 +212,20 @@ test('Enter at end of collapsed parent keeps children under original task', asyn
       return (top.content || []).length
     })
     return rootCount
-  }, { timeout: 5000 }).toBe(2)
+  }, { timeout: SHORT_TIMEOUT }).toBe(2)
+  const rootNodes = await findRootIndexes(page)
+  const newRoot = page.locator('li.li-node').nth(rootNodes[1])
+  await newRoot.locator('p').first().click()
   await page.keyboard.type('Parent Sibling')
 
   const sibling = page.locator('li.li-node', { hasText: 'Parent Sibling' }).first()
-  await expect(sibling).toBeVisible()
+  await expect(sibling).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   // Expand original parent and ensure the child remains attached
   await parent.locator('.caret.drag-toggle').first().click()
   const parentChildren = parent.locator('li.li-node')
-  await expect(parentChildren).toHaveCount(1)
-  await expect(parentChildren.first()).toContainText('Child 1')
+  await expect(parentChildren).toHaveCount(1, { timeout: SHORT_TIMEOUT })
+  await expect(parentChildren.first()).toContainText('Child 1', { timeout: SHORT_TIMEOUT })
   await expect(sibling.locator('li.li-node')).toHaveCount(0)
 })
 
@@ -226,16 +236,18 @@ test('Enter on empty task creates a new task and focuses it', async ({ page }) =
   await page.keyboard.press('Enter')
 
   const itemsAfterFirstEnter = page.locator('li.li-node')
-  await expect(itemsAfterFirstEnter).toHaveCount(2)
-  await expect(itemsAfterFirstEnter.first()).toContainText('Task 1')
-  await expect(itemsAfterFirstEnter.nth(1)).toHaveAttribute('data-status', '')
+  await expect(itemsAfterFirstEnter).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect(itemsAfterFirstEnter.first()).toContainText('Task 1', { timeout: SHORT_TIMEOUT })
+  await expect(itemsAfterFirstEnter.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
 
   await page.keyboard.press('Enter')
 
   const items = page.locator('li.li-node')
-  await expect(items).toHaveCount(3)
-  await expect(items.first()).toContainText('Task 1')
+  await expect(items).toHaveCount(3, { timeout: SHORT_TIMEOUT })
+  await expect(items.first()).toContainText('Task 1', { timeout: SHORT_TIMEOUT })
 
+  const newItem = items.nth(2)
+  await newItem.locator('p').first().click()
   await page.keyboard.type('Task 2')
-  await expect(items.nth(2)).toContainText('Task 2')
+  await expect(newItem).toContainText('Task 2', { timeout: SHORT_TIMEOUT })
 })

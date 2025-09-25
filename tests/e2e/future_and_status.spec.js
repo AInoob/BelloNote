@@ -3,6 +3,7 @@ const { test, expect } = require('./test-base')
 test.describe.configure({ mode: 'serial' })
 
 const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+const SHORT_TIMEOUT = 1000
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -81,22 +82,23 @@ test('future tag inheritance and filter toggle', async ({ page, request }) => {
   await page.goto('/')
 
   // Find the two items by text
-  const parentLi = page.locator('li.li-node', { hasText: 'parent @future' })
+  const editor = page.locator('.tiptap.ProseMirror').first()
+  const parentLi = editor.locator('li.li-node', { hasText: 'parent @future' }).first()
   const childLi = parentLi.locator(':scope li.li-node').first()
-  await expect(parentLi).toBeVisible()
-  await expect(childLi).toBeVisible()
+  await expect(parentLi).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(childLi).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   // Sanity: Future toggle should exist and default to Shown
 
   // Toggle Future: Hidden
-  const futureToggle = page.locator('.status-filter-bar .future-toggle .btn.pill')
-  await expect(futureToggle).toHaveClass(/active/)
+  const futureToggle = page.locator('.status-filter-bar:not([data-timeline-filter]) .future-toggle .btn.pill').first()
+  await expect(futureToggle).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
   await futureToggle.click()
-  await expect(futureToggle).not.toHaveClass(/active/)
+  await expect(futureToggle).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
 
   // When hidden, items with data-future=1 should not be visible
-  await expect(parentLi).toBeHidden()
-  await expect(childLi).toBeHidden()
+  await expect(parentLi).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(childLi).toBeHidden({ timeout: SHORT_TIMEOUT })
 })
 
 // 2) Status color should not bleed from parent to child
@@ -110,12 +112,13 @@ test('status color does not bleed to child', async ({ page, request }) => {
   expect(setRes.ok(), 'outline set should succeed').toBeTruthy()
 
   await page.goto('/')
-  await page.waitForSelector('.status-chip.inline')
+  const outlineEditor = page.locator('.tiptap.ProseMirror').first()
+  await expect(outlineEditor).toBeVisible({ timeout: SHORT_TIMEOUT })
 
-  const parentLi = page.locator('li.li-node', { hasText: 'parent in progress' }).first()
-  await expect(parentLi).toBeVisible()
+  const parentLi = outlineEditor.locator('li.li-node', { hasText: 'parent in progress' }).first()
+  await expect(parentLi).toBeVisible({ timeout: SHORT_TIMEOUT })
   const childLi = parentLi.locator(':scope li.li-node').filter({ hasText: 'child todo' }).first()
-  await expect(childLi).toBeVisible()
+  await expect(childLi).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const childChipLocator = childLi.locator('> .li-row .status-chip.inline').first()
   const childBg = await childChipLocator.evaluate(el => getComputedStyle(el).backgroundColor)

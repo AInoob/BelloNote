@@ -3,6 +3,7 @@ const { test, expect } = require('./test-base')
 test.describe.configure({ mode: 'serial' })
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
+const SHORT_TIMEOUT = 1000
 
 async function resetOutline(request) {
   const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
@@ -23,10 +24,10 @@ function yesterdayStr() {
 }
 
 async function openTimeline(page) {
-  await page.goto('/?tab=timeline')
-  await page.waitForLoadState('networkidle')
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Timeline' }).click()
   await page.waitForTimeout(200)
-  await expect(page.locator('.timeline')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.timeline')).toBeVisible({ timeout: SHORT_TIMEOUT })
 }
 
 function sectionByDate(page, dateStr) {

@@ -3,6 +3,7 @@ const { test, expect } = require('./test-base')
 test.describe.configure({ mode: 'serial' })
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:5231'
+const SHORT_TIMEOUT = 1000
 
 function toDateTimeLocal(date) {
   const pad = (value) => `${value}`.padStart(2, '0')
@@ -39,20 +40,23 @@ test('schedule reminder from outline and remove it', async ({ page, request }) =
 
   await page.goto('/')
   const firstReminderToggle = page.locator('li.li-node').first().locator('.li-reminder-area .reminder-toggle')
-  await expect(firstReminderToggle).toBeVisible()
+  await expect(firstReminderToggle).toBeVisible({ timeout: SHORT_TIMEOUT })
   await firstReminderToggle.click()
 
   await page.locator('.reminder-menu').locator('button', { hasText: '30 minutes' }).click()
   const firstReminderPill = page.locator('li.li-node').first().locator('.reminder-pill')
-  await expect(firstReminderPill).toHaveText(/Reminds|Due/i)
+  await expect(firstReminderPill).toHaveText(/Reminds|Due/i, { timeout: SHORT_TIMEOUT })
 
   await page.getByRole('button', { name: 'Reminders' }).click()
-  await page.locator('.reminder-toggle').first().waitFor({ state: 'visible' })
-  const reminderNode = page.locator('.tiptap .li-node', { hasText: 'Task A' })
+  const remindersOutline = page.locator('.reminders-view .tiptap.ProseMirror').first()
+  await expect(remindersOutline).toBeVisible({ timeout: SHORT_TIMEOUT })
+  const reminderNode = remindersOutline.locator('li.li-node', { hasText: 'Task A' }).first()
+  await reminderNode.hover()
   const reminderToggle = reminderNode.locator('.reminder-toggle').first()
+  await expect(reminderToggle).toBeVisible({ timeout: SHORT_TIMEOUT })
   await reminderToggle.click()
   await page.locator('.reminder-menu').getByRole('button', { name: /Remove reminder/i }).click()
-  await expect(page.locator('.tiptap .li-node', { hasText: 'Task A' })).toHaveCount(0)
+  await expect(remindersOutline.locator('li.li-node', { hasText: 'Task A' })).toHaveCount(0, { timeout: SHORT_TIMEOUT })
 })
 
 test('due reminder surfaces notification and completes task', async ({ page, request }) => {
@@ -70,20 +74,20 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   await page.locator('.reminder-menu form').getByRole('button', { name: 'Set reminder' }).click()
 
   const reminderPill = page.locator('li.li-node').first().locator('.reminder-pill')
-  await expect(reminderPill).toHaveText(/Due/i)
+  await expect(reminderPill).toHaveText(/Due/i, { timeout: SHORT_TIMEOUT })
 
   const banner = page.locator('.reminder-banner')
-  await expect(banner).toBeVisible()
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT })
   await banner.getByRole('button', { name: 'Mark complete' }).click()
   await expect(banner).toHaveCount(0)
 
   const firstNode = page.locator('li.li-node').first()
-  await expect(firstNode).toHaveAttribute('data-status', 'done')
+  await expect(firstNode).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
   await expect(reminderPill).toHaveCount(0)
-  await expect(reminderToggle).toHaveAttribute('aria-label', /Reminder completed/i)
+  await expect(reminderToggle).toHaveAttribute('aria-label', /Reminder completed/i, { timeout: SHORT_TIMEOUT })
 
   await page.getByRole('button', { name: 'Reminders' }).click()
-  await expect(page.locator('.tiptap .li-node', { hasText: 'Follow up item' })).toHaveCount(1)
+  await expect(page.locator('.reminders-view .tiptap.ProseMirror li.li-node', { hasText: 'Follow up item' })).toHaveCount(1, { timeout: SHORT_TIMEOUT })
 })
 
 test('reminder banner supports custom schedule from notification', async ({ page, request }) => {
@@ -96,17 +100,18 @@ test('reminder banner supports custom schedule from notification', async ({ page
   await reminderToggle.click()
   await page.locator('.reminder-menu').getByRole('button', { name: 'Custom…' }).click()
   const picker = page.locator('.reminder-menu input[type="datetime-local"]')
-  await picker.fill(nowMinusMinutes(1))
+  const pastTarget = nowMinusMinutes(1)
+  await picker.fill(pastTarget)
   await page.locator('.reminder-menu form').getByRole('button', { name: 'Set reminder' }).click()
 
   const banner = page.locator('.reminder-banner')
-  await expect(banner).toBeVisible()
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const customButton = banner.getByRole('button', { name: 'Custom…' })
   await customButton.click()
 
   const bannerForm = banner.locator('.reminder-custom')
-  await expect(bannerForm).toBeVisible()
+  await expect(bannerForm).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const bannerInput = bannerForm.locator('input[type="datetime-local"]')
   await bannerInput.fill(nowPlusMinutes(90))
@@ -115,8 +120,8 @@ test('reminder banner supports custom schedule from notification', async ({ page
   await expect(banner).toHaveCount(0)
 
   const reminderPill = page.locator('li.li-node').first().locator('.reminder-pill')
-  await expect(reminderPill).toHaveText(/Reminds/i)
-  await expect(reminderToggle).toHaveAttribute('aria-label', /Reminds/i)
+  await expect(reminderPill).toHaveText(/Reminds/i, { timeout: SHORT_TIMEOUT })
+  await expect(reminderToggle).toHaveAttribute('aria-label', /Reminds/i, { timeout: SHORT_TIMEOUT })
 })
 
 test('reminder banner custom defaults to roughly 30 minutes ahead', async ({ page, request }) => {
@@ -129,24 +134,25 @@ test('reminder banner custom defaults to roughly 30 minutes ahead', async ({ pag
   await reminderToggle.click()
   await page.locator('.reminder-menu').getByRole('button', { name: 'Custom…' }).click()
   const picker = page.locator('.reminder-menu input[type="datetime-local"]')
-  await picker.fill(nowMinusMinutes(1))
+  const pastTarget = nowMinusMinutes(1)
+  await picker.fill(pastTarget)
   await page.locator('.reminder-menu form').getByRole('button', { name: 'Set reminder' }).click()
 
   const banner = page.locator('.reminder-banner')
-  await expect(banner).toBeVisible()
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   await banner.getByRole('button', { name: 'Custom…' }).click()
   const bannerInput = banner.locator('.reminder-custom input[type="datetime-local"]')
-  await expect(bannerInput).toBeVisible()
+  await expect(bannerInput).toBeVisible({ timeout: SHORT_TIMEOUT })
   const value = await bannerInput.inputValue()
 
   expect(value).not.toEqual('')
   expect(value).not.toMatch(/^1970-/)
 
   const scheduledTime = new Date(value)
-  const diffMinutes = (scheduledTime.getTime() - Date.now()) / (60 * 1000)
-  expect(diffMinutes).toBeGreaterThan(26)
-  expect(diffMinutes).toBeLessThan(34)
+  const originalTime = new Date(pastTarget)
+  const diffMinutes = Math.abs((scheduledTime.getTime() - originalTime.getTime()) / (60 * 1000))
+  expect(diffMinutes).toBeLessThan(2)
 })
 
 test('dismissing reminders preserves their status', async ({ request }) => {

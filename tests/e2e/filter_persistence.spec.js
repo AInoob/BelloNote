@@ -3,6 +3,7 @@ const { test, expect } = require('./test-base')
 test.describe.configure({ mode: 'serial' })
 
 const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+const SHORT_TIMEOUT = 1000
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -43,20 +44,23 @@ test('filters persist across navigation and reload', async ({ page, request }) =
   await page.goto('/')
 
   // Wait for filter bar
-  await page.waitForSelector('.status-filter-bar')
+  const filterBar = page.locator('.status-filter-bar:not([data-timeline-filter])').first()
+  await expect(filterBar).toBeVisible({ timeout: SHORT_TIMEOUT })
 
-  const todoBtn = page.locator('.status-filter-bar .btn.pill[data-status="todo"]').first()
-  const ipBtn = page.locator('.status-filter-bar .btn.pill[data-status="in-progress"]').first()
-  const doneBtn = page.locator('.status-filter-bar .btn.pill[data-status="done"]').first()
-  const archivedToggle = page.locator('.status-filter-bar .archive-toggle .btn.pill').first()
-  const futureToggle = page.locator('.status-filter-bar .future-toggle .btn.pill').first()
+  const todoBtn = filterBar.locator('.btn.pill[data-status="todo"]').first()
+  const ipBtn = filterBar.locator('.btn.pill[data-status="in-progress"]').first()
+  const doneBtn = filterBar.locator('.btn.pill[data-status="done"]').first()
+  const archivedToggle = filterBar.locator('.archive-toggle .btn.pill').first()
+  const futureToggle = filterBar.locator('.future-toggle .btn.pill').first()
+
+  const outlineEditor = page.locator('.tiptap.ProseMirror').first()
 
   // Initial sanity: all status filters and toggles should be active (Shown)
-  await expect(todoBtn).toHaveClass(/active/)
-  await expect(ipBtn).toHaveClass(/active/)
-  await expect(doneBtn).toHaveClass(/active/)
-  await expect(archivedToggle).toHaveClass(/active/)
-  await expect(futureToggle).toHaveClass(/active/)
+  await expect(todoBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(ipBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(doneBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(archivedToggle).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(futureToggle).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
 
   // Adjust filters: keep only todo; hide archived and future
   await ipBtn.click()
@@ -64,54 +68,53 @@ test('filters persist across navigation and reload', async ({ page, request }) =
   await archivedToggle.click()
   await futureToggle.click()
 
-  await expect(todoBtn).toHaveClass(/active/)
-  await expect(ipBtn).not.toHaveClass(/active/)
-  await expect(doneBtn).not.toHaveClass(/active/)
-  await expect(archivedToggle).not.toHaveClass(/active/)
-  await expect(futureToggle).not.toHaveClass(/active/)
+  await expect(todoBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(ipBtn).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(doneBtn).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(archivedToggle).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(futureToggle).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
 
   // Visibility should reflect filters
-  const itemA = page.locator('li.li-node', { hasText: 'A todo' })
-  const itemB = page.locator('li.li-node', { hasText: 'B in progress' })
-  const itemC = page.locator('li.li-node', { hasText: 'C done' })
+  const itemA = outlineEditor.locator('li.li-node', { hasText: 'A todo' })
+  const itemB = outlineEditor.locator('li.li-node', { hasText: 'B in progress' })
+  const itemC = outlineEditor.locator('li.li-node', { hasText: 'C done' })
   // Confirm storage after toggles
   const storedBeforeNav = await page.evaluate(() => localStorage.getItem('worklog.filter.status'))
   // Expect JSON with in-progress=false, done=false, todo=true
   expect(storedBeforeNav && storedBeforeNav.includes('"in-progress":false')).toBeTruthy()
 
-  const itemD = page.locator('li.li-node', { hasText: 'D archived' })
-  const itemE = page.locator('li.li-node', { hasText: 'E future' })
-  await expect(itemA).toBeVisible()
-  await expect(itemB).toBeHidden()
-  await expect(itemC).toBeHidden()
-  await expect(itemD).toBeHidden()
-  await expect(itemE).toBeHidden()
+  const itemD = outlineEditor.locator('li.li-node', { hasText: 'D archived' })
+  const itemE = outlineEditor.locator('li.li-node', { hasText: 'E future' })
+  await expect(itemA).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(itemB).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(itemC).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(itemD).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(itemE).toBeHidden({ timeout: SHORT_TIMEOUT })
 
   // Go to Timeline and back to Outline
   await page.getByRole('button', { name: 'Timeline' }).click()
   await page.getByRole('button', { name: 'Outline' }).click()
 
   // Filters should persist
-  await expect(todoBtn).toHaveClass(/active/)
-  await expect(ipBtn).not.toHaveClass(/active/)
-  await expect(doneBtn).not.toHaveClass(/active/)
-  await expect(archivedToggle).not.toHaveClass(/active/)
-  await expect(futureToggle).not.toHaveClass(/active/)
+  await expect(todoBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(ipBtn).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(doneBtn).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(archivedToggle).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(futureToggle).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
 
   // Reload and verify again
   await page.reload()
-  await page.waitForSelector('.status-filter-bar')
-  await expect(todoBtn).toHaveClass(/active/)
-  await expect(ipBtn).not.toHaveClass(/active/)
-  await expect(doneBtn).not.toHaveClass(/active/)
-  await expect(archivedToggle).not.toHaveClass(/active/)
-  await expect(futureToggle).not.toHaveClass(/active/)
+  await expect(filterBar).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(todoBtn).toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(ipBtn).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(doneBtn).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(archivedToggle).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
+  await expect(futureToggle).not.toHaveClass(/active/, { timeout: SHORT_TIMEOUT })
 
   // And visibility still matches
-  await expect(itemA).toBeVisible()
-  await expect(itemB).toBeHidden()
-  await expect(itemC).toBeHidden()
-  await expect(itemD).toBeHidden()
-  await expect(itemE).toBeHidden()
+  await expect(itemA).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(itemB).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(itemC).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(itemD).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expect(itemE).toBeHidden({ timeout: SHORT_TIMEOUT })
 })
-

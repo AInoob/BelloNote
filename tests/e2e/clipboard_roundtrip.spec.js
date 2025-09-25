@@ -5,6 +5,7 @@ test.describe.configure({ mode: 'serial' })
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
 const TEST_IMAGE = path.join(__dirname, '..', 'assets', 'test-image.png')
+const SHORT_TIMEOUT = 1000
 
 async function resetOutline(request) {
   const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
@@ -79,8 +80,8 @@ test('select-all copy -> delete -> paste preserves outline structure/content', a
 
   const editor = page.locator('.tiptap.ProseMirror')
   await editor.click()
-  const saveIndicator = page.locator('.save-indicator')
-  await expect(saveIndicator).toHaveText('Saved')
+  const saveIndicator = page.locator('.save-indicator').first()
+  await expect(saveIndicator).toHaveText('Saved', { timeout: SHORT_TIMEOUT })
 
   // Pre-state assertions
   await expect(page.locator('li.li-node')).toHaveCount(4) // task1, task2, sub a, task3
@@ -93,11 +94,11 @@ test('select-all copy -> delete -> paste preserves outline structure/content', a
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a')
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c')
   await page.keyboard.press('Backspace')
-  await expect(saveIndicator).toHaveText(/Unsaved changes|Saving…/)
+  await expect(saveIndicator).toHaveText(/Unsaved changes|Saving…/, { timeout: SHORT_TIMEOUT })
   // Immediately paste back from clipboard
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v')
-  await expect(saveIndicator).toHaveText(/Unsaved changes|Saving…/)
-  await expect(saveIndicator).toHaveText('Saved')
+  await expect(saveIndicator).toHaveText(/Unsaved changes|Saving…/, { timeout: SHORT_TIMEOUT })
+  await expect(saveIndicator).toHaveText('Saved', { timeout: SHORT_TIMEOUT })
 
   // Post-state assertions (DOM)
   await expect(page.locator('li.li-node')).toHaveCount(4)
