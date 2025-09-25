@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4100'
 
@@ -127,7 +127,7 @@ async function findRootIndexes(page) {
   })
 }
 
-test('Enter at end of parent creates new parent sibling and moves child under it', async ({ page }) => {
+test('Enter at end of parent creates new parent sibling and keeps child with original', async ({ page }) => {
   await openOutline(page)
   await createParentWithChild(page, { parentTitle: 'Parent A', childTitle: 'Child A' })
 
@@ -141,15 +141,84 @@ test('Enter at end of parent creates new parent sibling and moves child under it
     return rootIndexes.length
   }).toBe(2)
 
+  const debugDoc = await page.evaluate(() => window.__WORKLOG_EDITOR?.getJSON?.())
+  console.log('doc after enter (expanded)', JSON.stringify(debugDoc, null, 2))
+
   const allNodes = page.locator('li.li-node')
   const firstRoot = allNodes.nth(rootIndexes[0])
-  await expect(firstRoot.locator('li.li-node')).toHaveCount(0)
+  await expect(firstRoot.locator('li.li-node')).toHaveCount(1)
+  await expect(firstRoot.locator('li.li-node').first()).toContainText('Child A')
 
   const secondRoot = allNodes.nth(rootIndexes[1])
   await expect(secondRoot).toHaveAttribute('data-status', '')
+  await expect(secondRoot.locator('li.li-node')).toHaveCount(0)
+})
 
-  const secondRootChildren = secondRoot.locator('li.li-node')
-  await expect(secondRootChildren).toHaveCount(1)
-  await expect(secondRootChildren.first()).toContainText('Child A')
-  await expect(secondRootChildren.first()).toHaveAttribute('data-status', '')
+test('Enter at end of collapsed parent keeps children under original task', async ({ page }) => {
+  await openOutline(page)
+  await createParentWithChild(page, { parentTitle: 'Parent Collapsed', childTitle: 'Child 1' })
+
+  await expect(page.locator('li.li-node p', { hasText: 'Parent Collapsed' }).first()).toBeVisible()
+  await setSelectionToParagraph(page, 'Parent Collapsed', { position: 'end' })
+
+  const parent = page.locator('li.li-node', { hasText: 'Parent Collapsed' }).first()
+  await parent.locator('.caret.drag-toggle').first().click()
+  await expect(parent).toHaveClass(/collapsed/)
+
+  await setSelectionToParagraph(page, 'Parent Collapsed', { position: 'end' })
+  await parent.locator('p').first().click()
+
+  const collapsedAttr = await page.evaluate(() => {
+    const editor = window.__WORKLOG_EDITOR
+    if (!editor) return null
+    const { $from } = editor.view.state.selection
+    for (let depth = $from.depth; depth >= 0; depth -= 1) {
+      const node = $from.node(depth)
+      if (node?.type?.name === 'listItem') {
+        return node.attrs?.collapsed ?? null
+      }
+    }
+    return null
+  })
+  expect(collapsedAttr).toBe(true)
+
+  const childStructure = await page.evaluate(() => {
+    const editor = window.__WORKLOG_EDITOR
+    if (!editor) return null
+    const { $from } = editor.view.state.selection
+    for (let depth = $from.depth; depth >= 0; depth -= 1) {
+      const node = $from.node(depth)
+      if (node?.type?.name === 'listItem') {
+        return {
+          childCount: node.childCount,
+          childTypes: Array.from({ length: node.childCount }, (_, idx) => node.child(idx).type.name)
+        }
+      }
+    }
+    return null
+  })
+  console.log('collapsed child structure', childStructure)
+
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => {
+    const rootCount = await page.evaluate(() => {
+      const doc = window.__WORKLOG_EDITOR?.getJSON?.()
+      if (!doc) return 0
+      const top = doc.content?.[0]
+      if (!top || top.type !== 'bulletList') return 0
+      return (top.content || []).length
+    })
+    return rootCount
+  }, { timeout: 5000 }).toBe(2)
+  await page.keyboard.type('Parent Sibling')
+
+  const sibling = page.locator('li.li-node', { hasText: 'Parent Sibling' }).first()
+  await expect(sibling).toBeVisible()
+
+  // Expand original parent and ensure the child remains attached
+  await parent.locator('.caret.drag-toggle').first().click()
+  const parentChildren = parent.locator('li.li-node')
+  await expect(parentChildren).toHaveCount(1)
+  await expect(parentChildren.first()).toContainText('Child 1')
+  await expect(sibling.locator('li.li-node')).toHaveCount(0)
 })

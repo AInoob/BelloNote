@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
 const CLIENT_URL = process.env.PLAYWRIGHT_CLIENT_URL || 'http://127.0.0.1:5232'

@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
@@ -117,6 +117,36 @@ test('reminder banner supports custom schedule from notification', async ({ page
   const reminderPill = page.locator('li.li-node').first().locator('.reminder-pill')
   await expect(reminderPill).toHaveText(/Reminds/i)
   await expect(reminderToggle).toHaveAttribute('aria-label', /Reminds/i)
+})
+
+test('reminder banner custom defaults to roughly 30 minutes ahead', async ({ page, request }) => {
+  await resetOutline(request, [
+    { title: 'Default custom check', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Default custom check' }] }] }
+  ])
+
+  await page.goto('/')
+  const reminderToggle = page.locator('li.li-node').first().locator('.li-reminder-area .reminder-toggle')
+  await reminderToggle.click()
+  await page.locator('.reminder-menu').getByRole('button', { name: 'Custom…' }).click()
+  const picker = page.locator('.reminder-menu input[type="datetime-local"]')
+  await picker.fill(nowMinusMinutes(1))
+  await page.locator('.reminder-menu form').getByRole('button', { name: 'Set reminder' }).click()
+
+  const banner = page.locator('.reminder-banner')
+  await expect(banner).toBeVisible()
+
+  await banner.getByRole('button', { name: 'Custom…' }).click()
+  const bannerInput = banner.locator('.reminder-custom input[type="datetime-local"]')
+  await expect(bannerInput).toBeVisible()
+  const value = await bannerInput.inputValue()
+
+  expect(value).not.toEqual('')
+  expect(value).not.toMatch(/^1970-/)
+
+  const scheduledTime = new Date(value)
+  const diffMinutes = (scheduledTime.getTime() - Date.now()) / (60 * 1000)
+  expect(diffMinutes).toBeGreaterThan(26)
+  expect(diffMinutes).toBeLessThan(34)
 })
 
 test('dismissing reminders preserves their status', async ({ request }) => {

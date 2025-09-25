@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:5231'
 
@@ -38,4 +38,16 @@ test('reload restores previous scroll position', async ({ page, request }) => {
   await page.waitForTimeout(300)
   const restoredScroll = await page.evaluate(() => window.scrollY)
   expect(Math.abs(restoredScroll - initialScroll)).toBeLessThanOrEqual(20)
+})
+
+test('topbar remains visible while scrolling long outline', async ({ page, request }) => {
+  await resetOutline(request, buildLongOutline(80))
+
+  await page.goto('/')
+  const topbar = page.locator('.topbar header')
+  await expect(topbar).toBeVisible()
+
+  await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' }))
+  await page.waitForTimeout(200)
+  await expect(topbar).toBeVisible()
 })

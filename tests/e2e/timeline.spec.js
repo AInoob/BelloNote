@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
@@ -23,10 +23,10 @@ function yesterdayStr() {
 }
 
 async function openTimeline(page) {
-  await page.goto('/')
-  await page.evaluate(() => localStorage.clear())
-  await page.getByRole('button', { name: 'Timeline' }).click()
-  await expect(page.locator('.timeline')).toBeVisible({ timeout: 10000 })
+  await page.goto('/?tab=timeline')
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(200)
+  await expect(page.locator('.timeline')).toBeVisible({ timeout: 30000 })
 }
 
 function sectionByDate(page, dateStr) {
@@ -105,3 +105,37 @@ test('timeline shows subtasks for dated parent and preserves date; day height ad
   expect(hToday).toBeGreaterThan(hYest + 30)
 })
 
+test('timeline includes tasks scheduled via reminders on the due date', async ({ page, request }) => {
+  await resetOutline(request)
+  const today = todayStr()
+
+  await seedOutline(request, [
+    {
+      title: 'Reminder Task',
+      status: 'todo',
+      dates: [],
+      children: []
+    }
+  ])
+
+  const outlineResponse = await request.get(`${API_URL}/api/outline`)
+  expect(outlineResponse.ok()).toBeTruthy()
+  const outlineData = await outlineResponse.json()
+  const taskId = outlineData?.roots?.[0]?.id
+  expect(taskId).toBeTruthy()
+
+  const remindAt = `${today}T15:00:00`
+  const reminderResponse = await request.post(`${API_URL}/api/reminders`, {
+    data: { taskId, remindAt }
+  })
+  expect(reminderResponse.ok()).toBeTruthy()
+
+  await openTimeline(page)
+
+  const todaySection = sectionByDate(page, today)
+  await expect(todaySection).toHaveCount(1)
+  const todayItems = listItemsInSection(page, todaySection)
+  await expect(todayItems).toContainText('Reminder Task')
+  const reminderRow = todayItems.filter({ hasText: 'Reminder Task' }).first()
+  await expect(reminderRow.locator('.li-reminder-area .reminder-toggle')).toBeVisible()
+})

@@ -52,13 +52,25 @@ router.get('/', (req, res) => {
   const testProjectId = ensureProjectForTests(req)
   const inferred = inferTestProjectIdIfPlaywrightDataDir()
   const projectId = testProjectId || inferred || ensureDefaultProject()
-  const dates = db.prepare(`
-    SELECT DISTINCT w.date
+  const workLogDates = db.prepare(`
+    SELECT DISTINCT w.date AS date
     FROM work_logs w
     JOIN tasks t ON t.id = w.task_id
     WHERE t.project_id = ?
-    ORDER BY w.date DESC
-  `).all(projectId).map(r => r.date)
+  `).all(projectId).map(r => r.date).filter(Boolean)
+
+  const reminderDates = db.prepare(`
+    SELECT DISTINCT date(r.remind_at) AS date
+    FROM reminders r
+    JOIN tasks t ON t.id = r.task_id
+    WHERE t.project_id = ?
+      AND r.remind_at IS NOT NULL
+      AND r.status != 'completed'
+      AND (r.dismissed_at IS NULL OR r.dismissed_at = '')
+  `).all(projectId).map(r => r.date).filter(Boolean)
+
+  const dateSet = new Set([...workLogDates, ...reminderDates])
+  const dates = Array.from(dateSet).sort((a, b) => b.localeCompare(a))
   const all = loadAllTasks(projectId)
   const byId = new Map(all.map(t => [t.id, t]))
   const children = new Map()
@@ -81,7 +93,21 @@ router.get('/', (req, res) => {
       ORDER BY t.created_at ASC
     `).all(d, projectId)
 
-    const seedIds = rows.map(r => r.id)
+    const reminders = db.prepare(`
+      SELECT t.*
+      FROM reminders r
+      JOIN tasks t ON t.id = r.task_id
+      WHERE t.project_id = ?
+        AND r.remind_at IS NOT NULL
+        AND date(r.remind_at) = ?
+        AND r.status != 'completed'
+        AND (r.dismissed_at IS NULL OR r.dismissed_at = '')
+      ORDER BY r.remind_at ASC
+    `).all(projectId, d)
+
+    const seedIdSet = new Set(rows.map(r => r.id))
+    const reminderIdSet = new Set(reminders.map(r => r.id))
+    const seedIds = Array.from(seedIdSet)
 
     const included = new Set()
     const orderedIds = []
@@ -94,12 +120,13 @@ router.get('/', (req, res) => {
     }
 
     for (const r of rows) addTaskAndDescendants(r.id)
+    for (const r of reminders) addTaskAndDescendants(r.id)
 
     const items = orderedIds.map(id => {
       const task = byId.get(id)
       return { task_id: id, path: pathToRoot(task, byId) }
     })
-    return { date: d, seedIds, items }
+    return { date: d, seedIds, reminderIds: Array.from(reminderIdSet), items }
   })
   res.json({ days })
 })

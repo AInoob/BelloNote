@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 // Keep tests serial to avoid cross-talk on outline data
 test.describe.configure({ mode: 'serial' })

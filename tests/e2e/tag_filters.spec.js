@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
@@ -95,13 +95,17 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await placeCaretAtTaskEnd(page, 1)
   await page.keyboard.type('/#urgent')
   await page.keyboard.press('Enter')
-  await expect(page.locator('li.li-node').nth(1)).toContainText('#urgent')
+  await expect.poll(async () => await page.locator('li.li-node').nth(1).getAttribute('data-tags-self'), {
+    timeout: 10000
+  }).toBe('urgent')
 
   // Tag task 3 with #later via slash
   await placeCaretAtTaskEnd(page, 2)
   await page.keyboard.type('/#later')
   await page.keyboard.press('Enter')
-  await expect(page.locator('li.li-node').nth(2)).toContainText('#later')
+  await expect.poll(async () => await page.locator('li.li-node').nth(2).getAttribute('data-tags-self'), {
+    timeout: 10000
+  }).toBe('later')
 
   // Ensure tags persisted to API
   await expect.poll(async () => {
@@ -213,8 +217,8 @@ test('excluding a tag hides matching child but keeps parent visible', async ({ p
   await page.goto('/')
   await waitForEditorReady(page)
 
-  const parent = page.locator('li.li-node', { hasText: 'Parent without tag' }).first()
-  const child = page.locator('li.li-node', { hasText: 'Child secret #secret' }).first()
+  const parent = page.locator('li.li-node[data-body-text="Parent without tag"]').first()
+  const child = page.locator('li.li-node[data-body-text="Child secret #secret"]').first()
   await expect(parent).toBeVisible()
   await expect(child).toBeVisible()
 

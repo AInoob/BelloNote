@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:5231'
 

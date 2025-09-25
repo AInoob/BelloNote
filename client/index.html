@@ -18,9 +18,9 @@
       .btn { padding:.35rem .6rem; border:1px solid var(--border); border-radius:6px; background:#fff; cursor:pointer; }
       .btn.active { background:#111827; color:#fff; border-color:#111827; }
       .save-indicator { font-size:.85rem; color: var(--muted); }
-      main { height: calc(100vh - 86px); padding:.9rem; }
+      main { min-height: calc(100vh - 86px); padding:.9rem; }
       /* Make the outline filter sticky below the topbar */
-      .status-filter-bar { position: sticky; top: 86px; z-index: 65; background:#fff; display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px; padding:6px 4px; margin-top:-1px; border-top:1px solid var(--border); box-shadow: 0 1px 0 rgba(229,231,235,1) inset; }
+      .status-filter-bar { position: sticky; top: 70px; z-index: 65; background:#fff; display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px; padding:6px 4px; margin-top:-1px; border-top:1px solid var(--border); box-shadow: 0 1px 0 rgba(229,231,235,1) inset; }
       .focus-banner { position: sticky; top: 126px; z-index: 64; background: rgba(79,70,229,.08); border:1px solid rgba(79,70,229,.18); border-radius:12px; padding:8px 12px; display:flex; align-items:center; gap:12px; margin:-2px 0 10px; backdrop-filter: blur(4px); }
       .focus-banner-label { display:flex; align-items:center; gap:8px; font-size:.88rem; color:#1f2937; }
       .focus-banner-title { font-weight:600; color:#1d4ed8; background:rgba(99,102,241,.12); padding:2px 10px; border-radius:999px; }
@@ -77,10 +77,10 @@
       .tiptap ol ol { margin:0; padding-left:36px; }
       .tiptap p { margin:0; line-height:1.18; }
       .li-node { margin:0; list-style:none; }
-      .li-row { display:flex; align-items:flex-start; gap:6px; margin:0.06rem 0; flex-wrap:nowrap; position:relative; padding:3px 72px 3px 6px; border-radius:8px; transition:background-color .12s ease; width:100%; max-width:100%; min-width:0; }
+      .li-row { display:flex; align-items:flex-start; gap:6px; margin:0.06rem 0; flex-wrap:nowrap; position:relative; padding:3px 72px 3px 6px; border-radius:8px; transition:background-color .12s ease, box-shadow .12s ease; width:100%; max-width:100%; min-width:0; }
       .li-row .caret { margin-right:1px; }
-      .li-row.is-selected { background:rgba(99,102,241,.02); box-shadow:inset 0 0 0 1px rgba(99,102,241,.12); }
-      .li-row:hover { background:rgba(148,163,184,.12); }
+      .li-row.is-selected { background:rgba(99,102,241,.01); box-shadow:inset 0 0 0 1px rgba(99,102,241,.1); }
+      .li-row:hover { box-shadow:inset 0 0 0 1px rgba(148,163,184,.35); }
       .li-main { display:flex; align-items:flex-start; gap:6px; flex-wrap:nowrap; width:auto; max-width:100%; min-width:0; flex:1 1 auto; position:relative; }
       .li-main .tag-badge.soon { align-self:flex-start; }
       .li-main .li-content { flex:1 1 auto; min-width:0; position:relative; max-width:100%; width:auto; padding-right: var(--reminder-inline-gap, 0px); }
@@ -97,9 +97,9 @@
       body.focus-shortcut-available .li-main { cursor:pointer; }
       body.focus-shortcut-available .li-main .li-content { cursor:pointer; }
       body.focus-shortcut-available .li-main .li-content * { cursor:inherit; }
-      .li-reminder-area .reminder-toggle { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border:1px solid var(--border); background:#fff; border-radius:999px; color:#4b5563; cursor:pointer; font-size:15px; line-height:1; transition:background-color .12s ease, border-color .12s ease, color .12s ease; }
-      .li-reminder-area .reminder-toggle:hover { background:#f3f4f6; }
-      .li-reminder-area.has-reminder .reminder-toggle { border-color:#6366F1; color:#312E81; }
+      .li-reminder-area .reminder-toggle { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border:1px solid transparent; background:transparent; border-radius:999px; color:#4b5563; cursor:pointer; font-size:15px; line-height:1; transition:color .12s ease; }
+      .li-reminder-area .reminder-toggle:hover { color:#1f2937; }
+      .li-reminder-area.has-reminder .reminder-toggle { border-color:transparent; color:#312E81; }
       .li-reminder-area.due .reminder-toggle { background:#FEE2E2; border-color:#DC2626; color:#991B1B; }
       .li-reminder-area .reminder-pill { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px; font-size:.7rem; background:#EEF2FF; color:#312E81; border:1px solid rgba(99,102,241,.35); }
       .li-reminder-area.due .reminder-pill { background:#FEE2E2; border-color:#DC2626; color:#991B1B; }
@@ -115,22 +115,30 @@
       .btn.small.ghost { background:transparent; border-color:transparent; color:#4b5563; }
       .btn.small.ghost:hover { border-color:var(--border); background:rgba(148,163,184,.12); }
 
-      .reminder-banner { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#111827; color:#fff; padding:12px 16px; border-radius:999px; box-shadow:0 18px 40px rgba(15,23,42,.35); z-index:160; max-width:90vw; }
-      .reminder-banner-inner { display:flex; align-items:center; gap:14px; }
+      .reminder-banner { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#F8FAFF; color:#0f172a; padding:18px 28px; border-radius:12px; box-shadow:0 18px 40px rgba(148,163,184,.2); z-index:160; width:min(85vw, 1280px); max-width:85vw; border:1px solid rgba(37,99,235,.55); }
+      .reminder-banner-inner { display:flex; align-items:center; gap:18px; }
       .reminder-items { display:flex; flex-direction:column; gap:6px; }
       .reminder-item { display:flex; align-items:center; gap:10px; font-size:.82rem; }
-      .reminder-title { font-weight:600; }
-      .reminder-meta { font-size:.75rem; opacity:.85; }
-      .reminder-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+      .reminder-title { font-weight:600; background:transparent; border:none; padding:0; margin:0; color:#0f172a; cursor:pointer; font-family:inherit; text-decoration:underline; }
+      .reminder-title:hover { color:#2563eb; }
+      .reminder-meta { display:flex; flex-direction:column; gap:2px; font-size:.75rem; color:#1e3a8a; }
+      .reminder-meta .reminder-relative { background:transparent; border:none; padding:0; margin:0; color:#2563eb; text-decoration:underline; font-weight:600; font-size:.78rem; cursor:pointer; font-family:inherit; align-self:flex-start; }
+      .reminder-meta .reminder-relative:hover { color:#1d4ed8; }
+      .reminder-meta .reminder-absolute { font-size:.72rem; color:#1d4ed8; opacity:.8; }
+      .reminder-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; color:#0f172a; }
       .reminder-snooze { display:flex; flex-wrap:wrap; gap:6px; }
-      .reminder-snooze .btn.small.ghost { border-color:rgba(255,255,255,.35); color:#E5E7EB; }
-      .reminder-snooze .btn.small.ghost:hover { border-color:rgba(255,255,255,.65); color:#fff; }
-      .reminder-custom { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
-      .reminder-custom input { border:1px solid rgba(255,255,255,.45); border-radius:6px; padding:4px 6px; font-size:.75rem; background:rgba(15,23,42,.2); color:#fff; }
-      .reminder-custom input:focus { outline:none; border-color:#6366f1; box-shadow:0 0 0 2px rgba(99,102,241,.35); }
-      .reminder-custom-error { flex-basis:100%; color:#FCA5A5; font-size:.72rem; }
-      .reminder-banner .btn.small { background:#fff; color:#111827; border:none; }
-      .reminder-banner .btn.small.ghost { background:transparent; color:#E5E7EB; border:1px solid rgba(255,255,255,.45); }
+      .reminder-snooze .btn.small.ghost { border-color:rgba(148,163,184,.5); color:#4b5563; }
+      .reminder-snooze .btn.small.ghost:hover { border-color:rgba(99,102,241,.4); color:#1f2937; }
+      .reminder-custom { display:flex; flex-direction:column; gap:8px; }
+      .reminder-custom .field { display:flex; flex-direction:column; gap:4px; font-size:.7rem; color:#4b5563; }
+      .reminder-custom input { border:1px solid rgba(191,219,254,.6); border-radius:6px; padding:4px 8px; font-size:.75rem; background:#edf2ff; color:#0f172a; }
+      .reminder-custom input:focus { outline:none; border-color:#2563eb; box-shadow:0 0 0 2px rgba(37,99,235,.14); }
+      .reminder-custom-actions { display:flex; flex-wrap:wrap; gap:8px; }
+      .reminder-custom-error { color:#dc2626; font-size:.72rem; }
+      .reminder-banner .btn.small { background:#6366f1; color:#fff; border:none; }
+      .reminder-banner .btn.small:hover { background:#4f46e5; }
+      .reminder-banner .btn.small.ghost { background:transparent; color:#4b5563; border:1px solid rgba(148,163,184,.6); }
+      .reminder-banner .btn.small.ghost:hover { border-color:#6366f1; color:#1f2937; }
 
       .reminders-view { padding:24px 28px; display:flex; flex-direction:column; gap:18px; }
       .reminders-header { display:flex; flex-direction:column; gap:12px; }
@@ -143,7 +151,7 @@
       .reminder-outline .tiptap { border:none; padding:0; }
       .reminder-outline .tiptap ul { padding-left:1.05rem; }
       .reminder-outline .li-row { align-items:flex-start; }
-      .caret.drag-toggle { width:auto; min-width:28px; height:20px; padding:0 4px; display:flex; align-items:center; justify-content:center; gap:2px; cursor:grab; }
+      .caret.drag-toggle { width:auto; min-width:28px; height:20px; padding:0 4px; display:flex; align-items:center; justify-content:center; gap:2px; cursor:grab; border:none; background:transparent; }
       .caret.drag-toggle:active { cursor:grabbing; }
       .caret.drag-toggle .caret-arrow { font-size:10px; line-height:1; }
       .caret.drag-toggle .caret-grip { font-size:12px; line-height:1; color:#9ca3af; margin-left:2px; }
@@ -197,6 +205,13 @@
       .timeline h3 { margin:.75rem 0 .25rem 0; font-size:.95rem; }
       .timeline .item { margin-left:8px; margin-bottom:4px; font-size:.95rem; color:#1f2937; }
       .timeline .status { color:#6b7280; }
+      .timeline li.li-node[data-timeline-active="1"] > .li-row { outline:2px solid rgba(37,99,235,.45); border-radius:10px; background:rgba(37,99,235,.08); }
+      .outline-focus-highlight { outline:2px solid rgba(37,99,235,.6); border-radius:10px; transition:opacity .3s ease; }
+      .timeline-shortcut-focus { outline:2px solid rgba(37,99,235,.6); border-radius:8px; animation: timeline-focus-flash 1s ease-out; }
+      @keyframes timeline-focus-flash {
+        0% { background: rgba(37,99,235,.18); }
+        100% { background: transparent; }
+      }
       .slash-menu { position:fixed; min-width:220px; background:#fff; border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 32px rgba(15,23,42,.18); z-index:90; padding:10px 8px; display:flex; flex-direction:column; gap:6px; }
       .slash-menu input { width:100%; border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:.85rem; }
       .slash-menu button { display:flex; flex-direction:column; align-items:flex-start; width:100%; text-align:left; border:none; background:transparent; padding:6px 8px; border-radius:6px; cursor:pointer; gap:2px; }

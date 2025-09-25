@@ -1,6 +1,6 @@
 
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { EditorContent, useEditor, ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent } from '@tiptap/react'
+import { EditorContent, useEditor, NodeViewWrapper, NodeViewContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
@@ -16,6 +16,7 @@ import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
 import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
 import { DetailsBlock } from '../extensions/detailsBlock.jsx'
+import { safeReactNodeViewRenderer } from '../tiptap/safeReactNodeViewRenderer.js'
 
 const STATUS_EMPTY = ''
 const STATUS_ORDER = ['todo', 'in-progress', 'done', STATUS_EMPTY]
@@ -309,7 +310,7 @@ function createTaskListItemExtension({ readOnly, draggingState, allowStatusToggl
       }
     },
     addNodeView() {
-      return ReactNodeViewRenderer((props) => (
+      return safeReactNodeViewRenderer((props) => (
         <ListItemView
           {...props}
           readOnly={readOnly}
@@ -351,7 +352,11 @@ function ListItemView(props) {
   const reminderKey = id ? String(id) : null
   const reminder = reminderKey ? remindersByTask.get(reminderKey) || null : null
   const [reminderMenuOpen, setReminderMenuOpen] = useState(false)
-  const defaultCustomDate = () => dayjs().add(30, 'minute').format('YYYY-MM-DDTHH:mm')
+  const defaultCustomDate = () => {
+    const base = reminder?.remindAt ? dayjs(reminder.remindAt) : dayjs().add(30, 'minute')
+    if (!base || !base.isValid?.()) return dayjs().add(30, 'minute').format('YYYY-MM-DDTHH:mm')
+    return base.format('YYYY-MM-DDTHH:mm')
+  }
   const [customMode, setCustomMode] = useState(false)
   const [customDate, setCustomDate] = useState(defaultCustomDate)
   const [reminderError, setReminderError] = useState('')
@@ -403,9 +408,10 @@ function ListItemView(props) {
   }, [editor, getPos, node])
 
   useEffect(() => {
-    if (!id) return
+    const key = id ? String(id) : fallbackIdRef.current
+    if (!key) return
     const collapsedSet = loadCollapsedSet(focusRootId)
-    const shouldCollapse = collapsedSet.has(String(id))
+    const shouldCollapse = collapsedSet.has(key)
     if (shouldCollapse !== collapsed) updateAttributes({ collapsed: shouldCollapse })
   }, [id, collapsed, updateAttributes, loadCollapsedSet, focusRootId])
 
@@ -426,8 +432,8 @@ function ListItemView(props) {
   const toggleCollapse = () => {
     const next = !collapsed
     updateAttributes({ collapsed: next })
-    if (!id) return
-    const key = String(id)
+    const key = id ? String(id) : fallbackIdRef.current
+    if (!key) return
     const set = loadCollapsedSet(focusRootId)
     if (next) set.add(key)
     else set.delete(key)
@@ -907,7 +913,11 @@ export default function OutlinerView({
   forceExpand = false,
   allowStatusToggleInReadOnly = false,
   onStatusToggle = null,
-  reminderActionsEnabled: reminderActionsEnabledProp
+  reminderActionsEnabled: reminderActionsEnabledProp,
+  onActiveTaskChange = null,
+  focusRequest = null,
+  onFocusHandled = () => {},
+  onRequestTimelineFocus = null
 }) {
   const isReadOnly = !!readOnly
   const reminderActionsEnabled = reminderActionsEnabledProp !== undefined ? reminderActionsEnabledProp : !isReadOnly
@@ -952,6 +962,9 @@ export default function OutlinerView({
   const initialFocusSyncRef = useRef(true)
   const pendingFocusScrollRef = useRef(null)
   const focusShortcutActiveRef = useRef(false)
+  const { remindersByTask } = useReminders()
+  const activeTaskInfoRef = useRef(null)
+  const lastFocusTokenRef = useRef(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
@@ -1168,7 +1181,7 @@ export default function OutlinerView({
   const CodeBlockWithCopy = useMemo(
     () => CodeBlockLowlight.extend({
       addNodeView() {
-        return ReactNodeViewRenderer(CodeBlockView)
+        return safeReactNodeViewRenderer(CodeBlockView)
       }
     }).configure({ lowlight }),
     []
@@ -1328,6 +1341,23 @@ export default function OutlinerView({
           pushDebug('popup: open (keydown)', { key: event.key, char, left: rect.left, top: rect.bottom })
           return true
         }
+        if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && (event.key === 's' || event.key === 'S')) {
+          event.preventDefault()
+          event.stopPropagation()
+          const info = computeActiveTask()
+          const taskId = info?.id
+          if (taskId) {
+            onRequestTimelineFocus?.({
+              taskId,
+              hasReminder: !!info?.hasReminder,
+              hasDate: !!info?.hasDate,
+              reminderId: info?.reminderId,
+              remindAt: info?.remindAt,
+              dates: info?.dates
+            })
+          }
+          return true
+        }
         if (event.key === 'Enter') {
           const { state, view } = editor
           const { $from } = view.state.selection
@@ -1365,6 +1395,7 @@ export default function OutlinerView({
           const isAtStart = inParagraph && offset === 0
           const isAtEnd = inParagraph && offset === paragraphNode.content.size
           const isChild = listItemDepth > 2
+          pushDebug('enter: state', { isChild, isAtStart, isAtEnd, offset, paraSize: paragraphNode.content.size, collapsed: !!listItemNode.attrs?.collapsed })
 
           const defaultAttrs = {
             dataId: null,
@@ -1392,21 +1423,12 @@ export default function OutlinerView({
           }
 
           if (!isChild && isAtEnd) {
-            const childList = listItemNode.childCount > 1
-              ? listItemNode.child(listItemNode.childCount - 1)
-              : null
-            if (childList && childList.type === bulletListType) {
-              const updatedParent = listItemType.create(listItemNode.attrs, Fragment.from(paragraphNode))
-              const clonedChildList = bulletListType.create(childList.attrs, childList.content)
-              let tr = state.tr.replaceWith(listItemPos, listItemPos + listItemNode.nodeSize, updatedParent)
-              const insertPos = listItemPos + updatedParent.nodeSize
-              const newContent = Fragment.from(paragraphType.create()).append(Fragment.from(clonedChildList))
-              const newListItem = listItemType.create(defaultAttrs, newContent)
-              tr = tr.insert(insertPos, newListItem)
-              tr = placeCursorAtEnd(tr, insertPos)
-              view.dispatch(tr)
-              return true
-            }
+            const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
+            const insertPos = listItemPos + listItemNode.nodeSize
+            let tr = state.tr.insert(insertPos, newSibling)
+            tr = placeCursorAtEnd(tr, insertPos)
+            view.dispatch(tr.scrollIntoView())
+            return true
           }
 
           const didSplit = editor.commands.splitListItem('listItem')
@@ -2082,6 +2104,59 @@ export default function OutlinerView({
 
   }, [editor, statusFilter, showArchived, showFuture, showSoon])
 
+  const computeActiveTask = useCallback(() => {
+    if (!editor) return null
+    try {
+      const { state } = editor
+      if (!state) return null
+      const { $from } = state.selection
+      for (let depth = $from.depth; depth >= 0; depth -= 1) {
+        const node = $from.node(depth)
+        if (!node || node.type?.name !== 'listItem') continue
+        const dataId = node.attrs?.dataId ? String(node.attrs.dataId) : null
+        const reminder = dataId ? remindersByTask.get(String(dataId)) || null : null
+        const textContent = node.textContent || ''
+        const dateMatches = textContent.match(/@\d{4}-\d{2}-\d{2}/g) || []
+        const dates = Array.from(new Set(dateMatches.map(item => item.slice(1))))
+        const hasDate = dates.length > 0
+        const hasReminder = !!reminder
+        const reminderDate = reminder?.remindAt ? dayjs(reminder.remindAt).format('YYYY-MM-DD') : null
+        return {
+          id: dataId,
+          hasReminder,
+          hasDate,
+          dates,
+          reminderDate,
+          reminderId: reminder?.id || null,
+          remindAt: reminder?.remindAt || null
+        }
+      }
+    } catch {
+      return null
+    }
+    return null
+  }, [editor, remindersByTask])
+
+  useEffect(() => {
+    if (!editor) return undefined
+    const notify = () => {
+      const info = computeActiveTask()
+      const prev = activeTaskInfoRef.current
+      const prevKey = prev ? `${prev.id}|${prev.hasReminder}|${prev.hasDate}|${prev.reminderId}|${prev.reminderDate}|${(prev.dates || []).join(',')}` : ''
+      const nextKey = info ? `${info.id}|${info.hasReminder}|${info.hasDate}|${info.reminderId}|${info.reminderDate}|${(info.dates || []).join(',')}` : ''
+      if (prevKey === nextKey) return
+      activeTaskInfoRef.current = info
+      onActiveTaskChange?.(info)
+    }
+    notify()
+    editor.on('selectionUpdate', notify)
+    editor.on('transaction', notify)
+    return () => {
+      editor.off('selectionUpdate', notify)
+      editor.off('transaction', notify)
+    }
+  }, [editor, computeActiveTask, onActiveTaskChange])
+
   useEffect(() => {
     tagFiltersRef.current = tagFilters
     saveTagFilters(tagFilters)
@@ -2095,8 +2170,105 @@ export default function OutlinerView({
     setFocusRootId(prev => (prev === normalized ? prev : normalized))
   }, [])
 
+  const focusTaskById = useCallback((taskId, { select = true } = {}) => {
+    if (!editor || !taskId) return false
+    try {
+      const { state, view } = editor
+      if (!state || !view) return false
+      const doc = state.doc
+      let targetPos = null
+      let targetNode = null
+      doc.descendants((node, pos) => {
+        if (node.type.name === 'listItem' && String(node.attrs.dataId) === String(taskId)) {
+          targetPos = pos
+          targetNode = node
+          return false
+        }
+        return undefined
+      })
+      if (targetNode == null || targetPos == null) return false
+      const collapsedSet = forceExpand ? new Set() : loadCollapsedSetForRoot(focusRootRef.current)
+      const expandedIds = new Set()
+      const $pos = doc.resolve(targetPos + 1)
+      let tr = state.tr
+      let mutated = false
+      for (let depth = $pos.depth; depth >= 0; depth -= 1) {
+        const node = $pos.node(depth)
+        if (!node || node.type?.name !== 'listItem') continue
+        const before = $pos.before(depth)
+        if (node.attrs?.collapsed) {
+          tr = tr.setNodeMarkup(before, undefined, { ...node.attrs, collapsed: false })
+          mutated = true
+        }
+        const ancestorId = node.attrs?.dataId
+        if (!forceExpand && ancestorId) expandedIds.add(String(ancestorId))
+      }
+      if (!forceExpand && expandedIds.size) {
+        const next = new Set(collapsedSet)
+        let changed = false
+        expandedIds.forEach(id => {
+          if (next.has(id)) {
+            next.delete(id)
+            changed = true
+          }
+        })
+        if (changed) saveCollapsedSetForRoot(focusRootRef.current, next)
+      }
+      if (select) {
+        const firstChild = targetNode.childCount > 0 ? targetNode.child(0) : null
+        const paragraph = firstChild && firstChild.type?.name === 'paragraph' ? firstChild : null
+        const paragraphStart = targetPos + 1
+        const selectionPos = paragraph ? paragraphStart + paragraph.nodeSize - 1 : paragraphStart
+        tr = tr.setSelection(TextSelection.create(tr.doc, Math.max(paragraphStart, selectionPos)))
+      }
+      view.dispatch(tr.scrollIntoView())
+      view.focus()
+      const centerTask = () => {
+        if (typeof window === 'undefined') return
+        try {
+          const rootEl = view.dom
+          if (!rootEl) return
+          let targetEl = null
+          try {
+            targetEl = rootEl.querySelector(`li.li-node[data-id="${cssEscape(String(taskId))}"]`)
+          } catch {
+            targetEl = null
+          }
+          if (!targetEl) return
+          const rect = targetEl.getBoundingClientRect()
+          const viewportCenter = window.innerHeight / 2
+          const scrollTarget = (rect.top + window.scrollY) - (viewportCenter - rect.height / 2)
+          window.scrollTo({ top: Math.max(scrollTarget, 0), behavior: 'smooth' })
+          targetEl.classList.add('outline-focus-highlight')
+          setTimeout(() => targetEl.classList.remove('outline-focus-highlight'), 1200)
+        } catch (err) {
+          console.error('[outline] focus scroll failed', err)
+        }
+      }
+      requestAnimationFrame(centerTask)
+      setTimeout(() => applyStatusFilter(), 50)
+      return true
+    } catch (err) {
+      console.error('[outline] failed to focus task', err)
+      return false
+    }
+  }, [editor, forceExpand, applyStatusFilter])
+
   const requestFocusRef = useRef(handleRequestFocus)
   useEffect(() => { requestFocusRef.current = handleRequestFocus }, [handleRequestFocus])
+
+  useEffect(() => {
+    if (!focusRequest || !focusRequest.taskId || !editor) return undefined
+    const token = focusRequest.token ?? `${focusRequest.taskId}:${focusRequest.reminderId ?? ''}:${focusRequest.remindAt ?? ''}`
+    if (lastFocusTokenRef.current === token) return undefined
+    lastFocusTokenRef.current = token
+    const success = focusTaskById(focusRequest.taskId, { select: focusRequest.select !== false })
+    if (success) {
+      const info = computeActiveTask()
+      activeTaskInfoRef.current = info
+    }
+    onFocusHandled?.(success)
+  }, [focusRequest, editor, focusTaskById, onFocusHandled, computeActiveTask])
 
   useEffect(() => {
     if (typeof document === 'undefined') return undefined

@@ -1,4 +1,4 @@
-const { test, expect } = require('@playwright/test')
+const { test, expect } = require('./test-base')
 
 // Ensure tests don't interfere with each other
 test.describe.configure({ mode: 'serial' })
@@ -131,8 +131,8 @@ test('archived descendants do not dim parent rows', async ({ page, request }) =>
   await setOutlineNormalized(request, buildChildArchivedOutline())
   await page.goto('/')
 
-  const parent = page.locator('li.li-node', { hasText: 'parent stays bright' }).first()
-  const child = page.locator('li.li-node', { hasText: 'child archived @archived' }).first()
+  const parent = page.locator('li.li-node[data-body-text="parent stays bright"]').first()
+  const child = page.locator('li.li-node[data-body-text="child archived @archived"]').first()
   await expect(parent).toBeVisible({ timeout: 15000 })
   await expect(child).toBeVisible({ timeout: 15000 })
 
@@ -168,8 +168,8 @@ test('hiding archived children does not hide the parent', async ({ page, request
   await page.keyboard.press('Tab')
   await page.keyboard.type('Child archived @archived')
 
-  const parent = page.locator('li.li-node', { hasText: 'Parent stays bright' }).first()
-  const child = page.locator('li.li-node', { hasText: 'Child archived @archived' }).first()
+  const parent = page.locator('li.li-node[data-body-text="Parent stays bright"]').first()
+  const child = page.locator('li.li-node[data-body-text="Child archived @archived"]').first()
   await expect(parent).toBeVisible({ timeout: 15000 })
   await expect(child).toBeVisible({ timeout: 15000 })
 
