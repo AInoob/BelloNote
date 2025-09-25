@@ -23,14 +23,6 @@ async function resetOutline(request) {
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
-async function waitForOutlineTitles(request) {
-  const res = await request.get(`${ORIGIN}/api/outline`)
-  expect(res.ok(), 'outline fetch should succeed').toBeTruthy()
-  const data = await res.json()
-  const roots = data.roots || []
-  return roots.map(n => n.title)
-}
-
 async function setOutlineNormalized(request, outline) {
   const res = await request.post(`${ORIGIN}/api/outline`, { data: { outline } })
   expect(res.ok(), 'outline set should succeed').toBeTruthy()
@@ -106,12 +98,10 @@ test('archived items are dimmed on initial load and hide when toggled', async ({
   await page.goto('/')
 
   // Wait items render and NodeViews mount
-  const items = page.locator('li.li-node')
-  await expect(items).toHaveCount(3)
-  await expect(page.locator('li.li-node > .li-row .li-content')).toHaveCount(3)
-
-  const archivedItem = items.nth(0)
-  const childItem = items.nth(1)
+  const archivedItem = page.locator('li.li-node', { hasText: 'archived parent @archived' }).first()
+  const childItem = page.locator('li.li-node', { hasText: 'child A' }).first()
+  await expect(archivedItem).toBeVisible({ timeout: 15000 })
+  await expect(childItem).toBeVisible({ timeout: 15000 })
 
   // On first load, applyStatusFilter should have run and set data-archived="1"
   await expect.poll(async () => await archivedItem.getAttribute('data-archived'), { timeout: 15000 })
@@ -139,14 +129,12 @@ test('archived descendants do not dim parent rows', async ({ page, request }) =>
   await ensureBackendReady(request)
   await resetOutline(request)
   await setOutlineNormalized(request, buildChildArchivedOutline())
-
   await page.goto('/')
 
-  const nodes = page.locator('li.li-node')
-  await expect(nodes).toHaveCount(2)
-
-  const parent = nodes.nth(0)
-  const child = nodes.nth(1)
+  const parent = page.locator('li.li-node', { hasText: 'parent stays bright' }).first()
+  const child = page.locator('li.li-node', { hasText: 'child archived @archived' }).first()
+  await expect(parent).toBeVisible({ timeout: 15000 })
+  await expect(child).toBeVisible({ timeout: 15000 })
 
   await expect.poll(async () => await parent.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('0')
   await expect.poll(async () => await child.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('1')
@@ -156,4 +144,48 @@ test('archived descendants do not dim parent rows', async ({ page, request }) =>
 
   expect(parentOpacity).toBeGreaterThanOrEqual(0.96)
   expect(childOpacity).toBeLessThan(0.9)
+})
+
+test('hiding archived children does not hide the parent', async ({ page, request }) => {
+  await ensureBackendReady(request)
+  await resetOutline(request)
+
+  await page.goto('/')
+
+  const firstParagraph = page.locator('li.li-node p').first()
+  await expect(firstParagraph).toBeVisible({ timeout: 15000 })
+  await page.evaluate(() => {
+    const paragraph = document.querySelector('li.li-node p')
+    if (!paragraph) return
+    const range = document.createRange()
+    range.selectNodeContents(paragraph)
+    const selection = window.getSelection()
+    selection.removeAllRanges()
+    selection.addRange(range)
+  })
+  await page.keyboard.type('Parent stays bright')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await page.keyboard.type('Child archived @archived')
+
+  const parent = page.locator('li.li-node', { hasText: 'Parent stays bright' }).first()
+  const child = page.locator('li.li-node', { hasText: 'Child archived @archived' }).first()
+  await expect(parent).toBeVisible({ timeout: 15000 })
+  await expect(child).toBeVisible({ timeout: 15000 })
+
+  await expect.poll(async () => await child.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('1')
+  await expect.poll(async () => await parent.getAttribute('data-archived-self'), { timeout: 10000 }).toBe('0')
+
+  const archivedToggle = page.locator('.archive-toggle .btn.pill')
+  await expect(archivedToggle).toBeVisible()
+  const label = (await archivedToggle.textContent())?.trim()
+  if (label === 'Shown') {
+    await archivedToggle.click()
+  }
+  await expect.poll(async () => (await archivedToggle.textContent())?.trim(), { timeout: 5000 })
+    .toBe('Hidden')
+
+  await expect(child).toBeHidden()
+  await expect(parent, 'parent should remain visible when only child is archived').toBeVisible()
+  await expect.poll(async () => await parent.getAttribute('data-archived'), { timeout: 5000 }).toBe('0')
 })

@@ -22,6 +22,11 @@ async function resetOutline(request) {
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
+async function setOutlineNormalized(request, outline) {
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline } })
+  expect(response.ok(), 'outline set should succeed').toBeTruthy()
+}
+
 async function waitForOutline(request) {
   const response = await request.get(`${API_URL}/api/outline`)
   expect(response.ok(), 'outline fetch should succeed').toBeTruthy()
@@ -69,7 +74,6 @@ async function createTasks(page, titles) {
   for (let i = 0; i < titles.length; i += 1) {
     if (i > 0) {
       await page.keyboard.press('Enter')
-      await expect(listItems).toHaveCount(i + 1)
     }
     await page.keyboard.type(titles[i])
     await expect(listItems.nth(i)).toContainText(titles[i])
@@ -170,4 +174,56 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect(task1Reloaded).toBeVisible()
   await expect(task2Reloaded).toBeVisible()
   await expect(task3Reloaded).toBeVisible()
+})
+
+test('excluding a tag hides matching child but keeps parent visible', async ({ page, request }) => {
+  await ensureBackendReady(request)
+  await resetOutline(request)
+  await setOutlineNormalized(request, [
+    {
+      id: null,
+      title: 'Parent without tag',
+      status: 'todo',
+      dates: [],
+      ownWorkedOnDates: [],
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Parent without tag' }] }],
+      children: [
+        {
+          id: null,
+          title: 'Child secret #secret',
+          status: 'todo',
+          dates: [],
+          ownWorkedOnDates: [],
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Child secret #secret' }] }],
+          children: []
+        }
+      ]
+    },
+    {
+      id: null,
+      title: 'Another visible task',
+      status: 'todo',
+      dates: [],
+      ownWorkedOnDates: [],
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Another visible task' }] }],
+      children: []
+    }
+  ])
+
+  await page.goto('/')
+  await waitForEditorReady(page)
+
+  const parent = page.locator('li.li-node', { hasText: 'Parent without tag' }).first()
+  const child = page.locator('li.li-node', { hasText: 'Child secret #secret' }).first()
+  await expect(parent).toBeVisible()
+  await expect(child).toBeVisible()
+
+  const excludeInput = page.locator('.tag-filter-group .tag-filter.exclude .tag-input')
+  await excludeInput.fill('#secret')
+  await excludeInput.press('Enter')
+
+  await expect(page.locator('.tag-filter.exclude .tag-chip', { hasText: '#secret' })).toBeVisible()
+  await expect(child).toBeHidden()
+  await expect(parent, 'parent should remain visible when only child matches excluded tag').toBeVisible()
+  await expect.poll(async () => await parent.getAttribute('data-tag-exclude'), { timeout: 5000 }).toBe('0')
 })

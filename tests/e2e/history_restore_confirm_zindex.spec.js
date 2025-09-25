@@ -38,7 +38,8 @@ test('history restore confirmation is visible above snapshot overlay (z-index)',
   expect(setRes.ok()).toBeTruthy()
 
   await page.goto('/')
-  await expect(page.getByRole('textbox')).toBeVisible()
+  const editor = page.locator('.tiptap.ProseMirror')
+  await expect(editor).toBeVisible()
 
   // Open Checkpoint dialog and save
   await page.getByRole('button', { name: 'Checkpoint' }).click()
@@ -67,4 +68,3 @@ test('history restore confirmation is visible above snapshot overlay (z-index)',
   await page.locator('.overlay .modal .btn', { hasText: 'Cancel' }).click()
   await expect(confirmTitle).toHaveCount(0)
 })
-

@@ -112,10 +112,12 @@ test('status color does not bleed to child', async ({ page, request }) => {
   await page.goto('/')
   await page.waitForSelector('.status-chip.inline')
 
+  const parentLi = page.locator('li.li-node', { hasText: 'parent in progress' }).first()
+  await expect(parentLi).toBeVisible()
+  const childLi = parentLi.locator(':scope li.li-node').filter({ hasText: 'child todo' }).first()
+  await expect(childLi).toBeVisible()
 
-  // If server normalized status unexpectedly, cycle child's status to todo via UI
-  const childChipLocator = page.locator('li.li-node:has(> .li-row .li-content:has-text("child todo")) .status-chip.inline').first()
-  // Read computed color for the child after forcing todo
+  const childChipLocator = childLi.locator('> .li-row .status-chip.inline').first()
   const childBg = await childChipLocator.evaluate(el => getComputedStyle(el).backgroundColor)
 
   // Grey #e5e7eb -> rgb(229, 231, 235) for child todo (ensures no yellow bleed)

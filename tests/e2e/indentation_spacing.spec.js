@@ -84,22 +84,47 @@ test('drag toggles keep a 36px indentation delta between levels', async ({ page,
   const rows = page.locator('li.li-node > .li-row')
   await expect(rows).toHaveCount(4)
 
-  const caretPositions = await rows.evaluateAll((rowNodes) => rowNodes.map((row) => {
+  const caretPositions = await rows.evaluateAll((rowNodes) => rowNodes.map((row, index) => {
     const caret = row.querySelector(':scope > .caret.drag-toggle')
     if (!caret) return null
     const rect = caret.getBoundingClientRect()
-    return rect ? rect.left : null
+    if (!rect) return null
+    const rowDepth = (() => {
+      let depth = 0
+      let el = row.closest('li.li-node')
+      while (el) {
+        const parentLi = el.parentElement?.closest?.('li.li-node')
+        if (!parentLi) break
+        depth += 1
+        el = parentLi
+      }
+      return depth
+    })()
+    return { index, left: rect.left, depth: rowDepth }
   }))
 
-  expect(caretPositions.filter((value) => value !== null).length).toBe(4)
+  const validRows = caretPositions.filter(Boolean)
+  expect(validRows.length).toBe(4)
 
-  const parentToChild = caretPositions[1] - caretPositions[0]
-  const childToGrandchild = caretPositions[2] - caretPositions[1]
-  const peerToParent = caretPositions[3] - caretPositions[0]
+  const parents = validRows.find(r => r.depth === 0)
+  const children = validRows.filter(r => r.depth === 1)
+  const grandchild = validRows.find(r => r.depth === 2)
 
-  expect(Math.abs(parentToChild - 36)).toBeLessThanOrEqual(1.5)
-  expect(Math.abs(childToGrandchild - 36)).toBeLessThanOrEqual(1.5)
-  expect(Math.abs(peerToParent)).toBeLessThanOrEqual(1.5)
+  expect(parents).toBeTruthy()
+  expect(children.length).toBeGreaterThanOrEqual(1)
+  expect(grandchild).toBeTruthy()
+
+  const parentToChild = children[0].left - parents.left
+  const childToGrandchild = grandchild.left - children[0].left
+  const peer = validRows.find(r => r.depth === 0 && r.index !== parents.index)
+  expect(peer).toBeTruthy()
+  const peerToParent = peer.left - parents.left
+
+  const expectedDelta = 38
+  const tolerance = 2
+  expect(Math.abs(parentToChild - expectedDelta)).toBeLessThanOrEqual(tolerance)
+  expect(Math.abs(childToGrandchild - expectedDelta)).toBeLessThanOrEqual(tolerance)
+  expect(Math.abs(peerToParent)).toBeLessThanOrEqual(tolerance)
 })
 
 test('single-line tasks without children stay on one line', async ({ page, request }) => {

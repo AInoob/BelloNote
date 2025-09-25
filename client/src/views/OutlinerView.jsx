@@ -10,7 +10,7 @@ import Highlight from '@tiptap/extension-highlight'
 import { lowlight } from 'lowlight/lib/core.js'
 import dayjs from 'dayjs'
 import { TextSelection, NodeSelection } from 'prosemirror-state'
-import { DOMSerializer } from 'prosemirror-model'
+import { DOMSerializer, Fragment } from 'prosemirror-model'
 import { API_ROOT, absoluteUrl, getOutline, saveOutlineApi, uploadImage } from '../api.js'
 import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
@@ -27,6 +27,7 @@ const FILTER_ARCHIVED_KEY = 'worklog.filter.archived'
 const FILTER_FUTURE_KEY = 'worklog.filter.future'
 const FILTER_SOON_KEY = 'worklog.filter.soon'
 const SCROLL_STATE_KEY = 'worklog.lastScroll'
+const STARTER_PLACEHOLDER_TITLE = 'Start here'
 
 const FILTER_TAG_INCLUDE_KEY = 'worklog.filter.tags.include'
 const FILTER_TAG_EXCLUDE_KEY = 'worklog.filter.tags.exclude'
@@ -109,6 +110,29 @@ const cssEscape = (value) => {
     return CSS.escape(value)
   }
   return value.replace(/[^a-zA-Z0-9\-_]/g, (match) => `\\${match}`)
+}
+
+const gatherOwnListItemText = (listItemNode) => {
+  if (!listItemNode || listItemNode.type?.name !== 'listItem') return ''
+  const parts = []
+  const visit = (pmNode) => {
+    if (!pmNode) return
+    const typeName = pmNode.type?.name
+    if (typeName === 'bulletList' || typeName === 'orderedList') return
+    if (pmNode.isText && pmNode.text) {
+      parts.push(pmNode.text)
+      return
+    }
+    if (typeof pmNode.forEach === 'function') {
+      pmNode.forEach(child => visit(child))
+    }
+  }
+  listItemNode.forEach(child => {
+    const typeName = child.type?.name
+    if (typeName === 'bulletList' || typeName === 'orderedList') return
+    visit(child)
+  })
+  return parts.join(' ')
 }
 
 const DEFAULT_STATUS_FILTER = { none: true, todo: true, 'in-progress': true, done: true }
@@ -312,7 +336,7 @@ function ListItemView(props) {
     reminderActionsEnabled: reminderActionsEnabledProp = false
   } = props
   const id = node.attrs.dataId
-  const status = node.attrs.status ?? STATUS_EMPTY
+  const statusAttr = node.attrs.status ?? STATUS_EMPTY
   const collapsed = !!node.attrs.collapsed
   const tags = Array.isArray(node.attrs.tags) ? node.attrs.tags.map(t => String(t || '').toLowerCase()) : []
   const fallbackIdRef = useRef(id ? String(id) : `temp-${Math.random().toString(36).slice(2, 8)}`)
@@ -339,6 +363,8 @@ function ListItemView(props) {
   const [reminderOffset, setReminderOffset] = useState(null)
   const [reminderInlineGap, setReminderInlineGap] = useState(0)
   const [reminderTop, setReminderTop] = useState(0)
+  const ownBodyText = useMemo(() => gatherOwnListItemText(node), [node])
+  const ownBodyTextAttr = useMemo(() => (ownBodyText || '').replace(/\s+/g, ' ').trim(), [ownBodyText])
 
   useEffect(() => {
     if (id) fallbackIdRef.current = String(id)
@@ -414,20 +440,6 @@ function ListItemView(props) {
     return li.getAttribute('data-id') || li.dataset?.id || (id ? String(id) : fallbackIdRef.current)
   }
 
-  const handleFocusShortcut = useCallback((event) => {
-    if (typeof requestFocus !== 'function') return
-    if (!event || event.button !== 0) return
-    const usingModifier = event.metaKey || (event.ctrlKey && !event.metaKey)
-    if (!usingModifier) return
-    if (event.target instanceof HTMLElement) {
-      if (event.target.closest('a')) return
-    }
-    const currentId = readCurrentDomId()
-    if (!currentId) return
-    event.preventDefault()
-    event.stopPropagation()
-    requestFocus(String(currentId))
-  }, [requestFocus, readCurrentDomId])
 
   const ensurePersistentTaskId = useCallback(async () => {
     let currentId = readCurrentDomId()
@@ -513,9 +525,37 @@ function ListItemView(props) {
     }
   }, [closeReminderMenu, removeReminder, reminder])
 
-  const cycle = () => {
+  const handleStatusKeyDown = useCallback((event) => {
+    if (event.key !== 'Enter') return
     if (readOnly && !allowStatusToggleInReadOnly) return
-    const currentIndex = STATUS_ORDER.indexOf(status)
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      const pos = typeof getPos === 'function' ? getPos() : null
+      if (typeof pos !== 'number' || !editor) return
+      const { state, view } = editor
+      const listItemNode = state.doc.nodeAt(pos)
+      if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) return
+      const paragraphNode = listItemNode.child(0)
+      if (!paragraphNode || paragraphNode.type.name !== 'paragraph') return
+      editor.commands.focus()
+      const paragraphStart = pos + 1
+      const paragraphEnd = paragraphStart + paragraphNode.nodeSize - 1
+      const tr = state.tr.setSelection(TextSelection.create(state.doc, paragraphEnd))
+      view.dispatch(tr)
+      const didSplit = editor.commands.splitListItem('listItem')
+      if (didSplit) {
+        editor.commands.updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false })
+      }
+    } catch {}
+  }, [editor, getPos, readOnly, allowStatusToggleInReadOnly])
+
+  const cycle = (event) => {
+    if (readOnly && !allowStatusToggleInReadOnly) return
+    const li = rowRef.current?.closest('li.li-node')
+    const liveStatus = li?.getAttribute('data-status')
+    const currentStatus = typeof liveStatus === 'string' ? liveStatus : (node?.attrs?.status ?? STATUS_EMPTY)
+    const currentIndex = STATUS_ORDER.indexOf(currentStatus)
     const idx = currentIndex >= 0 ? currentIndex : 0
     const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
     updateAttributes({ status: next })
@@ -523,6 +563,10 @@ function ListItemView(props) {
       const realId = id || fallbackIdRef.current
       if (realId) onStatusToggle(String(realId), next)
     }
+    if (event?.currentTarget?.blur) {
+      try { event.currentTarget.blur() } catch {}
+    }
+    editor?.commands?.focus?.()
   }
 
   const handleDragStart = (event) => {
@@ -580,17 +624,6 @@ function ListItemView(props) {
     }
     toggleCollapse()
   }
-
-  const [showSoonBadge, setShowSoonBadge] = useState(!!node?.attrs?.soonSelf)
-  useEffect(() => {
-    const li = rowRef.current?.closest('li.li-node')
-    if (!li) return
-    const update = () => setShowSoonBadge(li.getAttribute('data-soon-self') === '1')
-    update()
-    const obs = new MutationObserver(update)
-    obs.observe(li, { attributes: true, attributeFilter: ['data-soon-self'] })
-    return () => obs.disconnect()
-  }, [])
 
   const reminderDismissed = !!reminder?.dismissedAt
   const activeReminder = reminder && reminder.status !== 'completed'
@@ -733,13 +766,13 @@ function ListItemView(props) {
       mutationObserver?.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [reminderControlsEnabled, reminderMenuOpen, reminderPillText, activeReminder, collapsed, showSoonBadge])
+  }, [reminderControlsEnabled, reminderMenuOpen, reminderPillText, activeReminder, collapsed])
 
   return (
     <NodeViewWrapper
       as="li"
       className={`li-node ${collapsed ? 'collapsed' : ''}`}
-      data-status={status}
+      data-status={statusAttr}
       data-id={id ? String(id) : fallbackIdRef.current}
       data-archived-self={node.attrs.archivedSelf ? '1' : '0'}
       data-archived={node.attrs.archivedSelf ? '1' : '0'}
@@ -748,6 +781,7 @@ function ListItemView(props) {
       data-future={node.attrs.futureSelf ? '1' : '0'}
       data-soon={node.attrs.soonSelf ? '1' : '0'}
       data-tags-self={tags.join(',')}
+      data-body-text={ownBodyTextAttr}
       draggable={!readOnly}
       onDragEnd={readOnly ? undefined : handleDragEnd}
     >
@@ -768,13 +802,11 @@ function ListItemView(props) {
           onClick={(readOnly && !allowStatusToggleInReadOnly) ? undefined : cycle}
           title="Click to change status"
           disabled={readOnly && !allowStatusToggleInReadOnly}
+          onKeyDown={handleStatusKeyDown}
         >
-          {status === STATUS_EMPTY ? '' : (STATUS_ICON[status] ?? '○')}
+          {statusAttr === STATUS_EMPTY ? '' : (STATUS_ICON[statusAttr] ?? '○')}
         </button>
-        <div className="li-main" onMouseDown={handleFocusShortcut}>
-          {showSoonBadge && (
-            <span className="tag-badge soon" style={{ marginTop: 1, padding: '1px 6px', borderRadius: 8, fontSize: 12, background: '#FFF3BF', color: '#7A5C00' }}>Soon</span>
-          )}
+        <div className="li-main">
           <NodeViewContent
             className="li-content"
             style={reminderControlsEnabled ? { '--reminder-inline-gap': `${reminderInlineGap}px` } : undefined}
@@ -1165,7 +1197,13 @@ export default function OutlinerView({
     autofocus: false,
     editable: !isReadOnly,
     onCreate: () => { pushDebug('editor: ready'); setTimeout(() => applyStatusFilter(), 50) },
-    onUpdate: () => { if (!isReadOnly) { markDirty(); queueSave() } setTimeout(() => applyStatusFilter(), 50) },
+    onUpdate: () => {
+      if (!isReadOnly) {
+        markDirty()
+        queueSave()
+      }
+      setTimeout(() => applyStatusFilter(), 50)
+    },
     editorProps: {
       handleTextInput(view, from, to, text) {
         if (isReadOnly) return false
@@ -1211,7 +1249,10 @@ export default function OutlinerView({
           if (jsonStr) {
             const parsed = JSON.parse(jsonStr)
             event.preventDefault()
-            editor?.commands?.setContent(parsed)
+            editor?.commands?.setContent(parsed, true)
+            markDirty()
+            if (saveTimer.current) clearTimeout(saveTimer.current)
+            void doSave()
             pushDebug('paste: outline json restored')
             return true
           }
@@ -1288,16 +1329,89 @@ export default function OutlinerView({
           return true
         }
         if (event.key === 'Enter') {
-          // Ensure the newly created list item starts with status "todo"
-          const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
+          const { state, view } = editor
+          const { $from } = view.state.selection
+          const inCode = $from.parent.type.name === 'codeBlock'
           if (inCode) return false
+          const schema = editor.schema
+          const listItemType = schema.nodes.listItem
+          const paragraphType = schema.nodes.paragraph
+          const bulletListType = schema.nodes.bulletList
           event.preventDefault()
           event.stopPropagation()
-          const didSplit = editor.chain().focus().splitListItem('listItem').run()
+
+          const findListItemDepth = () => {
+            for (let depth = $from.depth; depth >= 0; depth--) {
+              if ($from.node(depth)?.type?.name === 'listItem') return depth
+            }
+            return -1
+          }
+
+          const listItemDepth = findListItemDepth()
+          if (listItemDepth === -1) return false
+          const listItemPos = $from.before(listItemDepth)
+          const listItemNode = $from.node(listItemDepth)
+          if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) {
+            return false
+          }
+
+          const paragraphNode = listItemNode.child(0)
+          if (!paragraphNode || paragraphNode.type.name !== 'paragraph') {
+            return false
+          }
+
+          const inParagraph = $from.parent === paragraphNode
+          const offset = inParagraph ? $from.parentOffset : 0
+          const isAtStart = inParagraph && offset === 0
+          const isAtEnd = inParagraph && offset === paragraphNode.content.size
+          const isChild = listItemDepth > 2
+
+          const defaultAttrs = {
+            dataId: null,
+            status: STATUS_EMPTY,
+            collapsed: false,
+            archivedSelf: false,
+            futureSelf: false,
+            soonSelf: false,
+            tags: []
+          }
+
+          const placeCursorAtEnd = (tr, pos) => {
+            const insertedNode = tr.doc.nodeAt(pos)
+            if (!insertedNode || insertedNode.childCount === 0) return tr
+            const para = insertedNode.child(0)
+            const paragraphEnd = pos + 1 + para.nodeSize - 1
+            return tr.setSelection(TextSelection.create(tr.doc, paragraphEnd))
+          }
+
+          if (isChild && isAtStart) {
+            let tr = state.tr.insert(listItemPos, listItemType.create(defaultAttrs, Fragment.from(paragraphType.create())))
+            tr = placeCursorAtEnd(tr, listItemPos)
+            view.dispatch(tr)
+            return true
+          }
+
+          if (!isChild && isAtEnd) {
+            const childList = listItemNode.childCount > 1
+              ? listItemNode.child(listItemNode.childCount - 1)
+              : null
+            if (childList && childList.type === bulletListType) {
+              const updatedParent = listItemType.create(listItemNode.attrs, Fragment.from(paragraphNode))
+              const clonedChildList = bulletListType.create(childList.attrs, childList.content)
+              let tr = state.tr.replaceWith(listItemPos, listItemPos + listItemNode.nodeSize, updatedParent)
+              const insertPos = listItemPos + updatedParent.nodeSize
+              const newContent = Fragment.from(paragraphType.create()).append(Fragment.from(clonedChildList))
+              const newListItem = listItemType.create(defaultAttrs, newContent)
+              tr = tr.insert(insertPos, newListItem)
+              tr = placeCursorAtEnd(tr, insertPos)
+              view.dispatch(tr)
+              return true
+            }
+          }
+
+          const didSplit = editor.commands.splitListItem('listItem')
           if (didSplit) {
-            // Update attributes on the newly created list item
-            editor.chain().focus().updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false }).run()
-            pushDebug('enter: split list item -> reset status to empty')
+            editor.commands.updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false })
             return true
           }
           return false
@@ -1784,20 +1898,33 @@ export default function OutlinerView({
 
     const readDirectBodyText = (bodyEl) => {
       if (!bodyEl) return ''
+      const ownerLi = bodyEl.closest('li.li-node')
       const parts = []
-      bodyEl.childNodes.forEach(node => {
+      const visit = (node) => {
+        if (!node) return
         if (node.nodeType === textNodeType) {
-          if (node.textContent) parts.push(node.textContent)
+          const text = node.textContent
+          if (text && text.trim()) parts.push(text)
           return
         }
-        if (node.nodeType === elementNodeType) {
-          const el = node
-          if (el.matches('ul,ol')) return
-          const text = el.textContent
-          if (text) parts.push(text)
+        if (node.nodeType !== elementNodeType) return
+        const el = node
+        if (el.matches('ul,ol')) return
+        if (ownerLi && el.closest('li.li-node') !== ownerLi) return
+        if (el.matches('button, .li-reminder-area, .status-chip, .caret, .drag-toggle')) return
+        if (el.hasAttribute('data-node-view-wrapper') || el.hasAttribute('data-node-view-content-react')) {
+          el.childNodes.forEach(visit)
+          return
         }
-      })
-      return parts.join(' ')
+        if (el.childNodes && el.childNodes.length) {
+          el.childNodes.forEach(visit)
+          return
+        }
+        const text = el.textContent
+        if (text && text.trim()) parts.push(text)
+      }
+      bodyEl.childNodes.forEach(visit)
+      return parts.join(' ').replace(/\s+/g, ' ').trim()
     }
 
     liNodes.forEach(li => {
@@ -1808,7 +1935,8 @@ export default function OutlinerView({
       if (row) row.style.display = ''
 
       const body = li.querySelector(':scope > .li-row .li-content')
-      const bodyTextRaw = readDirectBodyText(body)
+      const attrBody = li.getAttribute('data-body-text')
+      const bodyTextRaw = attrBody && attrBody.trim() ? attrBody : readDirectBodyText(body)
       const bodyText = bodyTextRaw.toLowerCase()
       const tagsFound = extractTagsFromText(bodyTextRaw)
       const canonicalTags = tagsFound.map(t => t.canonical)
@@ -1965,6 +2093,34 @@ export default function OutlinerView({
     const normalized = String(taskId)
     pendingFocusScrollRef.current = normalized
     setFocusRootId(prev => (prev === normalized ? prev : normalized))
+  }, [])
+
+  const requestFocusRef = useRef(handleRequestFocus)
+  useEffect(() => { requestFocusRef.current = handleRequestFocus }, [handleRequestFocus])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const handler = (event) => {
+      if (!(event instanceof MouseEvent)) return
+      if (event.type === 'mousedown' && event.button !== 0) return
+      const usingModifier = event.metaKey || (event.ctrlKey && !event.metaKey)
+      if (!usingModifier) return
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('a')) return
+      const li = target instanceof HTMLElement ? target.closest('li.li-node') : null
+      if (!li) return
+      const id = li.getAttribute('data-id')
+      if (!id) return
+      event.preventDefault()
+      event.stopPropagation()
+      requestFocusRef.current?.(String(id))
+    }
+    document.addEventListener('mousedown', handler, true)
+    document.addEventListener('click', handler, true)
+    return () => {
+      document.removeEventListener('mousedown', handler, true)
+      document.removeEventListener('click', handler, true)
+    }
   }, [])
 
   const exitFocus = useCallback(() => {
@@ -2403,7 +2559,7 @@ export default function OutlinerView({
         content: [{
           type: 'listItem',
           attrs: { dataId: null, status: STATUS_EMPTY, collapsed: false },
-          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Start here' }] }]
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: STARTER_PLACEHOLDER_TITLE }] }]
         }]
       }
     }
@@ -2916,12 +3072,16 @@ export default function OutlinerView({
   }, [filteredCommands, updateSlashActive])
 
   useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const { body } = document
+    if (!body) return undefined
+    const className = 'focus-mode'
+    if (focusRootId) body.classList.add(className)
+    else body.classList.remove(className)
     return () => {
-      if (typeof document !== 'undefined') {
-        document.body.classList.remove('focus-mode')
-      }
+      if (focusRootId) body.classList.remove(className)
     }
-  }, [])
+  }, [focusRootId])
 
   useEffect(() => {
     applyCollapsedStateForRoot(focusRootId)

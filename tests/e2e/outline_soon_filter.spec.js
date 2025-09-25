@@ -46,7 +46,8 @@ test('outline has Soon filter that hides/shows @soon items and persists', async 
   expect(setRes.ok()).toBeTruthy()
 
   await page.goto('/')
-  await expect(page.getByRole('textbox')).toBeVisible()
+  const editor = page.locator('.tiptap.ProseMirror')
+  await expect(editor).toBeVisible()
 
   // By default, soon items visible
   await expect(page.getByText('soon parent')).toBeVisible()
@@ -67,4 +68,3 @@ test('outline has Soon filter that hides/shows @soon items and persists', async 
   await expect(page.locator('.status-filter-bar:not([data-timeline-filter]) .soon-toggle .btn.pill')).toHaveClass(/active/)
   await expect(page.getByText('soon parent')).toBeVisible()
 })
-

@@ -77,6 +77,11 @@ test.beforeEach(async ({ request }) => {
 test('select-all copy -> delete -> paste preserves outline structure/content', async ({ page, request }, testInfo) => {
   await createBaseContent(page, request)
 
+  const editor = page.locator('.tiptap.ProseMirror')
+  await editor.click()
+  const saveIndicator = page.locator('.save-indicator')
+  await expect(saveIndicator).toHaveText('Saved')
+
   // Pre-state assertions
   await expect(page.locator('li.li-node')).toHaveCount(4) // task1, task2, sub a, task3
   const preCodeCount = await page.locator('code').count()
@@ -88,8 +93,11 @@ test('select-all copy -> delete -> paste preserves outline structure/content', a
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a')
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c')
   await page.keyboard.press('Backspace')
+  await expect(saveIndicator).toHaveText(/Unsaved changes|Saving…/)
   // Immediately paste back from clipboard
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v')
+  await expect(saveIndicator).toHaveText(/Unsaved changes|Saving…/)
+  await expect(saveIndicator).toHaveText('Saved')
 
   // Post-state assertions (DOM)
   await expect(page.locator('li.li-node')).toHaveCount(4)
@@ -104,4 +112,3 @@ test('select-all copy -> delete -> paste preserves outline structure/content', a
     return { count: roots.length, titles }
   }, { message: 'outline titles should be preserved', timeout: 15000 }).toEqual({ count: 3, titles: ['task 1','task 2','task 3'] })
 })
-
