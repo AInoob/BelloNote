@@ -128,7 +128,7 @@ async function findRootIndexes(page) {
   })
 }
 
-test('Enter at end of parent creates new parent sibling and keeps child with original', async ({ page }) => {
+test('Enter at end of parent adds a new child and keeps existing children', async ({ page }) => {
   await openOutline(page)
   await createParentWithChild(page, { parentTitle: 'Parent A', childTitle: 'Child A' })
 
@@ -140,21 +140,17 @@ test('Enter at end of parent creates new parent sibling and keeps child with ori
   await expect.poll(async () => {
     rootIndexes = await findRootIndexes(page)
     return rootIndexes.length
-  }).toBe(2)
+  }).toBe(1)
 
   const allNodes = page.locator('li.li-node')
-  const secondRoot = allNodes.nth(rootIndexes[1])
-  await secondRoot.locator('p').first().click()
+  const parentNode = allNodes.nth(rootIndexes[0])
+  const childNodes = parentNode.locator('li.li-node')
+  await expect(childNodes).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect(childNodes.first()).toContainText('Child A', { timeout: SHORT_TIMEOUT })
+  await expect(childNodes.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
 
-  const debugDoc = await page.evaluate(() => window.__WORKLOG_EDITOR?.getJSON?.())
-  console.log('doc after enter (expanded)', JSON.stringify(debugDoc, null, 2))
-
-  const firstRoot = allNodes.nth(rootIndexes[0])
-  await expect(firstRoot.locator('li.li-node')).toHaveCount(1, { timeout: SHORT_TIMEOUT })
-  await expect(firstRoot.locator('li.li-node').first()).toContainText('Child A', { timeout: SHORT_TIMEOUT })
-
-  await expect(secondRoot).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
-  await expect(secondRoot.locator('li.li-node')).toHaveCount(0)
+  await page.keyboard.type('Child B')
+  await expect(childNodes.nth(1)).toContainText('Child B', { timeout: SHORT_TIMEOUT })
 })
 
 test('Enter at end of collapsed parent keeps children under original task', async ({ page }) => {
@@ -200,7 +196,6 @@ test('Enter at end of collapsed parent keeps children under original task', asyn
     }
     return null
   })
-  console.log('collapsed child structure', childStructure)
 
   await page.keyboard.press('Enter')
   await expect.poll(async () => {
@@ -250,4 +245,67 @@ test('Enter on empty task creates a new task and focuses it', async ({ page }) =
   await newItem.locator('p').first().click()
   await page.keyboard.type('Task 2')
   await expect(newItem).toContainText('Task 2', { timeout: SHORT_TIMEOUT })
+})
+
+test('Tab after creating sibling indents next task without losing focus', async ({ page }) => {
+  await openOutline(page)
+  await page.evaluate(() => localStorage.setItem('WL_DEBUG', '1'))
+
+  await typeIntoFirstItem(page, 'Task 1')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('Task 2')
+
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await page.keyboard.type('Task 3')
+
+  const json = await page.evaluate(() => window.__WORKLOG_EDITOR?.getJSON?.())
+  const list = json?.content?.[0]?.content || []
+  expect(list.length).toBe(2)
+
+  const firstRootParagraph = list[0]?.content?.[0]?.content?.[0]?.text
+  expect(firstRootParagraph).toBe('Task 1')
+
+  const secondRoot = list[1]
+  const secondRootParagraph = secondRoot?.content?.[0]?.content?.[0]?.text
+  expect(secondRootParagraph).toBe('Task 2')
+
+  const nestedList = secondRoot?.content?.[1]
+  expect(nestedList?.type).toBe('bulletList')
+  const childNode = nestedList?.content?.[0]?.content?.[0]?.content?.[0]
+  expect(childNode?.type).toBe('text')
+  expect(childNode?.text).toBe('Task 3')
+})
+
+test('Enter then Tab from child keeps focus in new grandchild', async ({ page }) => {
+  await openOutline(page)
+
+  await typeIntoFirstItem(page, 'Task 1')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('Sub task 1')
+  await page.keyboard.press('Tab')
+
+  await setSelectionToParagraph(page, 'Sub task 1', { position: 'end' })
+
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await page.keyboard.type('Sub sub task 1')
+
+  const doc = await page.evaluate(() => window.__WORKLOG_EDITOR?.getJSON?.())
+  const roots = doc?.content?.[0]?.content || []
+  expect(roots.length).toBe(1)
+
+  const firstRoot = roots[0]
+  const childList = firstRoot?.content?.[1]
+  expect(childList?.type).toBe('bulletList')
+
+  const childItem = childList?.content?.[0]
+  const childParagraph = childItem?.content?.[0]?.content?.[0]?.text
+  expect(childParagraph).toBe('Sub task 1')
+
+  const grandChildList = childItem?.content?.[1]
+  expect(grandChildList?.type).toBe('bulletList')
+  const grandChild = grandChildList?.content?.[0]?.content?.[0]?.content?.[0]
+  expect(grandChild?.type).toBe('text')
+  expect(grandChild?.text).toBe('Sub sub task 1')
 })

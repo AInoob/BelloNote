@@ -10,7 +10,9 @@ import Highlight from '@tiptap/extension-highlight'
 import { lowlight } from 'lowlight/lib/core.js'
 import dayjs from 'dayjs'
 import { TextSelection, NodeSelection } from 'prosemirror-state'
-import { DOMSerializer, Fragment } from 'prosemirror-model'
+import { DOMSerializer, Fragment, Slice } from 'prosemirror-model'
+import { ReplaceAroundStep } from 'prosemirror-transform'
+import { liftListItem, splitListItem } from 'prosemirror-schema-list'
 import { API_ROOT, absoluteUrl, getOutline, saveOutlineApi, uploadImage } from '../api.js'
 import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
@@ -229,6 +231,153 @@ const normalizeUrl = (value = '') => {
 }
 
 const escapeForRegex = (value = '') => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
+
+const findListItemDepth = ($pos) => {
+  if (!$pos) return -1
+  for (let depth = $pos.depth; depth >= 0; depth -= 1) {
+    if ($pos.node(depth)?.type?.name === 'listItem') return depth
+  }
+  return -1
+}
+
+const runListIndentCommand = (editor, direction) => {
+  if (!editor) return false
+  const { state, view } = editor
+  if (!view) return false
+
+  if (direction === 'lift') {
+    const lifted = editor.chain().focus().liftListItem('listItem').run()
+    if (lifted) {
+      view.focus()
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => view.focus())
+      }
+    }
+    return lifted
+  }
+
+  const listItemType = state.schema.nodes.listItem
+  if (!listItemType) return false
+  const { $from, $to } = state.selection
+  const range = $from.blockRange($to, (node) => node.childCount > 0 && node.firstChild?.type === listItemType)
+  if (!range) return false
+  const startIndex = range.startIndex
+  if (startIndex === 0) return false
+  const parent = range.parent
+  const nodeBefore = parent.child(startIndex - 1)
+  if (nodeBefore.type !== listItemType) return false
+
+  const nestedBefore = nodeBefore.lastChild && nodeBefore.lastChild.type === parent.type
+  const inner = Fragment.from(nestedBefore ? listItemType.create() : null)
+  const slice = new Slice(
+    Fragment.from(
+      listItemType.create(null, Fragment.from(parent.type.create(null, inner)))
+    ),
+    nestedBefore ? 3 : 1,
+    0
+  )
+  const before = range.start
+  const after = range.end
+  const originalFrom = state.selection.from
+  const tr = state.tr
+  tr.step(new ReplaceAroundStep(before - (nestedBefore ? 3 : 1), after, before, after, slice, 1, true))
+
+  const mapped = tr.mapping.map(originalFrom, 1)
+  const nextSelection = TextSelection.near(tr.doc.resolve(mapped))
+  tr.setSelection(nextSelection).scrollIntoView()
+  view.dispatch(tr)
+  view.focus()
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => view.focus())
+  }
+  return true
+}
+
+const runSplitListItemWithSelection = (editor) => {
+  if (!editor) return false
+  const listItemType = editor.schema.nodes.listItem
+  const bulletListType = editor.schema.nodes.bulletList
+  if (!listItemType) return false
+  if (typeof window !== 'undefined') window.__WL_LAST_SPLIT = { reason: 'start' }
+  // debug instrumentation
+  if (typeof console !== 'undefined') console.log('[split-debug] helper invoked')
+  const { state, view } = editor
+  const { selection } = state
+  const { $from } = selection
+  const listItemDepth = findListItemDepth($from)
+  if (listItemDepth === -1) return false
+  const listItemPos = $from.before(listItemDepth)
+  const listItemNode = $from.node(listItemDepth)
+  if (!listItemNode) return false
+  let performed = false
+  const splitSuccess = splitListItem(listItemType)(state, (tr) => {
+    performed = true
+    const initialSelectionPos = tr.selection.from
+    const splitDebugInfo = { nested: 0, remaining: 0, reason: 'unprocessed' }
+
+    if (bulletListType) {
+      const newItemResolved = tr.doc.resolve(Math.min(tr.doc.content.size, initialSelectionPos))
+      let newListItem = null
+      let newListItemPos = null
+      if (listItemDepth <= newItemResolved.depth) {
+        try {
+          newListItem = newItemResolved.node(listItemDepth)
+          newListItemPos = newItemResolved.before(listItemDepth)
+        } catch (error) {
+          splitDebugInfo.reason = `resolve-failed:${error?.message || 'unknown'}`
+          newListItem = null
+          newListItemPos = null
+        }
+      } else {
+        splitDebugInfo.reason = `depth-mismatch:${listItemDepth}->${newItemResolved.depth}`
+      }
+      if (newListItem) {
+        const nestedLists = []
+        const remainingChildren = []
+        newListItem.content.forEach((child) => {
+          if (child.type === bulletListType) nestedLists.push(child)
+          else remainingChildren.push(child)
+        })
+        splitDebugInfo.nested = nestedLists.length
+        splitDebugInfo.remaining = remainingChildren.length
+        splitDebugInfo.reason = nestedLists.length > 0 ? 'moved' : 'no-nested'
+        if (nestedLists.length > 0) {
+          const updatedNewItem = newListItem.type.create(newListItem.attrs, Fragment.fromArray(remainingChildren))
+          tr.replaceWith(newListItemPos, newListItemPos + newListItem.nodeSize, updatedNewItem)
+
+          const originalItemPos = tr.mapping.map(listItemPos, -1)
+          const originalItem = tr.doc.nodeAt(originalItemPos)
+          if (originalItem) {
+            const originalChildren = []
+            originalItem.content.forEach((child) => { originalChildren.push(child) })
+            const updatedOriginal = originalItem.type.create(
+              originalItem.attrs,
+              Fragment.fromArray([...originalChildren, ...nestedLists])
+            )
+            tr.replaceWith(originalItemPos, originalItemPos + originalItem.nodeSize, updatedOriginal)
+          } else {
+            splitDebugInfo.reason = 'missing-original'
+          }
+        }
+      } else if (!splitDebugInfo.reason.startsWith('resolve') && !splitDebugInfo.reason.startsWith('depth')) {
+        splitDebugInfo.reason = 'no-new-item'
+      }
+    } else {
+      splitDebugInfo.reason = 'no-bullet-type'
+    }
+
+    if (typeof window !== 'undefined') window.__WL_LAST_SPLIT = splitDebugInfo
+
+    const mappedSelectionPos = tr.mapping.map(initialSelectionPos, 1)
+    const resolved = tr.doc.resolve(Math.min(tr.doc.content.size, mappedSelectionPos))
+    const nextSelection = TextSelection.create(tr.doc, resolved.pos)
+    view.dispatch(tr.setSelection(nextSelection).scrollIntoView())
+  })
+
+  if (!splitSuccess || !performed) return false
+  view.focus()
+  return true
+}
 
 function CodeBlockView(props) {
   const { node, extension, updateAttributes, editor } = props
@@ -1431,6 +1580,17 @@ export default function OutlinerView({
           const onlyParagraph = listItemNode.childCount === 1 && listItemNode.child(0)?.type?.name === 'paragraph'
           const paragraphEmpty = paragraphNode.content.size === 0
 
+          let nestedListInfo = null
+          if (bulletListType) {
+            let childPos = listItemPos + 1
+            listItemNode.content.forEach((child) => {
+              if (!nestedListInfo && child.type === bulletListType) {
+                nestedListInfo = { node: child, pos: childPos }
+              }
+              childPos += child.nodeSize
+            })
+          }
+
           if (onlyParagraph && paragraphEmpty && isAtStart && isAtEnd) {
             const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
             const insertPos = listItemPos + listItemNode.nodeSize
@@ -1440,6 +1600,32 @@ export default function OutlinerView({
             view.focus()
             requestAnimationFrame(() => view.focus())
             logCursorTiming('empty-sibling', enterStartedAt)
+            return true
+          }
+
+          if (!isChild && isAtEnd && nestedListInfo) {
+            const isCollapsed = !!listItemNode.attrs?.collapsed
+            if (isCollapsed) {
+              const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
+              const insertPos = listItemPos + listItemNode.nodeSize
+              let tr = state.tr.insert(insertPos, newSibling)
+              tr = placeCursorAtEnd(tr, insertPos)
+              view.dispatch(tr.scrollIntoView())
+              view.focus()
+              requestAnimationFrame(() => view.focus())
+              logCursorTiming('split-parent-keep-children', enterStartedAt)
+              return true
+            }
+
+            const { node: nestedListNode, pos: nestedListPos } = nestedListInfo
+            const newChild = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
+            const childInsertPos = nestedListPos + nestedListNode.nodeSize - 1
+            let tr = state.tr.insert(childInsertPos, newChild)
+            tr = placeCursorAtEnd(tr, childInsertPos)
+            view.dispatch(tr.scrollIntoView())
+            view.focus()
+            requestAnimationFrame(() => view.focus())
+            logCursorTiming('append-child-from-parent', enterStartedAt)
             return true
           }
 
@@ -1453,19 +1639,7 @@ export default function OutlinerView({
             return true
           }
 
-          if (!isChild && isAtEnd) {
-            const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
-            const insertPos = listItemPos + listItemNode.nodeSize
-            let tr = state.tr.insert(insertPos, newSibling)
-            tr = placeCursorAtEnd(tr, insertPos)
-            view.dispatch(tr.scrollIntoView())
-            view.focus()
-            requestAnimationFrame(() => view.focus())
-            logCursorTiming('append-root-sibling', enterStartedAt)
-            return true
-          }
-
-          const didSplit = editor.commands.splitListItem('listItem')
+          const didSplit = runSplitListItemWithSelection(editor)
           if (didSplit) {
             editor.commands.updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false })
             view.focus()
@@ -1479,10 +1653,14 @@ export default function OutlinerView({
           const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
           if (!inCode) {
             event.preventDefault()
-            const cmd = event.shiftKey ? 'liftListItem' : 'sinkListItem'
-            editor.chain().focus()[cmd]('listItem').run()
-            pushDebug('indentation', { shift: event.shiftKey })
-            return true
+            const direction = event.shiftKey ? 'lift' : 'sink'
+            const handled = runListIndentCommand(editor, direction)
+            if (handled) {
+              pushDebug('indentation', { shift: event.shiftKey })
+              return true
+            }
+            pushDebug('indentation-failed', { shift: event.shiftKey })
+            return false
           }
           return false
         }
