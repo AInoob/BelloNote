@@ -1,15 +1,14 @@
+
 const { test, expect } = require('./test-base')
 
-// Ensure tests don't interfere with each other
 test.describe.configure({ mode: 'serial' })
 
-const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
 const SHORT_TIMEOUT = 1000
 
-async function ensureBackendReady(request) {
+async function ensureBackendReady(request, app) {
   await expect.poll(async () => {
     try {
-      const response = await request.get(`${ORIGIN}/api/health`)
+      const response = await request.get(`${app.apiUrl}/api/health`)
       if (!response.ok()) return 'down'
       const body = await response.json()
       return body?.ok ? 'ready' : 'down'
@@ -19,14 +18,8 @@ async function ensureBackendReady(request) {
   }, { message: 'backend should respond to health check', timeout: 10000 }).toBe('ready')
 }
 
-async function resetOutline(request) {
-  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: [] } })
-  expect(response.ok(), 'outline reset should succeed').toBeTruthy()
-}
-
-async function setOutlineNormalized(request, outline) {
-  const res = await request.post(`${ORIGIN}/api/outline`, { data: { outline } })
-  expect(res.ok(), 'outline set should succeed').toBeTruthy()
+async function resetOutline(app, outline = []) {
+  await app.resetOutline(outline)
 }
 
 function buildArchivedOutline() {
@@ -86,31 +79,23 @@ function buildChildArchivedOutline() {
   ]
 }
 
-// This test ensures that archived dimming applies even on first load
-// and that the Archived: Hidden toggle hides archived items (with descendants)
-
-test('archived items are dimmed on initial load and hide when toggled', async ({ page, request }) => {
-  await ensureBackendReady(request)
-  await resetOutline(request)
-
-  // Seed outline directly via API, then open the app (first load)
-  await setOutlineNormalized(request, buildArchivedOutline())
+test('archived items are dimmed on initial load and hide when toggled', async ({ page, request, app }) => {
+  await ensureBackendReady(request, app)
+  await resetOutline(app)
+  await resetOutline(app, buildArchivedOutline())
 
   await page.goto('/')
 
-  // Wait items render and NodeViews mount
   const archivedItem = page.locator('li.li-node', { hasText: 'archived parent @archived' }).first()
   const childItem = page.locator('li.li-node', { hasText: 'child A' }).first()
   await expect(archivedItem).toBeVisible({ timeout: 15000 })
   await expect(childItem).toBeVisible({ timeout: 15000 })
 
-  // On first load, applyStatusFilter should have run and set data-archived="1"
   await expect.poll(async () => await archivedItem.getAttribute('data-archived'), { timeout: 15000 })
     .toBe('1')
   await expect.poll(async () => await childItem.getAttribute('data-archived'), { timeout: 15000 })
     .toBe('1')
 
-  // Toggle Archived: Hidden and expect the archived root to be hidden
   const archivedToggle = page.locator('.archive-toggle .btn.pill')
   await expect(archivedToggle).toBeVisible()
 
@@ -126,10 +111,10 @@ test('archived items are dimmed on initial load and hide when toggled', async ({
   }).toBe('yes')
 })
 
-test('archived descendants do not dim parent rows', async ({ page, request }) => {
-  await ensureBackendReady(request)
-  await resetOutline(request)
-  await setOutlineNormalized(request, buildChildArchivedOutline())
+test('archived descendants do not dim parent rows', async ({ page, request, app }) => {
+  await ensureBackendReady(request, app)
+  await resetOutline(app)
+  await resetOutline(app, buildChildArchivedOutline())
   await page.goto('/')
 
   const parent = page.locator('li.li-node[data-body-text="parent stays bright"]').first()
@@ -147,9 +132,9 @@ test('archived descendants do not dim parent rows', async ({ page, request }) =>
   expect(childOpacity).toBeLessThan(0.9)
 })
 
-test('hiding archived children does not hide the parent', async ({ page, request }) => {
-  await ensureBackendReady(request)
-  await resetOutline(request)
+test('hiding archived children does not hide the parent', async ({ page, request, app }) => {
+  await ensureBackendReady(request, app)
+  await resetOutline(app)
 
   await page.goto('/')
 

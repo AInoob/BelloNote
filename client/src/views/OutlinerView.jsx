@@ -240,6 +240,7 @@ const findListItemDepth = ($pos) => {
   return -1
 }
 
+
 const runListIndentCommand = (editor, direction) => {
   if (!editor) return false
   const { state, view } = editor
@@ -293,14 +294,23 @@ const runListIndentCommand = (editor, direction) => {
   return true
 }
 
-const runSplitListItemWithSelection = (editor) => {
+const positionOfListChild = (parentNode, parentPos, childIndex) => {
+  if (!parentNode || typeof parentPos !== 'number') return null
+  if (childIndex < 0 || childIndex >= parentNode.childCount) return null
+  let pos = parentPos + 1
+  for (let i = 0; i < parentNode.childCount; i += 1) {
+    if (i === childIndex) return pos
+    pos += parentNode.child(i).nodeSize
+  }
+  return null
+}
+
+const runSplitListItemWithSelection = (editor, options = {}) => {
   if (!editor) return false
   const listItemType = editor.schema.nodes.listItem
   const bulletListType = editor.schema.nodes.bulletList
   if (!listItemType) return false
   if (typeof window !== 'undefined') window.__WL_LAST_SPLIT = { reason: 'start' }
-  // debug instrumentation
-  if (typeof console !== 'undefined') console.log('[split-debug] helper invoked')
   const { state, view } = editor
   const { selection } = state
   const { $from } = selection
@@ -309,11 +319,16 @@ const runSplitListItemWithSelection = (editor) => {
   const listItemPos = $from.before(listItemDepth)
   const listItemNode = $from.node(listItemDepth)
   if (!listItemNode) return false
+  const parentDepth = listItemDepth > 0 ? listItemDepth - 1 : null
+  const listParent = parentDepth !== null ? $from.node(parentDepth) : null
+  const parentPos = parentDepth !== null ? $from.before(parentDepth) : null
+  const itemIndex = $from.index(listItemDepth)
+  const splitAtStart = !!options.splitAtStart
   let performed = false
   const splitSuccess = splitListItem(listItemType)(state, (tr) => {
     performed = true
     const initialSelectionPos = tr.selection.from
-    const splitDebugInfo = { nested: 0, remaining: 0, reason: 'unprocessed' }
+    const splitDebugInfo = { nested: 0, remaining: 0, reason: 'unprocessed', index: itemIndex, splitAtStart }
 
     if (bulletListType) {
       const newItemResolved = tr.doc.resolve(Math.min(tr.doc.content.size, initialSelectionPos))
@@ -341,6 +356,7 @@ const runSplitListItemWithSelection = (editor) => {
         splitDebugInfo.nested = nestedLists.length
         splitDebugInfo.remaining = remainingChildren.length
         splitDebugInfo.reason = nestedLists.length > 0 ? 'moved' : 'no-nested'
+
         if (nestedLists.length > 0) {
           const updatedNewItem = newListItem.type.create(newListItem.attrs, Fragment.fromArray(remainingChildren))
           tr.replaceWith(newListItemPos, newListItemPos + newListItem.nodeSize, updatedNewItem)
@@ -367,6 +383,7 @@ const runSplitListItemWithSelection = (editor) => {
     }
 
     if (typeof window !== 'undefined') window.__WL_LAST_SPLIT = splitDebugInfo
+    if (typeof console !== 'undefined') console.log('[split-debug] info', splitDebugInfo)
 
     const mappedSelectionPos = tr.mapping.map(initialSelectionPos, 1)
     const resolved = tr.doc.resolve(Math.min(tr.doc.content.size, mappedSelectionPos))
@@ -376,6 +393,165 @@ const runSplitListItemWithSelection = (editor) => {
 
   if (!splitSuccess || !performed) return false
   view.focus()
+  return true
+}
+
+const applySplitStatusAdjustments = (editor, meta) => {
+  if (!editor || !meta) return
+  const { parentPos, originalIndex, newIndex, originalAttrs = {} } = meta
+  const { state, view } = editor
+  if (typeof console !== 'undefined') console.log('[split-adjust] invoked', meta)
+  const parentNode = typeof parentPos === 'number' ? state.doc.nodeAt(parentPos) : null
+  if (!parentNode) {
+    if (typeof console !== 'undefined') console.log('[split-adjust] missing parent', { parentPos, originalIndex, newIndex })
+    return
+  }
+
+  const tr = state.tr
+  let changed = false
+
+  const newItemPos = positionOfListChild(parentNode, parentPos, newIndex)
+  if (typeof newItemPos === 'number') {
+    const newNode = tr.doc.nodeAt(newItemPos)
+    if (newNode) {
+      if (typeof console !== 'undefined') console.log('[split-adjust] new item', { parentPos, newIndex, attrs: newNode.attrs })
+      const sanitizedAttrs = {
+        ...newNode.attrs,
+        status: STATUS_EMPTY,
+        dataId: null,
+        collapsed: false
+      }
+      if (
+        sanitizedAttrs.status !== newNode.attrs.status ||
+        sanitizedAttrs.dataId !== newNode.attrs.dataId ||
+        sanitizedAttrs.collapsed !== newNode.attrs.collapsed
+      ) {
+        tr.setNodeMarkup(newItemPos, newNode.type, sanitizedAttrs, newNode.marks)
+        changed = true
+      }
+    }
+  }
+
+  const originalItemPos = positionOfListChild(parentNode, parentPos, originalIndex)
+  if (typeof originalItemPos === 'number') {
+    const originalNode = tr.doc.nodeAt(originalItemPos)
+    if (originalNode) {
+      if (typeof console !== 'undefined') console.log('[split-adjust] original item', { parentPos, originalIndex, attrs: originalNode.attrs, restore: originalAttrs })
+      const restoredAttrs = {
+        ...originalNode.attrs,
+        status: originalAttrs.status ?? STATUS_EMPTY,
+        dataId: originalAttrs.dataId ?? null,
+        collapsed: originalAttrs.collapsed ?? false
+      }
+      if (
+        restoredAttrs.status !== originalNode.attrs.status ||
+        restoredAttrs.dataId !== originalNode.attrs.dataId ||
+        restoredAttrs.collapsed !== originalNode.attrs.collapsed
+      ) {
+        tr.setNodeMarkup(originalItemPos, originalNode.type, restoredAttrs, originalNode.marks)
+        changed = true
+      }
+    }
+  }
+
+  if (changed) {
+    view.dispatch(tr)
+  }
+}
+
+
+const promoteSplitSiblingToChild = (editor, context) => {
+  if (!editor || !context) return false
+  const { parentPos, originalIndex, newIndex, listItemType, bulletListType, paragraphType } = context
+  const { state, view } = editor
+  const parentNode = typeof parentPos === 'number' ? state.doc.nodeAt(parentPos) : null
+  if (!parentNode || !listItemType || !bulletListType || !paragraphType) return false
+  if (originalIndex < 0 || originalIndex >= parentNode.childCount) return false
+  if (newIndex < 0 || newIndex >= parentNode.childCount) return false
+
+  const originalNode = parentNode.child(originalIndex)
+  const newSiblingNode = parentNode.child(newIndex)
+  if (!originalNode || !newSiblingNode || newSiblingNode.type !== listItemType) return false
+
+  let nestedListNode = null
+  originalNode.content.forEach(child => { if (!nestedListNode && child.type === bulletListType) nestedListNode = child })
+  if (!nestedListNode) return false
+
+  const paragraphChild = newSiblingNode.child(0)
+  const baseParagraph = paragraphChild && paragraphChild.type === paragraphType ? paragraphChild : paragraphType.create()
+  const sanitizedChild = listItemType.create({
+    ...newSiblingNode.attrs,
+    status: STATUS_EMPTY,
+    dataId: null,
+    collapsed: false
+  }, Fragment.from(baseParagraph))
+
+  const updatedNestedChildren = []
+  nestedListNode.content.forEach(child => { updatedNestedChildren.push(child) })
+  updatedNestedChildren.push(sanitizedChild)
+  const updatedNestedList = bulletListType.create(nestedListNode.attrs, Fragment.fromArray(updatedNestedChildren))
+
+  const updatedOriginalChildren = []
+  originalNode.content.forEach(child => {
+    if (child === nestedListNode) updatedOriginalChildren.push(updatedNestedList)
+    else updatedOriginalChildren.push(child)
+  })
+  const updatedOriginalNode = listItemType.create(originalNode.attrs, Fragment.fromArray(updatedOriginalChildren))
+
+  const updatedParentChildren = []
+  parentNode.content.forEach((child, index) => {
+    if (index === originalIndex) updatedParentChildren.push(updatedOriginalNode)
+    else if (index !== newIndex) updatedParentChildren.push(child)
+  })
+  const updatedParentNode = parentNode.type.create(parentNode.attrs, Fragment.fromArray(updatedParentChildren))
+
+  let tr = state.tr.replaceWith(parentPos, parentPos + parentNode.nodeSize, updatedParentNode)
+
+  let selectionPos = null
+  const reloadedParent = tr.doc.nodeAt(parentPos)
+  if (reloadedParent) {
+    let runningPos = parentPos + 1
+    for (let i = 0; i < reloadedParent.childCount; i += 1) {
+      const child = reloadedParent.child(i)
+      if (i === originalIndex) {
+        let innerPos = runningPos + 1
+        for (let j = 0; j < child.childCount; j += 1) {
+          const inner = child.child(j)
+          if (inner.type === paragraphType) {
+            innerPos += inner.nodeSize
+          } else if (inner.type === bulletListType) {
+            let nestedPos = innerPos
+            for (let k = 0; k < inner.childCount; k += 1) {
+              const nestedItem = inner.child(k)
+              if (k === inner.childCount - 1) {
+                const nestedParagraph = nestedItem.child(0)
+                if (nestedParagraph && nestedParagraph.type === paragraphType) {
+                  const paragraphStart = nestedPos + 1
+                  selectionPos = paragraphStart + nestedParagraph.content.size
+                }
+              }
+              nestedPos += nestedItem.nodeSize
+            }
+            innerPos += inner.nodeSize
+          } else {
+            innerPos += inner.nodeSize
+          }
+        }
+        break
+      }
+      runningPos += child.nodeSize
+    }
+  }
+
+  if (selectionPos !== null) {
+    try {
+      tr = tr.setSelection(TextSelection.create(tr.doc, selectionPos))
+    } catch (error) {
+      if (typeof console !== 'undefined') console.warn('[split-adjust] selection set failed', error)
+    }
+  }
+
+  view.dispatch(tr.scrollIntoView())
   return true
 }
 
@@ -689,18 +865,31 @@ function ListItemView(props) {
       const pos = typeof getPos === 'function' ? getPos() : null
       if (typeof pos !== 'number' || !editor) return
       const { state, view } = editor
-      const listItemNode = state.doc.nodeAt(pos)
+      const resolved = state.doc.resolve(pos)
+      const listItemDepth = findListItemDepth(resolved)
+      if (listItemDepth === -1) return
+      const listItemPos = resolved.before(listItemDepth)
+      const listItemNode = state.doc.nodeAt(listItemPos)
       if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) return
       const paragraphNode = listItemNode.child(0)
       if (!paragraphNode || paragraphNode.type.name !== 'paragraph') return
+      const parentDepth = listItemDepth > 0 ? listItemDepth - 1 : null
+      const parentPos = parentDepth !== null ? resolved.before(parentDepth) : null
+      const originalIndex = resolved.index(listItemDepth)
+      const originalAttrs = { ...(listItemNode.attrs || {}) }
       editor.commands.focus()
       const paragraphStart = pos + 1
       const paragraphEnd = paragraphStart + paragraphNode.nodeSize - 1
       const tr = state.tr.setSelection(TextSelection.create(state.doc, paragraphEnd))
       view.dispatch(tr)
-      const didSplit = editor.commands.splitListItem('listItem')
+      const didSplit = runSplitListItemWithSelection(editor, { splitAtStart: false })
       if (didSplit) {
-        editor.commands.updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false })
+        applySplitStatusAdjustments(editor, {
+          parentPos,
+          originalIndex,
+          newIndex: originalIndex + 1,
+          originalAttrs
+        })
       }
     } catch {}
   }, [editor, getPos, readOnly, allowStatusToggleInReadOnly])
@@ -1547,6 +1736,10 @@ export default function OutlinerView({
             return false
           }
 
+          const parentDepth = listItemDepth > 0 ? listItemDepth - 1 : null
+          const parentPos = parentDepth !== null ? $from.before(parentDepth) : null
+          const originalAttrs = { ...(listItemNode.attrs || {}) }
+
           const paragraphNode = listItemNode.child(0)
           if (!paragraphNode || paragraphNode.type.name !== 'paragraph') {
             return false
@@ -1573,7 +1766,8 @@ export default function OutlinerView({
             const insertedNode = tr.doc.nodeAt(pos)
             if (!insertedNode || insertedNode.childCount === 0) return tr
             const para = insertedNode.child(0)
-            const paragraphEnd = pos + 1 + para.nodeSize - 1
+            const paragraphStart = pos + 1
+            const paragraphEnd = paragraphStart + para.content.size
             return tr.setSelection(TextSelection.create(tr.doc, paragraphEnd))
           }
 
@@ -1595,8 +1789,27 @@ export default function OutlinerView({
             const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
             const insertPos = listItemPos + listItemNode.nodeSize
             let tr = state.tr.insert(insertPos, newSibling)
+            const selectionTarget = (() => {
+              const inserted = tr.doc.nodeAt(insertPos)
+              if (!inserted || inserted.childCount === 0) return null
+              const para = inserted.child(0)
+              const paragraphStart = insertPos + 1
+              return paragraphStart + para.content.size
+            })()
             tr = placeCursorAtEnd(tr, insertPos)
             view.dispatch(tr.scrollIntoView())
+            if (selectionTarget !== null) {
+              const mappedPos = tr.mapping.map(selectionTarget, 1)
+                try {
+                const latest = view.state
+                const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
+                const resolved = latest.doc.resolve(clamped)
+                const targetSelection = TextSelection.near(resolved, -1)
+                view.dispatch(latest.tr.setSelection(targetSelection))
+              } catch (error) {
+                if (typeof console !== 'undefined') console.warn('[split-adjust] empty sibling selection restore failed', error)
+              }
+            }
             view.focus()
             requestAnimationFrame(() => view.focus())
             logCursorTiming('empty-sibling', enterStartedAt)
@@ -1609,8 +1822,27 @@ export default function OutlinerView({
               const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
               const insertPos = listItemPos + listItemNode.nodeSize
               let tr = state.tr.insert(insertPos, newSibling)
+              const selectionTarget = (() => {
+                const inserted = tr.doc.nodeAt(insertPos)
+                if (!inserted || inserted.childCount === 0) return null
+                const para = inserted.child(0)
+                const paragraphStart = insertPos + 1
+                return paragraphStart + para.content.size
+              })()
               tr = placeCursorAtEnd(tr, insertPos)
               view.dispatch(tr.scrollIntoView())
+              if (selectionTarget !== null) {
+                const mappedPos = tr.mapping.map(selectionTarget, 1)
+                try {
+                  const latest = view.state
+                  const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
+                  const resolved = latest.doc.resolve(clamped)
+                  const targetSelection = TextSelection.near(resolved, -1)
+                  view.dispatch(latest.tr.setSelection(targetSelection))
+                } catch (error) {
+                  if (typeof console !== 'undefined') console.warn('[split-adjust] collapsed sibling selection restore failed', error)
+                }
+              }
               view.focus()
               requestAnimationFrame(() => view.focus())
               logCursorTiming('split-parent-keep-children', enterStartedAt)
@@ -1621,8 +1853,27 @@ export default function OutlinerView({
             const newChild = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
             const childInsertPos = nestedListPos + nestedListNode.nodeSize - 1
             let tr = state.tr.insert(childInsertPos, newChild)
+            const selectionTarget = (() => {
+              const inserted = tr.doc.nodeAt(childInsertPos)
+              if (!inserted || inserted.childCount === 0) return null
+              const para = inserted.child(0)
+              const paragraphStart = childInsertPos + 1
+              return paragraphStart + para.content.size
+            })()
             tr = placeCursorAtEnd(tr, childInsertPos)
             view.dispatch(tr.scrollIntoView())
+            if (selectionTarget !== null) {
+              const mappedPos = tr.mapping.map(selectionTarget, 1)
+              try {
+                const latest = view.state
+                const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
+                const resolved = latest.doc.resolve(clamped)
+                const targetSelection = TextSelection.near(resolved, -1)
+                view.dispatch(latest.tr.setSelection(targetSelection))
+              } catch (error) {
+                if (typeof console !== 'undefined') console.warn('[split-adjust] selection restore failed', error)
+              }
+            }
             view.focus()
             requestAnimationFrame(() => view.focus())
             logCursorTiming('append-child-from-parent', enterStartedAt)
@@ -1630,18 +1881,66 @@ export default function OutlinerView({
           }
 
           if (isChild && isAtStart) {
-            let tr = state.tr.insert(listItemPos, listItemType.create(defaultAttrs, Fragment.from(paragraphType.create())))
+            const newSiblingNode = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
+            let tr = state.tr.insert(listItemPos, newSiblingNode)
+            const selectionTarget = (() => {
+              const inserted = tr.doc.nodeAt(listItemPos)
+              if (!inserted || inserted.childCount === 0) return null
+              const para = inserted.child(0)
+              const paragraphStart = listItemPos + 1
+              return paragraphStart + para.content.size
+            })()
             tr = placeCursorAtEnd(tr, listItemPos)
             view.dispatch(tr)
+            if (selectionTarget !== null) {
+              const mappedPos = tr.mapping.map(selectionTarget, 1)
+              try {
+                const latest = view.state
+                const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
+                const resolved = latest.doc.resolve(clamped)
+                const targetSelection = TextSelection.near(resolved, -1)
+                view.dispatch(latest.tr.setSelection(targetSelection))
+              } catch (error) {
+                if (typeof console !== 'undefined') console.warn('[split-adjust] prepend selection restore failed', error)
+              }
+            }
             view.focus()
             requestAnimationFrame(() => view.focus())
             logCursorTiming('prepend-child', enterStartedAt)
             return true
           }
 
-          const didSplit = runSplitListItemWithSelection(editor)
+          const paragraphEndPos = listItemPos + 1 + paragraphNode.nodeSize - 1
+          if (offset !== paragraphNode.content.size) {
+            const endSelection = TextSelection.create(view.state.doc, paragraphEndPos)
+            view.dispatch(view.state.tr.setSelection(endSelection))
+          }
+          const originalIndex = $from.index(listItemDepth)
+          const splitMeta = {
+            parentPos,
+            originalIndex,
+            newIndex: originalIndex + 1,
+            originalAttrs
+          }
+          const didSplit = runSplitListItemWithSelection(editor, { splitAtStart: false })
+          if (typeof console !== 'undefined') console.log('[split-debug] didSplit', didSplit)
           if (didSplit) {
-            editor.commands.updateAttributes('listItem', { status: STATUS_EMPTY, dataId: null, collapsed: false })
+            if (typeof console !== 'undefined') console.log('[split-debug] applying adjustments', splitMeta)
+            applySplitStatusAdjustments(editor, splitMeta)
+            const promoted = !isChild && isAtEnd && !!nestedListInfo && promoteSplitSiblingToChild(editor, {
+              parentPos,
+              originalIndex,
+              newIndex: splitMeta.newIndex,
+              listItemType,
+              bulletListType,
+              paragraphType
+            })
+            if (promoted) {
+              view.focus()
+              requestAnimationFrame(() => view.focus())
+              logCursorTiming('append-child-from-parent', enterStartedAt)
+              return true
+            }
             view.focus()
             requestAnimationFrame(() => view.focus())
             logCursorTiming('split-list-item', enterStartedAt)
@@ -1699,13 +1998,17 @@ export default function OutlinerView({
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.__WORKLOG_EDITOR = editor
+      if (!isReadOnly) window.__WORKLOG_EDITOR_MAIN = editor
+      else window.__WORKLOG_EDITOR_RO = editor
     }
     return () => {
-      if (typeof window !== 'undefined' && window.__WORKLOG_EDITOR === editor) {
-        window.__WORKLOG_EDITOR = null
+      if (typeof window !== 'undefined') {
+        if (window.__WORKLOG_EDITOR === editor) window.__WORKLOG_EDITOR = null
+        if (!isReadOnly && window.__WORKLOG_EDITOR_MAIN === editor) window.__WORKLOG_EDITOR_MAIN = null
+        if (isReadOnly && window.__WORKLOG_EDITOR_RO === editor) window.__WORKLOG_EDITOR_RO = null
       }
     }
-  }, [editor])
+  }, [editor, isReadOnly])
 
   const normalizeImageSrc = useCallback((src) => absoluteUrl(src), [])
 

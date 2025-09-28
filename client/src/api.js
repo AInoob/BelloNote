@@ -5,13 +5,19 @@ const RAW = (import.meta.env.VITE_API_URL ?? '').trim();
 let apiRoot = (RAW === '/' || RAW === '') ? '' : RAW.replace(/\/$/, '');
 export const API_ROOT = apiRoot;
 const defaultHeaders = {}
+const PLAYWRIGHT_HOSTS = new Set([
+  '127.0.0.1:4173',
+  'localhost:4173',
+  '127.0.0.1:4175',
+  'localhost:4175',
+  '127.0.0.1:5232',
+  'localhost:5232'
+])
+
 try {
   if (typeof window !== 'undefined') {
     const host = window.location && window.location.host
-    if (host && (
-      host.startsWith('127.0.0.1:4173') || host.startsWith('localhost:4173') ||
-      host.startsWith('127.0.0.1:4175') || host.startsWith('localhost:4175')
-    )) {
+    if (host && PLAYWRIGHT_HOSTS.has(host)) {
       defaultHeaders['x-playwright-test'] = '1'
     }
   }

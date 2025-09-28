@@ -1,11 +1,31 @@
-const { test, expect } = require('./test-base')
+const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 const path = require('path')
 
-const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
+let API_URL = null
 const TEST_IMAGE = path.join(__dirname, '..', 'assets', 'test-image.png')
 const SHORT_TIMEOUT = 1000
+
+const basicTasksState = () => [
+  outlineNode('task 1'),
+  outlineNode('task 2'),
+  outlineNode('task 3')
+]
+
+const codeBlockTasksState = () => [
+  outlineNode('task 1'),
+  outlineNode('task 2'),
+  outlineNode('task 3')
+]
+
+const imageTasksState = () => basicTasksState()
+
+const tasksWithDateState = (dateToken) => [
+  outlineNode('task 1'),
+  outlineNode(`task 2 @${dateToken}`),
+  outlineNode('task 3')
+]
 
 async function resetOutline(request) {
   const response = await request.post(`${API_URL}/api/outline`, {
@@ -27,7 +47,8 @@ async function expectOutlineTitles(request, expectedTitles) {
   }, { message: 'outline titles should match expected order' }).toEqual(expectedTitles)
 }
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ request, app }) => {
+  API_URL = app.apiUrl;
   await resetOutline(request)
 })
 
@@ -82,11 +103,12 @@ async function createThreeTasks(page, request) {
 
   await page.keyboard.type('task 3')
   await expect(listItems.nth(2)).toContainText('task 3', { timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, basicTasksState(), { includeTags: false })
 }
 
 async function placeCaretAtTaskEnd(page, index) {
   await page.evaluate((idx) => {
-    const editor = window.__WORKLOG_EDITOR
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
     if (!editor) throw new Error('editor not ready')
     const view = editor.view
     const paragraphs = Array.from(document.querySelectorAll('li.li-node p'))
@@ -130,6 +152,7 @@ test('create task 1, task 2, and task 3', async ({ page, request }) => {
   await expect(items.nth(2)).toContainText('task 3', { timeout: SHORT_TIMEOUT })
 
   await expectOutlineTitles(request, ['task 1', 'task 2', 'task 3'])
+  await expectOutlineState(page, basicTasksState(), { includeTags: false })
 })
 
 test('insert code block into task 2 via slash command', async ({ page, request }) => {
@@ -148,6 +171,7 @@ test('insert code block into task 2 via slash command', async ({ page, request }
   await expect(secondItem).toContainText('task 2')
   await expect(secondItem.locator('code')).toHaveCount(1)
   await expect(page.locator('li.li-node').nth(2)).toContainText('task 3')
+  await expectOutlineState(page, codeBlockTasksState(), { includeTags: false })
 
   await expect.poll(async () => {
     const data = await waitForOutline(request)
@@ -178,6 +202,7 @@ test('upload image into task 2 via slash command', async ({ page, request }) => 
 
   await expect(page.locator('li.li-node img').first()).toBeVisible()
   await expect(page.locator('li.li-node')).toHaveCount(3)
+  await expectOutlineState(page, imageTasksState(), { includeTags: false })
 
   await expect.poll(async () => {
     const data = await waitForOutline(request)
@@ -211,4 +236,5 @@ test('insert today date inline via slash command', async ({ page, request }) => 
   await expect(secondItem).toContainText(`@${today}`, { timeout: SHORT_TIMEOUT })
   await expect(page.locator('li.li-node').nth(2)).not.toContainText(`@${today}`, { timeout: SHORT_TIMEOUT })
   await expect(page.locator('li.li-node')).toHaveCount(3, { timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, tasksWithDateState(today), { includeTags: false })
 })

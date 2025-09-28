@@ -3,7 +3,7 @@ const { test, expect } = require('./test-base')
 // Keep tests serial to avoid cross-talk on outline data
 test.describe.configure({ mode: 'serial' })
 
-const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+let ORIGIN = null
 const SHORT_TIMEOUT = 1000
 
 async function ensureBackendReady(request) {
@@ -20,7 +20,7 @@ async function ensureBackendReady(request) {
 }
 
 async function resetOutline(request) {
-  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: []  }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
@@ -58,12 +58,16 @@ function buildTallOutlineForTimeline(today) {
 // 1) Timeline: container should not have inner scroll or max-height
 // We assert no max-height and overflow not set to auto/scroll.
 // We do not rely on scrollHeight because various environments differ; the CSS check is sufficient.
+test.beforeEach(async ({ app }) => {
+  ORIGIN = app.apiUrl;
+})
+
 test('timeline day container has no inner scroll (no max-height/overflow)', async ({ page, request }) => {
   await ensureBackendReady(request)
   await resetOutline(request)
   const today = buildToday()
   const outline = buildTallOutlineForTimeline(today)
-  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline } })
+  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline  }, headers: { 'x-playwright-test': '1' } })
   expect(setRes.ok(), 'outline set should succeed').toBeTruthy()
 
   await page.goto('/')

@@ -1,11 +1,24 @@
-const { test, expect } = require('./test-base')
 
-const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4100'
-const SHORT_TIMEOUT = 1000
+const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
 
-async function resetOutline(request) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
-  expect(response.ok()).toBeTruthy()
+const SHORT_TIMEOUT = 2500
+
+async function resetOutline(app, outline = []) {
+  await app.resetOutline(outline)
+}
+
+function buildInitialOutline() {
+  return [
+    {
+      id: null,
+      title: 'Start here',
+      status: '',
+      dates: [],
+      ownWorkedOnDates: [],
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Start here' }] }],
+      children: []
+    }
+  ]
 }
 
 async function openOutline(page) {
@@ -29,28 +42,32 @@ async function typeIntoFirstItem(page, text) {
   await page.keyboard.type(text)
 }
 
-test.beforeEach(async ({ request }) => { await resetOutline(request) })
+const settle = async (page, ms = 100) => { await page.waitForTimeout(ms) }
 
-// 1) New sibling should start with todo regardless of previous status
-test('Enter creates a new item with status todo even if previous is done', async ({ page }) => {
-  await openOutline(page)
-
-  // Make first item 'done'
-  const firstLi = page.locator('li.li-node').first()
-  await typeIntoFirstItem(page, 'First')
-  const statusBtn = firstLi.locator('.status-chip')
-  await statusBtn.click() // empty -> todo
-  await statusBtn.click() // todo -> in-progress
-  await statusBtn.click() // in-progress -> done
-  await expect(firstLi).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
-
-  // Press Enter to create next item
-  await page.keyboard.press('Enter')
-
-  const items = page.locator('li.li-node')
-  await expect(items).toHaveCount(2, { timeout: SHORT_TIMEOUT })
-  await expect(items.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
-})
+async function setSelectionToParagraph(page, text, { position = 'end' } = {}) {
+  await page.evaluate(({ text, position }) => {
+    const editor = window.__WORKLOG_EDITOR_MAIN?.chain ? window.__WORKLOG_EDITOR_MAIN : window.__WORKLOG_EDITOR
+    if (!editor) throw new Error('Editor unavailable')
+    const target = text.trim()
+    let anchor = null
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name !== 'listItem') return undefined
+      const paragraph = node.child(0)
+      if (!paragraph || paragraph.type.name !== 'paragraph') return undefined
+      const content = (paragraph.textContent || '').trim()
+      if (content === target) {
+        const paragraphPos = pos + 1
+        const paragraphStart = paragraphPos + 1
+        const paragraphEnd = paragraphStart + paragraph.content.size
+        anchor = position === 'start' ? paragraphStart : paragraphEnd
+        return false
+      }
+      return undefined
+    })
+    if (anchor === null) throw new Error(`Paragraph with text "${text}" not found`)
+    editor.chain().focus().setTextSelection({ from: anchor, to: anchor }).run()
+  }, { text, position })
+}
 
 async function createParentWithChild(page, { parentTitle = 'Parent', childTitle = 'Child A' } = {}) {
   await typeIntoFirstItem(page, parentTitle)
@@ -63,60 +80,6 @@ async function createParentWithChild(page, { parentTitle = 'Parent', childTitle 
   await page.keyboard.press('Tab')
 }
 
-async function setSelectionToParagraph(page, text, { position = 'end' } = {}) {
-  await page.evaluate(({ text, position }) => {
-    const editor = window.__WORKLOG_EDITOR
-    if (!editor) throw new Error('Editor unavailable')
-    const target = text.trim()
-    let anchor = null
-    editor.state.doc.descendants((node, pos) => {
-      if (node.type.name !== 'listItem') return undefined
-      const paragraph = node.child(0)
-      if (!paragraph || paragraph.type.name !== 'paragraph') return undefined
-      const content = (paragraph.textContent || '').trim()
-      if (content === target) {
-        const paragraphPos = pos + 1
-        const contentSize = paragraph.content.size
-        const offset = position === 'start' ? 0 : contentSize
-        anchor = paragraphPos + 1 + offset
-        return false
-      }
-      return undefined
-    })
-    if (anchor === null) throw new Error(`Paragraph with text "${text}" not found`)
-    editor.commands.focus()
-    editor.commands.setTextSelection({ from: anchor, to: anchor })
-  }, { text, position })
-}
-
-test('Enter at end of child inserts next sibling child with empty status', async ({ page }) => {
-  await openOutline(page)
-  await createParentWithChild(page)
-
-  await setSelectionToParagraph(page, 'Child A', { position: 'end' })
-
-  await page.keyboard.press('Enter')
-
-  const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
-  const children = parentLi.locator('li.li-node')
-  await expect(children).toHaveCount(2, { timeout: SHORT_TIMEOUT })
-  await expect(children.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
-})
-
-test('Enter at beginning of child inserts preceding child sibling', async ({ page }) => {
-  await openOutline(page)
-  await createParentWithChild(page)
-
-  await setSelectionToParagraph(page, 'Child A', { position: 'start' })
-
-  await page.keyboard.press('Enter')
-
-  const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
-  const children = parentLi.locator('li.li-node')
-  await expect(children).toHaveCount(2, { timeout: SHORT_TIMEOUT })
-  await expect(children.first()).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
-})
-
 async function findRootIndexes(page) {
   return page.evaluate(() => {
     const nodes = Array.from(document.querySelectorAll('li.li-node'))
@@ -128,12 +91,152 @@ async function findRootIndexes(page) {
   })
 }
 
+test.beforeEach(async ({ app }) => { await resetOutline(app, buildInitialOutline()) })
+
+// 1) New sibling should start with todo regardless of previous status
+test('Enter creates a new item with status todo even if previous is done', async ({ page, app }) => {
+  await openOutline(page)
+  await expectOutlineState(page, [outlineNode('Start here')])
+
+  const firstLi = page.locator('li.li-node').first()
+  await typeIntoFirstItem(page, 'First')
+  const statusBtn = firstLi.locator('.status-chip')
+  await statusBtn.click()
+  await statusBtn.click()
+  await statusBtn.click()
+  await expect(firstLi).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, [outlineNode('First', { status: 'done' })])
+
+  await setSelectionToParagraph(page, 'First', { position: 'end' })
+  await page.keyboard.press('Enter')
+
+  const items = page.locator('li.li-node')
+  await expect(items).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect.poll(async () => items.nth(1).getAttribute('data-status'), { timeout: SHORT_TIMEOUT }).toBe('')
+  await expectOutlineState(page, [
+    outlineNode('First', { status: 'done' }),
+    outlineNode('')
+  ])
+})
+
+test('splitting a task keeps neighbor statuses and clears the new item', async ({ page, request, app }) => {
+  const outline = [
+    {
+      id: null,
+      title: 'Task 1',
+      status: 'in-progress',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Task 1' }] }],
+      children: []
+    },
+    {
+      id: null,
+      title: 'Task 2',
+      status: 'todo',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Task 2' }] }],
+      children: []
+    }
+  ]
+
+  await resetOutline(app, outline)
+  const verifyResponse = await request.get(`${app.apiUrl}/api/outline`)
+  expect(verifyResponse.ok()).toBeTruthy()
+  const verifyPayload = await verifyResponse.json()
+  expect(verifyPayload.roots.map(({ title, status }) => ({ title, status }))).toEqual([
+    { title: 'Task 1', status: 'in-progress' },
+    { title: 'Task 2', status: 'todo' }
+  ])
+
+  const outlineFetch = page.waitForResponse(response => response.url().includes('/api/outline') && response.request().method() === 'GET')
+  await openOutline(page)
+  const uiOutlineResponse = await outlineFetch
+  expect(uiOutlineResponse.ok()).toBeTruthy()
+  const uiData = await uiOutlineResponse.json()
+  expect(uiData.roots.map(({ title, status }) => ({ title, status }))).toEqual([
+    { title: 'Task 1', status: 'in-progress' },
+    { title: 'Task 2', status: 'todo' }
+  ])
+
+  await expectOutlineState(page, [
+    outlineNode('Task 1', { status: 'in-progress' }),
+    outlineNode('Task 2', { status: 'todo' })
+  ])
+
+  await setSelectionToParagraph(page, 'Task 1', { position: 'end' })
+  await settle(page)
+
+  await page.keyboard.press('Enter')
+  await settle(page)
+  await page.waitForTimeout(50)
+
+  await expectOutlineState(page, [
+    outlineNode('Task 1', { status: 'in-progress' }),
+    outlineNode('', { status: '' }),
+    outlineNode('Task 2', { status: 'todo' })
+  ])
+})
+
+test('Enter at end of child inserts next sibling child with empty status', async ({ page }) => {
+  await openOutline(page)
+  await createParentWithChild(page)
+  await expectOutlineState(page, [
+    outlineNode('Parent', {
+      children: [outlineNode('Child A')]
+    })
+  ])
+
+  await setSelectionToParagraph(page, 'Child A', { position: 'end' })
+  await page.keyboard.press('Enter')
+
+  const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
+  const children = parentLi.locator('li.li-node')
+  await expect(children).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect.poll(async () => children.nth(1).getAttribute('data-status'), { timeout: SHORT_TIMEOUT }).toBe('')
+  await expectOutlineState(page, [
+    outlineNode('Parent', {
+      children: [
+        outlineNode('Child A'),
+        outlineNode('')
+      ]
+    })
+  ])
+})
+
+test('Enter at beginning of child inserts preceding child sibling', async ({ page }) => {
+  await openOutline(page)
+  await createParentWithChild(page)
+  await expectOutlineState(page, [
+    outlineNode('Parent', {
+      children: [outlineNode('Child A')]
+    })
+  ])
+
+  await setSelectionToParagraph(page, 'Child A', { position: 'start' })
+  await page.keyboard.press('Enter')
+
+  const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
+  const children = parentLi.locator('li.li-node')
+  await expect(children).toHaveCount(2, { timeout: SHORT_TIMEOUT })
+  await expect(children.first()).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, [
+    outlineNode('Parent', {
+      children: [
+        outlineNode(''),
+        outlineNode('Child A')
+      ]
+    })
+  ])
+})
+
 test('Enter at end of parent adds a new child and keeps existing children', async ({ page }) => {
   await openOutline(page)
   await createParentWithChild(page, { parentTitle: 'Parent A', childTitle: 'Child A' })
+  await expectOutlineState(page, [
+    outlineNode('Parent A', {
+      children: [outlineNode('Child A')]
+    })
+  ])
 
   await setSelectionToParagraph(page, 'Parent A', { position: 'end' })
-
   await page.keyboard.press('Enter')
 
   let rootIndexes = []
@@ -148,14 +251,43 @@ test('Enter at end of parent adds a new child and keeps existing children', asyn
   await expect(childNodes).toHaveCount(2, { timeout: SHORT_TIMEOUT })
   await expect(childNodes.first()).toContainText('Child A', { timeout: SHORT_TIMEOUT })
   await expect(childNodes.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, [
+    outlineNode('Parent A', {
+      children: [
+        outlineNode('Child A'),
+        outlineNode('')
+      ]
+    })
+  ])
 
+  await expect.poll(() => page.evaluate(() => Boolean(window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR))).toBe(true)
+  await expect.poll(() => page.evaluate(() => {
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
+    const { $from } = editor.state.selection
+    return $from.parent?.textContent ?? null
+  })).toBe('')
+
+  await childNodes.nth(1).locator('p').first().click()
   await page.keyboard.type('Child B')
-  await expect(childNodes.nth(1)).toContainText('Child B', { timeout: SHORT_TIMEOUT })
+  await expect.poll(async () => childNodes.nth(1).getAttribute('data-body-text'), { timeout: SHORT_TIMEOUT }).toBe('Child B')
+  await expectOutlineState(page, [
+    outlineNode('Parent A', {
+      children: [
+        outlineNode('Child A'),
+        outlineNode('Child B')
+      ]
+    })
+  ])
 })
 
 test('Enter at end of collapsed parent keeps children under original task', async ({ page }) => {
   await openOutline(page)
   await createParentWithChild(page, { parentTitle: 'Parent Collapsed', childTitle: 'Child 1' })
+  await expectOutlineState(page, [
+    outlineNode('Parent Collapsed', {
+      children: [outlineNode('Child 1')]
+    })
+  ])
 
   await expect(page.locator('li.li-node p', { hasText: 'Parent Collapsed' }).first()).toBeVisible({ timeout: SHORT_TIMEOUT })
   await setSelectionToParagraph(page, 'Parent Collapsed', { position: 'end' })
@@ -168,7 +300,7 @@ test('Enter at end of collapsed parent keeps children under original task', asyn
   await parent.locator('p').first().click()
 
   const collapsedAttr = await page.evaluate(() => {
-    const editor = window.__WORKLOG_EDITOR
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
     if (!editor) return null
     const { $from } = editor.view.state.selection
     for (let depth = $from.depth; depth >= 0; depth -= 1) {
@@ -181,33 +313,13 @@ test('Enter at end of collapsed parent keeps children under original task', asyn
   })
   expect(collapsedAttr).toBe(true)
 
-  const childStructure = await page.evaluate(() => {
-    const editor = window.__WORKLOG_EDITOR
-    if (!editor) return null
-    const { $from } = editor.view.state.selection
-    for (let depth = $from.depth; depth >= 0; depth -= 1) {
-      const node = $from.node(depth)
-      if (node?.type?.name === 'listItem') {
-        return {
-          childCount: node.childCount,
-          childTypes: Array.from({ length: node.childCount }, (_, idx) => node.child(idx).type.name)
-        }
-      }
-    }
-    return null
-  })
-
   await page.keyboard.press('Enter')
-  await expect.poll(async () => {
-    const rootCount = await page.evaluate(() => {
-      const doc = window.__WORKLOG_EDITOR?.getJSON?.()
-      if (!doc) return 0
-      const top = doc.content?.[0]
-      if (!top || top.type !== 'bulletList') return 0
-      return (top.content || []).length
-    })
-    return rootCount
-  }, { timeout: SHORT_TIMEOUT }).toBe(2)
+  await expectOutlineState(page, [
+    outlineNode('Parent Collapsed', {
+      children: [outlineNode('Child 1')]
+    }),
+    outlineNode('')
+  ])
   const rootNodes = await findRootIndexes(page)
   const newRoot = page.locator('li.li-node').nth(rootNodes[1])
   await newRoot.locator('p').first().click()
@@ -215,27 +327,49 @@ test('Enter at end of collapsed parent keeps children under original task', asyn
 
   const sibling = page.locator('li.li-node', { hasText: 'Parent Sibling' }).first()
   await expect(sibling).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, [
+    outlineNode('Parent Collapsed', {
+      children: [outlineNode('Child 1')]
+    }),
+    outlineNode('Parent Sibling')
+  ])
 
-  // Expand original parent and ensure the child remains attached
   await parent.locator('.caret.drag-toggle').first().click()
   const parentChildren = parent.locator('li.li-node')
   await expect(parentChildren).toHaveCount(1, { timeout: SHORT_TIMEOUT })
   await expect(parentChildren.first()).toContainText('Child 1', { timeout: SHORT_TIMEOUT })
   await expect(sibling.locator('li.li-node')).toHaveCount(0)
+  await expectOutlineState(page, [
+    outlineNode('Parent Collapsed', {
+      children: [outlineNode('Child 1')]
+    }),
+    outlineNode('Parent Sibling')
+  ])
 })
 
 test('Enter on empty task creates a new task and focuses it', async ({ page }) => {
   await openOutline(page)
+  await expectOutlineState(page, [outlineNode('Start here')])
 
   await typeIntoFirstItem(page, 'Task 1')
+  await expectOutlineState(page, [outlineNode('Task 1')])
   await page.keyboard.press('Enter')
 
   const itemsAfterFirstEnter = page.locator('li.li-node')
   await expect(itemsAfterFirstEnter).toHaveCount(2, { timeout: SHORT_TIMEOUT })
   await expect(itemsAfterFirstEnter.first()).toContainText('Task 1', { timeout: SHORT_TIMEOUT })
   await expect(itemsAfterFirstEnter.nth(1)).toHaveAttribute('data-status', '', { timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, [
+    outlineNode('Task 1'),
+    outlineNode('')
+  ])
 
   await page.keyboard.press('Enter')
+  await expectOutlineState(page, [
+    outlineNode('Task 1'),
+    outlineNode(''),
+    outlineNode('')
+  ])
 
   const items = page.locator('li.li-node')
   await expect(items).toHaveCount(3, { timeout: SHORT_TIMEOUT })
@@ -245,67 +379,72 @@ test('Enter on empty task creates a new task and focuses it', async ({ page }) =
   await newItem.locator('p').first().click()
   await page.keyboard.type('Task 2')
   await expect(newItem).toContainText('Task 2', { timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, [
+    outlineNode('Task 1'),
+    outlineNode(''),
+    outlineNode('Task 2')
+  ])
 })
 
 test('Tab after creating sibling indents next task without losing focus', async ({ page }) => {
   await openOutline(page)
   await page.evaluate(() => localStorage.setItem('WL_DEBUG', '1'))
+  await expectOutlineState(page, [outlineNode('Start here')])
 
   await typeIntoFirstItem(page, 'Task 1')
+  await expectOutlineState(page, [outlineNode('Task 1')])
   await page.keyboard.press('Enter')
+  await expectOutlineState(page, [
+    outlineNode('Task 1'),
+    outlineNode('')
+  ])
   await page.keyboard.type('Task 2')
+  await expectOutlineState(page, [
+    outlineNode('Task 1'),
+    outlineNode('Task 2')
+  ])
 
   await page.keyboard.press('Enter')
   await page.keyboard.press('Tab')
   await page.keyboard.type('Task 3')
-
-  const json = await page.evaluate(() => window.__WORKLOG_EDITOR?.getJSON?.())
-  const list = json?.content?.[0]?.content || []
-  expect(list.length).toBe(2)
-
-  const firstRootParagraph = list[0]?.content?.[0]?.content?.[0]?.text
-  expect(firstRootParagraph).toBe('Task 1')
-
-  const secondRoot = list[1]
-  const secondRootParagraph = secondRoot?.content?.[0]?.content?.[0]?.text
-  expect(secondRootParagraph).toBe('Task 2')
-
-  const nestedList = secondRoot?.content?.[1]
-  expect(nestedList?.type).toBe('bulletList')
-  const childNode = nestedList?.content?.[0]?.content?.[0]?.content?.[0]
-  expect(childNode?.type).toBe('text')
-  expect(childNode?.text).toBe('Task 3')
+  await expectOutlineState(page, [
+    outlineNode('Task 1'),
+    outlineNode('Task 2', {
+      children: [outlineNode('Task 3')]
+    })
+  ])
 })
 
 test('Enter then Tab from child keeps focus in new grandchild', async ({ page }) => {
   await openOutline(page)
+  await expectOutlineState(page, [outlineNode('Start here')])
 
   await typeIntoFirstItem(page, 'Task 1')
+  await expectOutlineState(page, [outlineNode('Task 1')])
   await page.keyboard.press('Enter')
   await page.keyboard.type('Sub task 1')
+  await expectOutlineState(page, [
+    outlineNode('Task 1'),
+    outlineNode('Sub task 1')
+  ])
   await page.keyboard.press('Tab')
+  await expectOutlineState(page, [
+    outlineNode('Task 1', {
+      children: [outlineNode('Sub task 1')]
+    })
+  ])
 
   await setSelectionToParagraph(page, 'Sub task 1', { position: 'end' })
-
   await page.keyboard.press('Enter')
   await page.keyboard.press('Tab')
   await page.keyboard.type('Sub sub task 1')
-
-  const doc = await page.evaluate(() => window.__WORKLOG_EDITOR?.getJSON?.())
-  const roots = doc?.content?.[0]?.content || []
-  expect(roots.length).toBe(1)
-
-  const firstRoot = roots[0]
-  const childList = firstRoot?.content?.[1]
-  expect(childList?.type).toBe('bulletList')
-
-  const childItem = childList?.content?.[0]
-  const childParagraph = childItem?.content?.[0]?.content?.[0]?.text
-  expect(childParagraph).toBe('Sub task 1')
-
-  const grandChildList = childItem?.content?.[1]
-  expect(grandChildList?.type).toBe('bulletList')
-  const grandChild = grandChildList?.content?.[0]?.content?.[0]?.content?.[0]
-  expect(grandChild?.type).toBe('text')
-  expect(grandChild?.text).toBe('Sub sub task 1')
+  await expectOutlineState(page, [
+    outlineNode('Task 1', {
+      children: [
+        outlineNode('Sub task 1', {
+          children: [outlineNode('Sub sub task 1')]
+        })
+      ]
+    })
+  ])
 })

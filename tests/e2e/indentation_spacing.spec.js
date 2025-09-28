@@ -2,7 +2,7 @@ const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
-const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+let ORIGIN = null
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -18,7 +18,7 @@ async function ensureBackendReady(request) {
 }
 
 async function resetOutline(request, outline) {
-  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline } })
+  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline  }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok()).toBeTruthy()
 }
 
@@ -75,6 +75,10 @@ function seedSimpleOutline() {
     }
   ]
 }
+
+test.beforeEach(async ({ app }) => {
+  ORIGIN = app.apiUrl;
+})
 
 test('drag toggles keep a 36px indentation delta between levels', async ({ page, request }) => {
   await ensureBackendReady(request)

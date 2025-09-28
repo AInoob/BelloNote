@@ -1,9 +1,9 @@
 const { test, expect } = require('./test-base')
 
-const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:5231'
+let API_URL = null
 
 async function resetOutline(request, outline) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok()).toBeTruthy()
 }
 
@@ -15,6 +15,10 @@ function buildLongOutline(count = 40) {
     children: []
   }))
 }
+
+test.beforeEach(async ({ app }) => {
+  API_URL = app.apiUrl;
+})
 
 test('reload restores previous scroll position', async ({ page, request }) => {
   await resetOutline(request, buildLongOutline(60))

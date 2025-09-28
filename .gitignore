@@ -27,3 +27,5 @@ client.log
 server.log
 .idea/
 test-results/
+
+tests/temp/

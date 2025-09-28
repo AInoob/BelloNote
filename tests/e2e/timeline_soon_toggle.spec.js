@@ -2,7 +2,7 @@ const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
-const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+let ORIGIN = null
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -18,7 +18,7 @@ async function ensureBackendReady(request) {
 }
 
 async function resetOutline(request) {
-  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: []  }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
@@ -54,12 +54,16 @@ async function openTimeline(page) {
 
 // Soon toggle hides/shows Soon bucket
 
+test.beforeEach(async ({ app }) => {
+  ORIGIN = app.apiUrl;
+})
+
 test('timeline soon toggle hides/shows Soon section', async ({ page, request }) => {
   await ensureBackendReady(request)
   await resetOutline(request)
 
   const outline = seedSoonOutline()
-  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline } })
+  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline  }, headers: { 'x-playwright-test': '1' } })
   expect(setRes.ok()).toBeTruthy()
 
   await openTimeline(page)

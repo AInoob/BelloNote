@@ -1,14 +1,14 @@
 const { test, expect } = require('./test-base')
 
-const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4000'
+let API_URL = null
 
 async function resetOutline(request) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok()).toBeTruthy()
 }
 
 async function seedOutline(request, outline) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok()).toBeTruthy()
 }
 
@@ -26,7 +26,7 @@ function sectionByDate(page, dateStr) {
   return page.locator('.timeline > section').filter({ has: page.locator('h3', { hasText: dateStr }) })
 }
 
-test.beforeEach(async ({ request }) => { await resetOutline(request) })
+test.beforeEach(async ({ request, app }) => { API_URL = app.apiUrl; await resetOutline(request) })
 
 test('timeline renders code block content for dated task', async ({ page, request }) => {
   const today = todayStr()

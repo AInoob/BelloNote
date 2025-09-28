@@ -2,16 +2,16 @@ const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
-const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
+let API_URL = null
 const SHORT_TIMEOUT = 1000
 
 async function resetOutline(request) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok()).toBeTruthy()
 }
 
 async function seedOutline(request, outline) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok()).toBeTruthy()
 }
 
@@ -38,7 +38,7 @@ function listItemsInSection(page, section) {
   return section.locator('.history-inline-preview li.li-node')
 }
 
-test.beforeEach(async ({ request }) => { await resetOutline(request) })
+test.beforeEach(async ({ request, app }) => { API_URL = app.apiUrl; await resetOutline(request) })
 
 // 1) Parent with date -> subtasks without dates are shown in Timeline
 // 2) Parent line preserves @date token in Timeline

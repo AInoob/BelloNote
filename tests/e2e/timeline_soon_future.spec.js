@@ -2,7 +2,7 @@ const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
-const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+let ORIGIN = null
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -18,7 +18,7 @@ async function ensureBackendReady(request) {
 }
 
 async function resetOutline(request) {
-  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: []  }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
@@ -77,12 +77,16 @@ function todayStr() {
 //    Future items are shown by default and hidden when toggled off
 //    Dated items remain grouped under their date
 
+test.beforeEach(async ({ app }) => {
+  ORIGIN = app.apiUrl;
+})
+
 test('timeline shows Soon and Future and can hide Future', async ({ page, request }) => {
   await ensureBackendReady(request)
   await resetOutline(request)
 
   const outline = seedSoonFutureOutline(todayStr())
-  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline } })
+  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline  }, headers: { 'x-playwright-test': '1' } })
   expect(setRes.ok(), 'outline set should succeed').toBeTruthy()
 
   await page.goto('/')

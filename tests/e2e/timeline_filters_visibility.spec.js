@@ -2,7 +2,7 @@ const { test, expect } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
-const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
+let ORIGIN = null
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -18,7 +18,7 @@ async function ensureBackendReady(request) {
 }
 
 async function resetOutline(request) {
-  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline: []  }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
@@ -59,10 +59,14 @@ function seedForTimeline() {
   ]
 }
 
+test.beforeEach(async ({ app }) => {
+  ORIGIN = app.apiUrl;
+})
+
 test('timeline filter bar visibility persists', async ({ page, request }) => {
   await ensureBackendReady(request)
   await resetOutline(request)
-  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline: seedForTimeline() } })
+  const setRes = await request.post(`${ORIGIN}/api/outline`, { data: { outline: seedForTimeline()  }, headers: { 'x-playwright-test': '1' } })
   expect(setRes.ok()).toBeTruthy()
 
   await page.goto('/')

@@ -1,6 +1,6 @@
-const { test, expect } = require('./test-base')
+const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
 
-const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:5231'
+let API_URL = null
 const modifierKey = process.platform === 'darwin' ? 'Meta' : 'Control'
 
 const nestedOutlineDoc = {
@@ -60,7 +60,7 @@ const nestedOutlineDoc = {
 }
 
 async function resetOutline(request) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
@@ -81,7 +81,7 @@ async function openOutline(page) {
 
 async function setOutline(page, doc) {
   await page.evaluate((payload) => {
-    const editor = window.__WORKLOG_EDITOR
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
     if (!editor) throw new Error('editor not ready')
     const clone = JSON.parse(JSON.stringify(payload))
     editor.commands.setContent(clone)
@@ -97,13 +97,27 @@ async function setOutline(page, doc) {
   }, doc)
 }
 
-test.beforeEach(async ({ request }) => {
+const buildNestedOutline = () => [
+  outlineNode('Parent Task', {
+    children: [
+      outlineNode('Child A', {
+        children: [outlineNode('Grandchild')]
+      }),
+      outlineNode('Child B')
+    ]
+  }),
+  outlineNode('Sibling Task')
+]
+
+test.beforeEach(async ({ request, app }) => {
+  API_URL = app.apiUrl;
   await resetOutline(request)
 })
 
 test('focus mode isolates subtree and keeps collapse state per root', async ({ page }) => {
   await openOutline(page)
   await setOutline(page, nestedOutlineDoc)
+  await expectOutlineState(page, buildNestedOutline())
 
   await expect(page.locator('li.li-node').filter({ hasText: 'Parent Task' }).first()).toBeVisible()
   await expect(page.locator('li.li-node').filter({ hasText: 'Sibling Task' }).first()).toBeVisible()
@@ -166,11 +180,13 @@ test('focus mode isolates subtree and keeps collapse state per root', async ({ p
   await expect(page.locator('body')).not.toHaveClass(/focus-mode/)
   await expect(page.locator('li.li-node').filter({ hasText: 'Sibling Task' }).first()).toBeVisible()
   await expect(page).not.toHaveURL(/\?[^#]*focus=/)
+  await expectOutlineState(page, buildNestedOutline())
 })
 
 test('focus modifier advertising switches cursor to pointer while held', async ({ page }) => {
   await openOutline(page)
   await setOutline(page, nestedOutlineDoc)
+  await expectOutlineState(page, buildNestedOutline())
 
   const editor = page.locator('.tiptap.ProseMirror')
   await editor.click({ position: { x: 10, y: 10 } })
@@ -189,11 +205,13 @@ test('focus modifier advertising switches cursor to pointer while held', async (
   await expect.poll(async () => page.evaluate(() => document.body.classList.contains('focus-shortcut-available'))).toBe(false)
   await parentMain.hover()
   await expect.poll(async () => parentMain.evaluate(el => getComputedStyle(el).cursor)).not.toBe('pointer')
+  await expectOutlineState(page, buildNestedOutline())
 })
 
 test('modifier click focuses any nesting level', async ({ page }) => {
   await openOutline(page)
   await setOutline(page, nestedOutlineDoc)
+  await expectOutlineState(page, buildNestedOutline())
 
   const childParagraph = page.locator('li.li-node[data-id="seed-child-a"] .li-content p').first()
   await childParagraph.click({ modifiers: [modifierKey] })
@@ -221,4 +239,5 @@ test('modifier click focuses any nesting level', async ({ page }) => {
   await expect(page.locator('li.li-node[data-id="seed-child-a"]').first()).toHaveAttribute('data-focus-role', 'ancestor')
   await expect(page.locator('li.li-node[data-id="seed-parent"]').first()).toHaveAttribute('data-focus-role', 'ancestor')
   await expect(page.locator('li.li-node[data-id="seed-grandchild"]').first()).toHaveAttribute('data-focus-role', 'root')
+  await expectOutlineState(page, buildNestedOutline())
 })

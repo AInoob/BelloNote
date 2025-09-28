@@ -1,14 +1,12 @@
-const { test, expect } = require('./test-base')
 
-const ORIGIN = process.env.PLAYWRIGHT_ORIGIN || 'http://127.0.0.1:4175'
-const CLIENT_URL = process.env.PLAYWRIGHT_CLIENT_URL || 'http://127.0.0.1:5232'
+const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
-async function ensureBackendReady(request) {
+async function ensureBackendReady(request, app) {
   await expect.poll(async () => {
     try {
-      const response = await request.get(`${ORIGIN}/api/health`)
+      const response = await request.get(`${app.apiUrl}/api/health`)
       if (!response.ok()) return 'down'
       const body = await response.json()
       return body?.ok ? 'ready' : 'down'
@@ -18,34 +16,32 @@ async function ensureBackendReady(request) {
   }, { message: 'backend should respond to health check', timeout: 10000 }).toBe('ready')
 }
 
-async function resetOutline(request, outline) {
-  const response = await request.post(`${ORIGIN}/api/outline`, { data: { outline } })
-  expect(response.ok()).toBeTruthy()
+async function resetOutline(app, outline) {
+  await app.resetOutline(outline)
 }
 
 function baseOutline() {
   return [
     {
       id: null,
-      title: 'Copy baseline',
+      title: 'Copy test example',
       status: 'todo',
-      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Copy baseline' }] }],
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Copy test example' }] }],
       children: []
     }
   ]
 }
 
-test('copying a selection only copies highlighted text', async ({ page, request, context }) => {
-  await ensureBackendReady(request)
-  await resetOutline(request, baseOutline())
+test('copying a selection only copies highlighted text', async ({ page, request, app, context }) => {
+  await ensureBackendReady(request, app)
+  await resetOutline(app, baseOutline())
   await page.goto('/')
+  await expectOutlineState(page, [outlineNode('Copy test example', { status: 'todo' })], { includeTags: false })
   const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
   const firstParagraph = page.locator('li.li-node').first().locator('.li-content div[data-node-view-content-react] > p')
   await firstParagraph.click()
-  await page.keyboard.press(`${modifier}+a`)
-  await page.keyboard.type('Copy test example')
   await page.evaluate(() => {
-    const editor = window.__WORKLOG_EDITOR__ || window.__WORKLOG_EDITOR
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR__ || window.__WORKLOG_EDITOR
     if (!editor) return
     let from = null
     let to = null
@@ -68,6 +64,7 @@ test('copying a selection only copies highlighted text', async ({ page, request,
 
   const selectionText = await page.evaluate(() => window.getSelection()?.toString() || '')
   expect(selectionText.trim()).toBe('example')
+  await expectOutlineState(page, [outlineNode('Copy test example', { status: 'todo' })], { includeTags: false })
 
   await page.keyboard.press(`${modifier}+C`)
   await page.waitForTimeout(30)
@@ -75,4 +72,5 @@ test('copying a selection only copies highlighted text', async ({ page, request,
   const payload = await page.evaluate(() => window.__WORKLOG_TEST_COPY__)
   expect(payload?.text?.trim()).toBe('example')
   expect(() => JSON.parse(payload?.json || '{}')).not.toThrow()
+  await expectOutlineState(page, [outlineNode('Copy test example', { status: 'todo' })], { includeTags: false })
 })

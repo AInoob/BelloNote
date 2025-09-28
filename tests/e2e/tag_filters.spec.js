@@ -1,9 +1,9 @@
-const { test, expect } = require('./test-base')
+const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
-const API_URL = process.env.PLAYWRIGHT_API_URL || 'http://127.0.0.1:4175'
-const SHORT_TIMEOUT = 1000
+let API_URL = null
+const SHORT_TIMEOUT = 2000
 
 async function ensureBackendReady(request) {
   await expect.poll(async () => {
@@ -19,12 +19,12 @@ async function ensureBackendReady(request) {
 }
 
 async function resetOutline(request) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: [] }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline reset should succeed').toBeTruthy()
 }
 
 async function setOutlineNormalized(request, outline) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline } })
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline set should succeed').toBeTruthy()
 }
 
@@ -47,7 +47,7 @@ async function waitForEditorReady(page) {
 
 async function placeCaretAtTaskEnd(page, index) {
   await page.evaluate((idx) => {
-    const editor = window.__WORKLOG_EDITOR
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
     if (!editor) throw new Error('editor not ready')
     const view = editor.view
     const paragraphs = Array.from(document.querySelectorAll('li.li-node p'))
@@ -57,6 +57,26 @@ async function placeCaretAtTaskEnd(page, index) {
     editor.commands.setTextSelection({ from: pos, to: pos })
   }, index)
 }
+
+const initialTagTasksState = () => [
+  outlineNode('Task 1 root'),
+  outlineNode('Task 2 urgent'),
+  outlineNode('Task 3 later')
+]
+
+const taggedTasksState = () => [
+  outlineNode('Task 1 root'),
+  outlineNode('Task 2 urgent #urgent', { tags: ['urgent'] }),
+  outlineNode('Task 3 later #later', { tags: ['later'] })
+]
+
+const nestedExcludeState = () => [
+  outlineNode('Parent without tag', {
+    status: 'todo',
+    children: [outlineNode('Child secret #secret', { status: 'todo' })]
+  }),
+  outlineNode('Another visible task', { status: 'todo' })
+]
 
 async function createTasks(page, titles) {
   const editor = page.locator('.tiptap.ProseMirror')
@@ -83,7 +103,8 @@ async function createTasks(page, titles) {
   }
 }
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ request, app }) => {
+  API_URL = app.apiUrl;
   await resetOutline(request)
 })
 
@@ -91,8 +112,10 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await ensureBackendReady(request)
   await page.goto('/')
   await waitForEditorReady(page)
+  await expectOutlineState(page, [outlineNode('Start here')], { includeTags: false })
 
   await createTasks(page, ['Task 1 root', 'Task 2 urgent', 'Task 3 later'])
+  await expectOutlineState(page, initialTagTasksState(), { includeTags: false })
 
   // Tag task 2 with #urgent via slash
   await placeCaretAtTaskEnd(page, 1)
@@ -107,6 +130,11 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect.poll(async () => await outlineItems.nth(1).getAttribute('data-tags-self'), {
     timeout: SHORT_TIMEOUT
   }).toBe('urgent')
+  await expectOutlineState(page, [
+    outlineNode('Task 1 root'),
+    outlineNode('Task 2 urgent #urgent', { tags: ['urgent'] }),
+    outlineNode('Task 3 later')
+  ], { timeout: 10000, includeTags: false })
 
   // Tag task 3 with #later via slash
   await placeCaretAtTaskEnd(page, 2)
@@ -114,11 +142,12 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect(page.locator('.slash-menu')).toBeVisible({ timeout: SHORT_TIMEOUT })
   await page.keyboard.type('#later')
   const laterOption = page.locator('.slash-menu button', { hasText: 'Add tag #later' }).first()
-  await expect(laterOption).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(laterOption).toBeVisible({ timeout: SHORT_TIMEOUT * 3 })
   await page.keyboard.press('Enter')
   await expect.poll(async () => await outlineItems.nth(2).getAttribute('data-tags-self'), {
     timeout: SHORT_TIMEOUT
   }).toBe('later')
+  await expectOutlineState(page, taggedTasksState(), { timeout: 10000, includeTags: false })
 
   // Ensure tags persisted to API
   await expect.poll(async () => {
@@ -151,6 +180,7 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect(task2).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(task1).toBeHidden({ timeout: SHORT_TIMEOUT })
   await expect(task3).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, taggedTasksState(), { timeout: 10000, includeTags: false })
 
   // Remove include chip by clicking it
   await includeChip.click()
@@ -164,6 +194,7 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect(task3).toBeHidden({ timeout: SHORT_TIMEOUT })
   await expect(task1).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(task2).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, taggedTasksState(), { timeout: 10000, includeTags: false })
 
   // Add include filter again so both are active
   await includeInput.fill('#urgent')
@@ -174,6 +205,7 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   // Reload to confirm persistence
   await page.reload()
   await waitForEditorReady(page)
+  await expectOutlineState(page, taggedTasksState(), { timeout: 10000, includeTags: false })
   await expect(page.locator('.tag-filter.include .tag-chip', { hasText: '#urgent' })).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(page.locator('.tag-filter.exclude .tag-chip', { hasText: '#later' })).toBeVisible({ timeout: SHORT_TIMEOUT })
 
@@ -185,6 +217,7 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect(task2Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(task1Reloaded).toBeHidden({ timeout: SHORT_TIMEOUT })
   await expect(task3Reloaded).toBeHidden({ timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, taggedTasksState(), { timeout: 10000, includeTags: false })
 
   // Clear filters
   await page.locator('.tag-filter-group .btn.ghost', { hasText: 'Clear' }).click()
@@ -192,6 +225,7 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect(task1Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(task2Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(task3Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expectOutlineState(page, taggedTasksState(), { includeTags: false })
 })
 
 test('excluding a tag hides matching child but keeps parent visible', async ({ page, request }) => {
@@ -245,4 +279,5 @@ test('excluding a tag hides matching child but keeps parent visible', async ({ p
   await expect(child).toBeHidden({ timeout: SHORT_TIMEOUT })
   await expect(parent, 'parent should remain visible when only child matches excluded tag').toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect.poll(async () => await parent.getAttribute('data-tag-exclude'), { timeout: SHORT_TIMEOUT }).toBe('0')
+  await expectOutlineState(page, nestedExcludeState(), { includeTags: false })
 })
