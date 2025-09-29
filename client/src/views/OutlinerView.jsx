@@ -19,6 +19,9 @@ import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
 import { ReminderTokenInline } from '../extensions/reminderTokenInline.js'
 import { DetailsBlock } from '../extensions/detailsBlock.jsx'
 import { safeReactNodeViewRenderer } from '../tiptap/safeReactNodeViewRenderer.js'
+import { useSlashCommands } from './outliner/useSlashCommands.js'
+import { useReminderActions } from './outliner/useReminderActions.js'
+import { parseTagInput, extractTagsFromText } from './outliner/tagUtils.js'
 import {
   REMINDER_TOKEN_REGEX,
   parseReminderTokenFromText,
@@ -26,11 +29,6 @@ import {
   computeReminderDisplay,
   stripReminderDisplayBreaks
 } from '../utils/reminderTokens.js'
-import {
-  findReminderTarget,
-  deriveReminderUpdate,
-  buildReminderParagraph
-} from '../utils/reminderEditor.js'
 import {
   extractOutlineClipboardPayload,
   prepareClipboardData
@@ -50,33 +48,6 @@ const STARTER_PLACEHOLDER_TITLE = 'Start here'
 
 const FILTER_TAG_INCLUDE_KEY = 'worklog.filter.tags.include'
 const FILTER_TAG_EXCLUDE_KEY = 'worklog.filter.tags.exclude'
-const TAG_VALUE_RE = /^[a-zA-Z0-9][\w-]{0,63}$/
-const TAG_SCAN_RE = /(^|[^0-9A-Za-z_\/])#([a-zA-Z0-9][\w-]{0,63})\b/g
-
-const parseTagInput = (value = '') => {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  const withoutHash = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
-  if (!TAG_VALUE_RE.test(withoutHash)) return null
-  const canonical = withoutHash.toLowerCase()
-  return { canonical, display: withoutHash }
-}
-
-const extractTagsFromText = (text = '') => {
-  if (typeof text !== 'string' || !text) return []
-  const seen = new Map()
-  TAG_SCAN_RE.lastIndex = 0
-  let match
-  while ((match = TAG_SCAN_RE.exec(text)) !== null) {
-    const raw = match[2]
-    if (!raw) continue
-    const canonical = raw.toLowerCase()
-    if (!seen.has(canonical)) seen.set(canonical, raw)
-  }
-  return Array.from(seen, ([canonical, display]) => ({ canonical, display }))
-}
-
 const LOG_ON = () => (localStorage.getItem('WL_DEBUG') === '1')
 const LOG = (...args) => { if (LOG_ON()) console.log('[slash]', ...args) }
 
@@ -1272,11 +1243,8 @@ export default function OutlinerView({
   const reminderActionsEnabled = reminderActionsEnabledProp !== undefined ? reminderActionsEnabledProp : !isReadOnly
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [slashOpen, setSlashOpen] = useState(false)
-  const [slashPos, setSlashPos] = useState({ x: 0, y: 0 })
   const [debugLines, setDebugLines] = useState([])
-  const menuRef = useRef(null)
-  const slashMarker = useRef(null)
+  const slashHandlersRef = useRef({ handleKeyDown: () => false, openAt: () => {} })
   const [showFuture, setShowFuture] = useState(() => loadFutureVisible())
   const [showSoon, setShowSoon] = useState(() => loadSoonVisible())
   const [imagePreview, setImagePreview] = useState(null)
@@ -1477,22 +1445,12 @@ export default function OutlinerView({
   useEffect(() => { showSoonRef.current = showSoon }, [showSoon])
   useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
   useEffect(() => { showFutureRef.current = showFuture }, [showFuture])
-  const [slashQuery, setSlashQuery] = useState('')
-  const slashQueryRef = useRef('')
-  const slashInputRef = useRef(null)
-  const slashSelectedRef = useRef(0)
-  const [slashActiveIndex, setSlashActiveIndex] = useState(0)
-  const filteredCommandsRef = useRef([])
-  const closeSlashRef = useRef(() => {})
   const draggingRef = useRef(null)
   const [searchQuery, setSearchQuery] = useState('')
   const searchQueryRef = useRef('')
   const convertingImagesRef = useRef(false)
   const suppressSelectionRestoreRef = useRef(false)
   const pendingEmptyCaretRef = useRef(false)
-  const [datePickerOpen, setDatePickerOpen] = useState(false)
-  const datePickerValueRef = useRef(dayjs().format('YYYY-MM-DD'))
-  const datePickerCaretRef = useRef(null)
 
   const pendingImageSrcRef = useRef(new Set())
   const includeFilterList = Array.isArray(tagFilters?.include) ? tagFilters.include : []
@@ -1510,17 +1468,11 @@ export default function OutlinerView({
     [isReadOnly, draggingRef, allowStatusToggleInReadOnly, onStatusToggle, reminderActionsEnabled]
   )
 
-  const updateSlashActive = useCallback((idx) => {
-    slashSelectedRef.current = idx
-    setSlashActiveIndex(idx)
-  }, [])
-
   useEffect(() => {
     return () => {
       draggingRef.current = null
     }
   }, [draggingRef])
-  useEffect(() => { slashQueryRef.current = slashQuery }, [slashQuery])
   useEffect(() => { searchQueryRef.current = searchQuery }, [searchQuery])
   const dirtyRef = useRef(false)
   const savingRef = useRef(false)
@@ -1655,41 +1607,9 @@ export default function OutlinerView({
       },
       handleKeyDown(view, event) {
         if (isReadOnly) return false
-        if (slashOpen) {
-          if (event.key === 'Enter') {
-            const command = filteredCommandsRef.current[slashSelectedRef.current] || filteredCommandsRef.current[0]
-            if (command) {
-              event.preventDefault()
-              event.stopPropagation()
-              command.run()
-              return true
-            }
-          }
-          if (event.key === 'ArrowDown') {
-            if (filteredCommandsRef.current.length) {
-              event.preventDefault()
-              const next = (slashSelectedRef.current + 1) % filteredCommandsRef.current.length
-              updateSlashActive(next)
-            }
-            return true
-          }
-          if (event.key === 'ArrowUp') {
-            if (filteredCommandsRef.current.length) {
-              event.preventDefault()
-              const next = (slashSelectedRef.current - 1 + filteredCommandsRef.current.length) % filteredCommandsRef.current.length
-              updateSlashActive(next)
-            }
-            return true
-          }
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            event.stopPropagation()
-            closeSlashRef.current()
-            return true
-          }
-        }
-        const isSlashKey = (event.key === '/' || event.code === 'Slash') && !event.shiftKey
-        if (!slashOpen && event.key === 'Escape') {
+        const handledBySlash = slashHandlersRef.current.handleKeyDown(view, event)
+        if (handledBySlash) return true
+        if (event.key === 'Escape') {
           if (focusRootRef.current) {
             event.preventDefault()
             event.stopPropagation()
@@ -1697,30 +1617,6 @@ export default function OutlinerView({
             setFocusRootId(null)
             return true
           }
-        }
-        if (isSlashKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
-          const inCode = view.state.selection.$from.parent.type.name === 'codeBlock'
-          if (inCode) { pushDebug('keydown "/" ignored in code block'); return false }
-          event.preventDefault()
-          event.stopPropagation()
-          const char = '/'
-          const { from } = editor.state.selection
-          slashMarker.current = { pos: from, char }
-          editor.chain().focus().insertContent(char).run()
-          let rect
-          try {
-            const after = editor.state.selection.from
-            rect = view.coordsAtPos(after)
-          } catch (e) {
-            rect = { left: 0, bottom: 0 }
-            pushDebug('popup: coords fail', { error: e.message })
-          }
-          updateSlashActive(0)
-          setSlashPos({ x: rect.left, y: rect.bottom + 4 })
-          setSlashOpen(true)
-          setSlashQuery('')
-          pushDebug('popup: open (keydown)', { key: event.key, char, left: rect.left, top: rect.bottom })
-          return true
         }
         if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && (event.key === 's' || event.key === 'S')) {
           event.preventDefault()
@@ -2128,8 +2024,7 @@ export default function OutlinerView({
           event.stopPropagation()
           const { from } = editor.state.selection
           const rect = view.coordsAtPos(from)
-          setSlashPos({ x: rect.left, y: rect.bottom + 4 })
-          setSlashOpen(true)
+          slashHandlersRef.current.openAt({ x: rect.left, y: rect.bottom + 4 })
           pushDebug('popup: open (Ctrl/Cmd+Space)')
           return true
         }
@@ -2257,50 +2152,6 @@ export default function OutlinerView({
 
   useEffect(() => {
     if (!editor) return
-    const updateSlashState = () => {
-      const marker = slashMarker.current
-      if (!marker) {
-        if (slashQueryRef.current) setSlashQuery('')
-        return
-      }
-      try {
-        const { pos } = marker
-        const { from } = editor.state.selection
-        const to = Math.max(from, pos + 1)
-        const text = editor.state.doc.textBetween(pos, to, '\n', '\n')
-        if (!text.startsWith('/')) {
-          closeSlashRef.current()
-          return
-        }
-        const query = text.slice(1)
-        if (slashQueryRef.current !== query) {
-          if (typeof window !== 'undefined') window.__WORKLOG_DEBUG_SLASH_QUERY = query
-          setSlashQuery(query)
-        }
-      } catch (err) {
-        if (slashQueryRef.current) setSlashQuery('')
-      }
-    }
-    editor.on('update', updateSlashState)
-    editor.on('selectionUpdate', updateSlashState)
-    return () => {
-      editor.off('update', updateSlashState)
-      editor.off('selectionUpdate', updateSlashState)
-    }
-  }, [editor])
-
-  useEffect(() => {
-    if (slashOpen) {
-      updateSlashActive(0)
-      requestAnimationFrame(() => {
-        slashInputRef.current?.focus()
-        slashInputRef.current?.select()
-      })
-    }
-  }, [slashOpen])
-
-  useEffect(() => {
-    if (!editor) return
     applySearchHighlight()
   }, [editor, applySearchHighlight, searchQuery])
 
@@ -2331,29 +2182,6 @@ export default function OutlinerView({
     return () => dom.removeEventListener('click', handler)
   }, [editor, pushDebug])
 
-  useEffect(() => {
-    function onDocMouseDown(e) {
-      if (!slashOpen) return
-      if (menuRef.current && !menuRef.current.contains(e.target)) { closeSlash(); pushDebug('popup: close by outside click') }
-    }
-    function onDocKeyDown(e) {
-      if (!slashOpen) return
-      const isNav = ['ArrowDown','ArrowUp','Enter','Tab'].includes(e.key)
-      const insideMenu = menuRef.current && menuRef.current.contains(e.target)
-      if (e.key === 'Escape') { closeSlash(); e.preventDefault(); pushDebug('popup: close by ESC') }
-      else if (!insideMenu && !isNav && e.key.length === 1 && e.key !== '/' && e.key !== '?') {
-        closeSlash();
-        pushDebug('popup: close by typing', { key:e.key })
-      }
-    }
-    document.addEventListener('mousedown', onDocMouseDown)
-    document.addEventListener('keydown', onDocKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onDocMouseDown)
-      document.removeEventListener('keydown', onDocKeyDown)
-    }
-  }, [slashOpen])
-
   function moveIntoFirstChild(view) {
     const { state } = view
     const { $from } = state.selection
@@ -2382,6 +2210,29 @@ export default function OutlinerView({
     }
     return false
   }
+
+  const {
+    slashOpen,
+    slashPos,
+    slashQuery,
+    setSlashQuery,
+    slashActiveIndex,
+    updateSlashActive,
+    slashInputRef,
+    filteredCommands,
+    closeSlash,
+    menuRef,
+    datePickerOpen,
+    setDatePickerOpen,
+    datePickerValueRef,
+    applyPickedDate,
+    handleKeyDown: slashHandleKeyDown,
+    handleSlashInputKeyDown,
+    openSlashAt
+  } = useSlashCommands({ editor, isReadOnly, pushDebug })
+
+  slashHandlersRef.current.handleKeyDown = slashHandleKeyDown
+  slashHandlersRef.current.openAt = openSlashAt
 
   const saveTimer = useRef(null)
   const markDirty = () => {
@@ -2464,49 +2315,6 @@ export default function OutlinerView({
       setStatusFilter(next)
     }
   }
-
-  const applyReminderAction = useCallback((detail) => {
-    if (!editor || !detail?.taskId) return
-    const { state, view } = editor
-    if (!state || !view) return
-
-    const target = findReminderTarget(state.doc, detail.taskId)
-    if (!target) return
-
-    const nextReminder = deriveReminderUpdate(target.existingReminder, detail.action, {
-      remindAt: detail.remindAt,
-      message: detail.message
-    })
-
-    const paragraphResult = buildReminderParagraph({
-      schema: state.schema,
-      paragraphNode: target.paragraphNode,
-      action: detail.action,
-      reminder: nextReminder
-    })
-
-    if (!paragraphResult) return
-
-    let tr = state.tr.replaceWith(
-      target.paragraphPos,
-      target.paragraphPos + target.paragraphNode.nodeSize,
-      paragraphResult.paragraph
-    )
-
-    if (detail.action === 'complete') {
-      const currentStatus = target.listItemNode.attrs?.status ?? STATUS_EMPTY
-      if (currentStatus !== 'done') {
-        const nextAttrs = { ...target.listItemNode.attrs, status: 'done' }
-        tr = tr.setNodeMarkup(target.listItemPos, undefined, nextAttrs, target.listItemNode.marks)
-      }
-    }
-
-    view.dispatch(tr.scrollIntoView())
-    markDirty()
-    queueSave(300)
-    const outline = parseOutline()
-    emitOutlineSnapshot(outline)
-  }, [editor, emitOutlineSnapshot, markDirty, queueSave])
 
   const addTagFilter = useCallback((mode, value) => {
     const parsed = parseTagInput(value)
@@ -2962,17 +2770,6 @@ export default function OutlinerView({
     saveTagFilters(tagFilters)
     applyStatusFilter()
   }, [tagFilters, applyStatusFilter])
-
-  useEffect(() => {
-    if (!editor) return undefined
-    const handler = (event) => {
-      const detail = event?.detail
-      if (!detail) return
-      applyReminderAction(detail)
-    }
-    window.addEventListener('worklog:reminder-action', handler)
-    return () => window.removeEventListener('worklog:reminder-action', handler)
-  }, [editor, applyReminderAction])
 
   const handleRequestFocus = useCallback((taskId) => {
     if (!taskId) return
@@ -3613,6 +3410,25 @@ export default function OutlinerView({
     return results
   }
 
+  const { applyReminderAction } = useReminderActions({
+    editor,
+    markDirty,
+    queueSave,
+    parseOutline,
+    emitOutlineSnapshot
+  })
+
+  useEffect(() => {
+    if (!editor) return undefined
+    const handler = (event) => {
+      const detail = event?.detail
+      if (!detail) return
+      applyReminderAction(detail)
+    }
+    window.addEventListener('worklog:reminder-action', handler)
+    return () => window.removeEventListener('worklog:reminder-action', handler)
+  }, [editor, applyReminderAction])
+
   const cloneOutline = (outline) => (typeof structuredClone === 'function'
     ? structuredClone(outline)
     : JSON.parse(JSON.stringify(outline)))
@@ -3684,382 +3500,6 @@ export default function OutlinerView({
     })
     return Array.from(dates)
   }
-
-  const closeSlash = ({ preserveMarker = false } = {}) => {
-    if (!preserveMarker) {
-      const marker = slashMarker.current
-      if (marker && editor) {
-        const cursorPos = marker.pos + 1 + slashQueryRef.current.length
-        editor.chain().setTextSelection(cursorPos).focus().run()
-      } else if (editor) {
-        editor.chain().focus().run()
-      }
-      slashMarker.current = null
-      updateSlashActive(0)
-      setSlashQuery('')
-    }
-    setSlashOpen(false)
-  }
-  closeSlashRef.current = closeSlash
-  const consumeSlashMarker = useCallback(() => {
-    if (!editor) return null
-    const query = slashQueryRef.current
-    const { state } = editor
-    const { $from } = state.selection
-    const queryLength = query.length
-    const suffix = `/${query}`
-    let from = null
-    let to = null
-    let source = 'cursor'
-
-    if ($from.parent?.isTextblock) {
-      try {
-        const textBefore = $from.parent.textBetween(0, $from.parentOffset, '\uFFFC', '\uFFFC')
-        if (textBefore && textBefore.endsWith(suffix)) {
-          const startOffset = $from.parentOffset - suffix.length
-          if (startOffset >= 0) {
-            from = $from.start() + startOffset
-            to = from + suffix.length
-          }
-        }
-      } catch (err) {
-        pushDebug('popup: inspect textBefore failed', { error: err.message })
-      }
-    }
-
-    if (from === null) {
-      const marker = slashMarker.current
-      if (!marker) {
-        pushDebug('popup: no slash marker to consume')
-        setSlashQuery('')
-        return null
-      }
-      from = marker.pos
-      const docSize = state.doc.content.size
-      const probeEnd = Math.min(marker.pos + 1 + query.length, docSize)
-      const slice = state.doc.textBetween(marker.pos, probeEnd, '\n', '\n') || ''
-      if (queryLength && slice.startsWith('/' + query)) {
-        to = marker.pos + 1 + queryLength
-      } else {
-        to = marker.pos + 1
-      }
-      source = 'marker'
-    }
-
-    let removed = null
-    try {
-      pushDebug('popup: doc before slash removal', { doc: editor.getJSON() })
-      const ok = editor.chain().focus().deleteRange({ from, to }).run()
-      if (ok) {
-        removed = { from, to }
-        pushDebug('popup: removed slash marker', { from, to, source })
-      } else {
-        pushDebug('popup: remove slash marker skipped', { from, to, source })
-      }
-      pushDebug('popup: doc after slash removal', { doc: editor.getJSON() })
-    } catch (e) {
-      pushDebug('popup: remove slash marker failed', { error: e.message })
-    }
-
-    slashMarker.current = null
-    setSlashQuery('')
-    return removed
-  }, [editor, pushDebug])
-
-  const cleanDanglingSlash = useCallback((from) => {
-    if (!editor) return
-    const char = editor.state.doc.textBetween(from, from + 1, '\n', '\n')
-    if (char !== '/') return
-    try {
-      editor.chain().focus().deleteRange({ from, to: from + 1 }).run()
-      pushDebug('popup: cleaned dangling slash', { from })
-    } catch (e) {
-      pushDebug('popup: clean dangling slash failed', { error: e.message })
-    }
-  }, [editor])
-
-  // Ensure slash commands that add block nodes (code, details, etc.) stay inside the current list item
-  const insertBlockNodeInList = useCallback((nodeName, attrs = {}, options = {}) => {
-    if (!editor) return false
-    const { select = 'after' } = options
-    return editor.chain().focus().command(({ state, dispatch, tr, commands }) => {
-      const type = state.schema.nodes[nodeName]
-      if (!type) return false
-      const { $from } = state.selection
-
-      let listItemDepth = -1
-      for (let depth = $from.depth; depth >= 0; depth--) {
-        if ($from.node(depth).type.name === 'listItem') {
-          listItemDepth = depth
-          break
-        }
-      }
-
-      if (listItemDepth === -1) {
-        return commands.insertContent({ type: nodeName, attrs })
-      }
-
-      let contentNode = null
-      const defaultType = type.contentMatch?.defaultType
-      if (defaultType) {
-        if (defaultType.isText) {
-          contentNode = state.schema.text('')
-        } else {
-          contentNode = defaultType.create()
-        }
-      }
-
-      const newNode = type.create(attrs, contentNode ? [contentNode] : undefined)
-
-      let blockDepth = -1
-      for (let depth = $from.depth; depth > listItemDepth; depth--) {
-        const current = $from.node(depth)
-        if (current.isBlock) {
-          blockDepth = depth
-          break
-        }
-      }
-
-      const insertPos = blockDepth >= 0
-        ? $from.after(blockDepth)
-        : $from.end(listItemDepth)
-
-      tr.insert(insertPos, newNode)
-
-      if (!dispatch) return true
-
-      const targetPos = select === 'inside'
-        ? insertPos + 1
-        : insertPos + newNode.nodeSize
-
-      try {
-        tr.setSelection(TextSelection.near(tr.doc.resolve(targetPos), 1))
-      } catch (err) {
-        try {
-          tr.setSelection(TextSelection.create(tr.doc, targetPos))
-        } catch {
-          tr.setSelection(TextSelection.near(tr.doc.resolve(tr.doc.content.size), -1))
-        }
-      }
-
-      dispatch(tr.scrollIntoView())
-      pushDebug('insert block node', {
-        nodeName,
-        insertPos,
-        select,
-        listItemDepth,
-        blockDepth,
-        from: $from.pos
-      })
-      return true
-    }).run()
-  }, [editor, pushDebug])
-  const insertToday = () => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor.chain().focus().insertContent(' @' + dayjs().format('YYYY-MM-DD')).run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert date today')
-  }
-  const insertPick = () => {
-    // Open our own lightweight date picker popup instead of browser prompt
-    const today = dayjs().format('YYYY-MM-DD')
-    datePickerValueRef.current = today
-    const selFrom = editor?.state?.selection?.from ?? null
-    datePickerCaretRef.current = selFrom
-
-    setDatePickerOpen(true)
-    closeSlash({ preserveMarker: true })
-  }
-  const insertArchived = () => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor.chain().focus().insertContent(' @archived').run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert archived tag')
-  }
-  const insertFuture = () => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor.chain().focus().insertContent(' @future').run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert future tag')
-  }
-  const insertSoon = () => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor.chain().focus().insertContent(' @soon').run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert soon tag')
-  }
-
-  const insertTagFromSlash = useCallback((tagInfo) => {
-    if (!tagInfo) return
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    let insertion = `#${tagInfo.display}`
-    try {
-      const { doc } = editor?.state || {}
-      const pos = caretPos ?? 0
-      if (doc && pos > 0) {
-        const prevChar = doc.textBetween(pos - 1, pos, '\n', '\n') || ''
-        if (prevChar && !/\s/.test(prevChar)) insertion = ' ' + insertion
-      }
-    } catch {}
-    editor?.chain().focus().insertContent(insertion).run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert tag', { tag: tagInfo.canonical })
-  }, [editor, consumeSlashMarker, cleanDanglingSlash, closeSlash, pushDebug])
-
-
-  const insertCode = () => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    const inserted = insertBlockNodeInList('codeBlock', {}, { select: 'inside' })
-    if (inserted) {
-      pushDebug('doc after code insert', { doc: editor.getJSON() })
-    } else {
-      pushDebug('insert code block fallback')
-      editor.chain().focus().insertContent({ type: 'codeBlock' }).run()
-    }
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert code block')
-  }
-  const applyPickedDate = useCallback(() => {
-    const v = datePickerValueRef.current
-    setDatePickerOpen(false)
-    if (!v) return
-    const caretPos = datePickerCaretRef.current ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor?.chain().focus().insertContent(' @' + v).run()
-    if (slashMarker.current?.pos != null) cleanDanglingSlash(slashMarker.current.pos)
-    pushDebug('insert date picked', { v })
-  }, [editor, pushDebug])
-  const insertImage = async () => {
-    const input = document.createElement('input'); input.type='file'; input.accept='image/*'
-    closeSlash({ preserveMarker: true })
-    input.onchange = async () => {
-      const f = input.files[0];
-      if (!f) return
-      const removed = consumeSlashMarker()
-      const result = await uploadImage(f)
-      const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-      if (caretPos !== null) {
-        editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-      }
-      const normalized = normalizeImageSrc(result.url)
-      const attrs = { src: normalized }
-      if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
-      if (result?.id) attrs['data-file-id'] = result.id
-      editor.chain().focus().setImage(attrs).run()
-      if (removed) cleanDanglingSlash(removed.from)
-      pushDebug('insert image', { url: normalized, id: result?.id })
-      closeSlash()
-    }
-    input.click()
-  }
-  const insertDetails = () => {
-    const removed = consumeSlashMarker()
-    const inserted = insertBlockNodeInList('detailsBlock')
-    if (!inserted) editor.chain().focus().insertContent({ type: 'detailsBlock' }).run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert details block')
-  }
-
-  const baseSlashCommands = useMemo(() => ([
-    { id: 'today', label: 'Date worked on (today)', hint: 'Insert @YYYY-MM-DD for today', keywords: ['today', 'date', 'now'], run: insertToday },
-    { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },
-    { id: 'archived', label: 'Archive (tag)', hint: 'Insert @archived tag to mark item (and its subtasks) archived', keywords: ['archive','archived','hide'], run: insertArchived },
-    { id: 'future', label: 'Future (tag)', hint: 'Insert @future tag to mark item not planned soon (and its subtasks)', keywords: ['future','later','snooze'], run: insertFuture },
-    { id: 'soon', label: 'Soon (tag)', hint: 'Insert @soon tag to mark item coming sooner than future (and its subtasks)', keywords: ['soon','next','upcoming'], run: insertSoon },
-    { id: 'code', label: 'Code block', hint: 'Insert a multiline code block', keywords: ['code', 'snippet', '```'], run: insertCode },
-    { id: 'image', label: 'Upload image', hint: 'Upload and insert an image', keywords: ['image', 'photo', 'upload'], run: insertImage },
-    { id: 'details', label: 'Details (inline)', hint: 'Collapsible details block', keywords: ['details', 'summary', 'toggle'], run: insertDetails }
-  ]), [insertToday, insertPick, insertArchived, insertFuture, insertSoon, insertCode, insertImage, insertDetails])
-
-  const parsedTagQuery = useMemo(() => {
-    const trimmed = slashQuery.trim()
-    if (!trimmed || !trimmed.startsWith('#')) return null
-    return parseTagInput(trimmed)
-  }, [slashQuery])
-
-  const dynamicTagCommand = useMemo(() => {
-    if (!parsedTagQuery) return null
-    if (typeof window !== 'undefined') window.__WORKLOG_DEBUG_TAG_QUERY = parsedTagQuery.canonical
-    return {
-      id: `tag:${parsedTagQuery.canonical}`,
-      label: `Add tag #${parsedTagQuery.display}`,
-      hint: 'Insert a tag for this task',
-      keywords: ['tag', 'hash', parsedTagQuery.canonical],
-      run: () => insertTagFromSlash(parsedTagQuery)
-    }
-  }, [parsedTagQuery, insertTagFromSlash])
-
-  const slashCommands = useMemo(() => (
-    dynamicTagCommand ? [dynamicTagCommand, ...baseSlashCommands] : baseSlashCommands
-  ), [dynamicTagCommand, baseSlashCommands])
-
-  const normalizedSlashQuery = slashQuery.trim().toLowerCase()
-  const filteredCommands = useMemo(() => {
-    const terms = normalizedSlashQuery.split(/\s+/g).filter(Boolean)
-    if (!terms.length) return slashCommands
-    const scored = []
-    slashCommands.forEach((cmd, index) => {
-      const label = cmd.label.toLowerCase()
-      const keywords = (cmd.keywords || []).map(k => k.toLowerCase())
-      let matches = true
-      let score = 0
-      for (const term of terms) {
-        const labelMatch = label.includes(term)
-        const keywordExact = keywords.includes(term)
-        const keywordMatch = keywordExact || keywords.some(k => k.includes(term))
-        if (!labelMatch && !keywordMatch) { matches = false; break }
-        if (keywordExact) score += 3
-        else if (keywordMatch) score += 2
-        if (labelMatch) score += 1
-      }
-      if (matches) scored.push({ cmd, score, index })
-    })
-    scored.sort((a, b) => (b.score - a.score) || (a.index - b.index))
-    return scored.map(item => item.cmd)
-  }, [normalizedSlashQuery, slashCommands])
-
-  filteredCommandsRef.current = filteredCommands
-
-  useEffect(() => {
-    if (!filteredCommands.length) {
-      updateSlashActive(0)
-    } else if (slashSelectedRef.current >= filteredCommands.length) {
-      updateSlashActive(0)
-    }
-  }, [filteredCommands, updateSlashActive])
 
   useEffect(() => {
     if (typeof document === 'undefined') return undefined

@@ -1,8 +1,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
-import { getDays, getOutline, updateTask } from '../api.js'
+import { getDays, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
+import { useOutlineSnapshot } from '../hooks/useOutlineSnapshot.js'
 
 function buildOutlineFromItems(items, seedIds = [], date = null) {
   // Reconstruct a tree from path arrays so we can render with OutlinerView in read-only mode
@@ -70,7 +71,6 @@ function collectSoonAndFuture(roots) {
 
 export default function TimelineView({ focusRequest = null, onFocusHandled = () => {}, onNavigateOutline = null }) {
   const [days, setDays] = useState([])
-  const [outlineRoots, setOutlineRoots] = useState([])
   const [showFuture, setShowFuture] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.future'); return v === '0' ? false : true } catch { return true } })
   const [showSoon, setShowSoon] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.soon'); return v === '0' ? false : true } catch { return true } })
   const [showFilters, setShowFilters] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.filters'); return v === '0' ? false : true } catch { return true } })
@@ -86,6 +86,8 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
   const todayKeyRef = useRef(dayjs().format('YYYY-MM-DD'))
   const refreshTimerRef = useRef(null)
 
+  const { outlineRoots } = useOutlineSnapshot()
+
   const refreshData = useCallback(async () => {
     try {
       const data = await getDays()
@@ -93,13 +95,6 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       if (typeof window !== 'undefined') window.__WL_TIMELINE_DAYS = data.days || []
     } catch (err) {
       console.error('[timeline] failed to load days', err)
-    }
-    try {
-      const outline = await getOutline()
-      setOutlineRoots(outline.roots || [])
-      if (typeof window !== 'undefined') window.__WL_TIMELINE_OUTLINE = outline.roots || []
-    } catch (err) {
-      console.error('[timeline] failed to load outline', err)
     }
   }, [])
 
@@ -175,6 +170,17 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       refreshTimerRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.__WL_TIMELINE_OUTLINE = outlineRoots || []
+    return () => {
+      if (typeof window === 'undefined') return
+      if (window.__WL_TIMELINE_OUTLINE === outlineRoots) {
+        window.__WL_TIMELINE_OUTLINE = undefined
+      }
+    }
+  }, [outlineRoots])
 
   useEffect(() => {
     if (todayScrollDoneRef.current) return

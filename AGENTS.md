@@ -5,6 +5,7 @@
 - Confirmed the Express + SQLite API in `server/` mounts routes for outline data, daily snapshots, uploads, history, and static file access.
 - Noted `start-all.sh` still orchestrates npm install (prefers `npm ci`) and launches both services via `concurrently` with shared `VITE_API_URL=/`.
 - Ensured runtime folders (`server/data/`, `server/src/uploads/`) remain guarded by `.gitignore` placeholders.
+- Regression verification relies on the Playwright end-to-end suite (`npm run test:e2e`); unit tests are optional.
 
 ## Environment Notes
 - `client/` and `server/` already have `node_modules/` present; reinstall as needed to refresh dependencies.
