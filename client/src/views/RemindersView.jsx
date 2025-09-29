@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import OutlinerView from './OutlinerView.jsx'
 import { getOutline } from '../api.js'
-import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
+import { useReminders } from '../context/ReminderContext.jsx'
+import { computeReminderDisplay } from '../utils/reminderTokens.js'
 
 const FILTER_OPTIONS = [
   { key: 'due', label: 'Due / Overdue' },
@@ -38,28 +39,20 @@ function cloneNodes(nodes) {
 function buildOutlineRoots(reminders, outlineMap) {
   return reminders.map(reminder => {
     const infoParts = []
-    if (reminder.status === 'completed') {
-      infoParts.push('Reminder completed')
-    } else if (reminder.dismissedAt) {
-      infoParts.push('Reminder dismissed')
-    } else if (reminder.due || (reminder.remindAt && dayjs(reminder.remindAt).isBefore(dayjs()))) {
-      infoParts.push('Reminder due')
-    } else {
-      const relative = describeTimeUntil(reminder)
-      if (relative) infoParts.push(`Reminds ${relative}`)
-    }
+    const display = computeReminderDisplay(reminder)
+    if (display.summary) infoParts.push(display.summary)
     const absolute = formatAbsolute(reminder)
     if (absolute) infoParts.push(absolute)
     const infoText = infoParts.join(' • ')
 
-    const titleText = reminder.taskTitle || `Task #${reminder.taskId}`
-    const content = [
-      { type: 'paragraph', content: [{ type: 'text', text: titleText }] }
-    ]
-    if (infoText) {
-      content.push({ type: 'paragraph', content: [{ type: 'text', text: infoText }] })
-    }
     const baseNode = outlineMap.get(String(reminder.taskId))
+    const titleText = reminder.taskTitle || `Task #${reminder.taskId}`
+    const content = baseNode && Array.isArray(baseNode.content)
+      ? cloneNodes(baseNode.content)
+      : [{ type: 'paragraph', content: [{ type: 'text', text: titleText }] }]
+    if (infoText) {
+      content.push({ type: 'paragraph', content: [{ type: 'text', text: infoText, attrs: { 'data-reminder-summary': '1' } }] })
+    }
 
     const result = {
       id: reminder.taskId,
@@ -82,24 +75,37 @@ export default function RemindersView() {
 
   useEffect(() => {
     let cancelled = false
+    const applyRoots = (roots = []) => {
+      const map = new Map()
+      const walk = (nodes) => {
+        nodes.forEach(node => {
+          if (!node || typeof node !== 'object') return
+          if (node.id != null) map.set(String(node.id), node)
+          if (Array.isArray(node.children)) walk(node.children)
+        })
+      }
+      walk(roots)
+      if (!cancelled) setOutlineMap(map)
+    }
+
     ;(async () => {
       try {
         const data = await getOutline()
-        const map = new Map()
-        const walk = (nodes) => {
-          nodes.forEach(node => {
-            if (!node || typeof node !== 'object') return
-            if (node.id != null) map.set(String(node.id), node)
-            if (Array.isArray(node.children)) walk(node.children)
-          })
-        }
-        if (data?.roots) walk(data.roots)
-        if (!cancelled) setOutlineMap(map)
+        applyRoots(Array.isArray(data?.roots) ? data.roots : [])
       } catch (err) {
         console.error('[reminders] failed to fetch outline', err)
       }
     })()
-    return () => { cancelled = true }
+
+    const handler = (event) => {
+      const roots = event?.detail?.outline
+      if (Array.isArray(roots)) applyRoots(roots)
+    }
+    window.addEventListener('worklog:outline-snapshot', handler)
+    return () => {
+      cancelled = true
+      window.removeEventListener('worklog:outline-snapshot', handler)
+    }
   }, [])
 
   const categorized = useMemo(() => {
@@ -114,7 +120,7 @@ export default function RemindersView() {
     })
     buckets.due.sort((a, b) => new Date(a.remindAt || 0) - new Date(b.remindAt || 0))
     buckets.upcoming.sort((a, b) => new Date(a.remindAt || 0) - new Date(b.remindAt || 0))
-    buckets.completed.sort((a, b) => new Date(b.completedAt || b.updatedAt || 0) - new Date(a.completedAt || a.updatedAt || 0))
+    buckets.completed.sort((a, b) => new Date(b.remindAt || 0) - new Date(a.remindAt || 0))
     return buckets
   }, [reminders])
 
@@ -167,6 +173,7 @@ export default function RemindersView() {
             forceExpand
             showDebug={false}
             reminderActionsEnabled
+            broadcastSnapshots={false}
           />
         </div>
       )}

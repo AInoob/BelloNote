@@ -14,7 +14,7 @@ const TEMP_ROOT = path.join(PROJECT_ROOT, 'tests', 'temp')
 const NPM_CMD = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 const reservedPorts = new Set()
-const UNSAFE_PORTS = new Set([6000, 6665, 6666, 6667, 6668, 6669, 6697])
+const UNSAFE_PORTS = new Set([6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697])
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
 function sanitizeSegment(segment) {

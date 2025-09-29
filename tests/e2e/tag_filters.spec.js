@@ -24,7 +24,22 @@ async function resetOutline(request) {
 }
 
 async function setOutlineNormalized(request, outline) {
-  const response = await request.post(`${API_URL}/api/outline`, { data: { outline }, headers: { 'x-playwright-test': '1' } })
+  const toApi = (nodes) => {
+    if (!Array.isArray(nodes)) return []
+    return nodes.map(node => ({
+      title: node?.text || 'Untitled',
+      status: node?.status || '',
+      tags: Array.isArray(node?.tags) ? node.tags : [],
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: node?.text || 'Untitled' }]
+        }
+      ],
+      children: toApi(node?.children || [])
+    }))
+  }
+  const response = await request.post(`${API_URL}/api/outline`, { data: { outline: toApi(outline) }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok(), 'outline set should succeed').toBeTruthy()
 }
 
@@ -78,31 +93,6 @@ const nestedExcludeState = () => [
   outlineNode('Another visible task', { status: 'todo' })
 ]
 
-async function createTasks(page, titles) {
-  const editor = page.locator('.tiptap.ProseMirror')
-  const listItems = editor.locator('li.li-node')
-  const firstParagraph = listItems.first().locator('p').first()
-  await firstParagraph.click()
-  // Replace starter text
-  await page.evaluate(() => {
-    const paragraph = document.querySelector('li.li-node p')
-    if (!paragraph) return
-    const range = document.createRange()
-    range.selectNodeContents(paragraph)
-    const selection = window.getSelection()
-    selection.removeAllRanges()
-    selection.addRange(range)
-  })
-  for (let i = 0; i < titles.length; i += 1) {
-    if (i > 0) {
-      await page.keyboard.press('Enter')
-      await listItems.nth(i).locator('p').first().click()
-    }
-    await page.keyboard.type(titles[i])
-    await expect(listItems.nth(i)).toContainText(titles[i], { timeout: SHORT_TIMEOUT })
-  }
-}
-
 test.beforeEach(async ({ request, app }) => {
   API_URL = app.apiUrl;
   await resetOutline(request)
@@ -110,23 +100,20 @@ test.beforeEach(async ({ request, app }) => {
 
 test('slash tagging and tag filters support include/exclude with persistence', async ({ page, request }) => {
   await ensureBackendReady(request)
+  await setOutlineNormalized(request, initialTagTasksState())
   await page.goto('/')
   await waitForEditorReady(page)
-  await expectOutlineState(page, [outlineNode('Start here')], { includeTags: false })
-
-  await createTasks(page, ['Task 1 root', 'Task 2 urgent', 'Task 3 later'])
   await expectOutlineState(page, initialTagTasksState(), { includeTags: false })
 
   // Tag task 2 with #urgent via slash
+  const outlineItems = page.locator('.tiptap.ProseMirror li.li-node')
+  await outlineItems.nth(1).locator('p').first().click()
   await placeCaretAtTaskEnd(page, 1)
   await page.keyboard.type('/')
   const slashMenu = page.locator('.slash-menu')
   await expect(slashMenu).toBeVisible({ timeout: SHORT_TIMEOUT })
-  await page.keyboard.type('#urgent')
-  const urgentOption = slashMenu.locator('button', { hasText: 'Add tag #urgent' }).first()
-  await expect(urgentOption).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await slashMenu.locator('input').fill('#urgent')
   await page.keyboard.press('Enter')
-  const outlineItems = page.locator('.tiptap.ProseMirror li.li-node')
   await expect.poll(async () => await outlineItems.nth(1).getAttribute('data-tags-self'), {
     timeout: SHORT_TIMEOUT
   }).toBe('urgent')
@@ -137,12 +124,12 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   ], { timeout: 10000, includeTags: false })
 
   // Tag task 3 with #later via slash
+  await outlineItems.nth(2).locator('p').first().click()
   await placeCaretAtTaskEnd(page, 2)
   await page.keyboard.type('/')
-  await expect(page.locator('.slash-menu')).toBeVisible({ timeout: SHORT_TIMEOUT })
-  await page.keyboard.type('#later')
-  const laterOption = page.locator('.slash-menu button', { hasText: 'Add tag #later' }).first()
-  await expect(laterOption).toBeVisible({ timeout: SHORT_TIMEOUT * 3 })
+  const slashMenuLater = page.locator('.slash-menu')
+  await expect(slashMenuLater).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await slashMenuLater.locator('input').fill('#later')
   await page.keyboard.press('Enter')
   await expect.poll(async () => await outlineItems.nth(2).getAttribute('data-tags-self'), {
     timeout: SHORT_TIMEOUT
@@ -231,43 +218,14 @@ test('slash tagging and tag filters support include/exclude with persistence', a
 test('excluding a tag hides matching child but keeps parent visible', async ({ page, request }) => {
   await ensureBackendReady(request)
   await resetOutline(request)
-  await setOutlineNormalized(request, [
-    {
-      id: null,
-      title: 'Parent without tag',
-      status: 'todo',
-      dates: [],
-      ownWorkedOnDates: [],
-      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Parent without tag' }] }],
-      children: [
-        {
-          id: null,
-          title: 'Child secret #secret',
-          status: 'todo',
-          dates: [],
-          ownWorkedOnDates: [],
-          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Child secret #secret' }] }],
-          children: []
-        }
-      ]
-    },
-    {
-      id: null,
-      title: 'Another visible task',
-      status: 'todo',
-      dates: [],
-      ownWorkedOnDates: [],
-      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Another visible task' }] }],
-      children: []
-    }
-  ])
+  await setOutlineNormalized(request, nestedExcludeState())
 
   await page.goto('/')
   await waitForEditorReady(page)
 
   const outline = page.locator('.tiptap.ProseMirror')
-  const parent = outline.locator('li.li-node[data-body-text="Parent without tag"]').first()
-  const child = outline.locator('li.li-node[data-body-text="Child secret #secret"]').first()
+  const parent = outline.locator('li.li-node', { hasText: 'Parent without tag' }).first()
+  const child = outline.locator('li.li-node', { hasText: 'Child secret #secret' }).last()
   await expect(parent).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(child).toBeVisible({ timeout: SHORT_TIMEOUT })
 

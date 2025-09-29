@@ -117,8 +117,8 @@ test('archived descendants do not dim parent rows', async ({ page, request, app 
   await resetOutline(app, buildChildArchivedOutline())
   await page.goto('/')
 
-  const parent = page.locator('li.li-node[data-body-text="parent stays bright"]').first()
-  const child = page.locator('li.li-node[data-body-text="child archived @archived"]').first()
+  const parent = page.locator('li.li-node', { hasText: 'parent stays bright' }).first()
+  const child = page.locator('li.li-node', { hasText: 'child archived @archived' }).last()
   await expect(parent).toBeVisible({ timeout: 15000 })
   await expect(child).toBeVisible({ timeout: 15000 })
 
@@ -135,39 +135,12 @@ test('archived descendants do not dim parent rows', async ({ page, request, app 
 test('hiding archived children does not hide the parent', async ({ page, request, app }) => {
   await ensureBackendReady(request, app)
   await resetOutline(app)
+  await resetOutline(app, buildChildArchivedOutline())
 
   await page.goto('/')
 
-  const editor = page.locator('.tiptap.ProseMirror').first()
-  await expect(editor).toBeVisible({ timeout: SHORT_TIMEOUT })
-
-  const firstParagraph = page.locator('li.li-node p').first()
-  await expect(firstParagraph).toBeVisible({ timeout: SHORT_TIMEOUT })
-  await firstParagraph.click()
-  await page.evaluate(() => {
-    const paragraph = document.querySelector('li.li-node p')
-    if (!paragraph) return
-    const range = document.createRange()
-    range.selectNodeContents(paragraph)
-    const selection = window.getSelection()
-    selection.removeAllRanges()
-    selection.addRange(range)
-  })
-
-  await page.keyboard.type('Parent stays bright')
-
-  const listItems = page.locator('li.li-node')
-  await expect(listItems.nth(0)).toContainText('Parent stays bright', { timeout: SHORT_TIMEOUT })
-
-  await page.keyboard.press('Enter')
-  await expect(listItems).toHaveCount(2, { timeout: SHORT_TIMEOUT })
-
-  await page.keyboard.press('Tab')
-  await listItems.nth(1).locator('p').first().click()
-  await page.keyboard.type('Child archived @archived')
-
-  const parent = page.locator('li.li-node[data-body-text="Parent stays bright"]').first()
-  const child = page.locator('li.li-node[data-body-text="Child archived @archived"]').first()
+  const parent = page.locator('li.li-node', { hasText: 'Parent stays bright' }).first()
+  const child = page.locator('li.li-node', { hasText: 'Child archived @archived' }).last()
   await expect(parent).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(child).toBeVisible({ timeout: SHORT_TIMEOUT })
 

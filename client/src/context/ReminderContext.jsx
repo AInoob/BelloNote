@@ -1,145 +1,129 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { completeReminder as apiCompleteReminder, createReminder as apiCreateReminder, deleteReminder as apiDeleteReminder, dismissReminder as apiDismissReminder, getReminders } from '../api.js'
+import { getOutline } from '../api.js'
+import { parseReminderFromNodeContent, reminderIsDue, describeTimeUntil } from '../utils/reminderTokens.js'
 
-const ReminderContext = createContext(null)
+const ReminderContext = createContext({
+  loading: false,
+  reminders: [],
+  remindersByTask: new Map(),
+  pendingReminders: [],
+  refreshReminders: () => {},
+  scheduleReminder: () => {},
+  dismissReminder: () => {},
+  completeReminder: () => {},
+  removeReminder: () => {}
+})
 
-const mapFromList = (list = []) => {
-  const byId = new Map()
-  list.forEach(item => {
-    if (item?.id) byId.set(item.id, item)
-  })
-  return byId
-}
-
-function applyReminderToMaps(prevMap, reminder) {
-  const next = new Map(prevMap)
-  if (!reminder || !reminder.id) return next
-  // Remove any reminder with the same taskId under a different id
-  Array.from(next.entries()).forEach(([key, value]) => {
-    if (value.taskId === reminder.taskId && value.id !== reminder.id) {
-      next.delete(key)
+function extractRemindersFromOutline(roots = []) {
+  const reminders = []
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return
+    const reminder = parseReminderFromNodeContent(node?.content)
+    if (reminder && node.id != null) {
+      reminders.push({
+        id: String(node.id),
+        taskId: String(node.id),
+        taskTitle: node.title || '',
+        taskStatus: node.status || '',
+        status: reminder.status || 'incomplete',
+        remindAt: reminder.remindAt || '',
+        message: reminder.message || '',
+        token: reminder.token || '',
+        due: reminderIsDue(reminder)
+      })
     }
-  })
-  next.set(reminder.id, reminder)
-  return next
+    if (Array.isArray(node.children)) node.children.forEach(visit)
+  }
+  (roots || []).forEach(visit)
+  return reminders
 }
 
 export function ReminderProvider({ children }) {
-  const [remindersById, setRemindersById] = useState(() => new Map())
-  const [pendingReminders, setPendingReminders] = useState([])
+  const [reminders, setReminders] = useState([])
   const [loading, setLoading] = useState(true)
-  const pollRef = useRef(null)
 
-  const reminders = useMemo(() => {
-    return Array.from(remindersById.values()).sort((a, b) => {
-      const aTime = a?.remindAt ? new Date(a.remindAt).getTime() : 0
-      const bTime = b?.remindAt ? new Date(b.remindAt).getTime() : 0
-      return aTime - bTime
-    })
-  }, [remindersById])
+  const updateFromOutline = useCallback((roots) => {
+    const next = extractRemindersFromOutline(roots)
+    setReminders(next)
+    if (typeof window !== 'undefined') {
+      window.__WORKLOG_REMINDERS = next
+      window.__WORKLOG_REMINDER_OUTLINE = roots
+    }
+  }, [])
+
+  const refreshReminders = useCallback(async () => {
+    try {
+      const data = await getOutline()
+      updateFromOutline(Array.isArray(data?.roots) ? data.roots : [])
+    } catch (err) {
+      console.error('[reminders] failed to load outline', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [updateFromOutline])
+
+  useEffect(() => { refreshReminders() }, [refreshReminders])
+
+  useEffect(() => {
+    const handler = (event) => {
+      const roots = event?.detail?.outline
+      if (Array.isArray(roots)) updateFromOutline(roots)
+    }
+    window.addEventListener('worklog:outline-snapshot', handler)
+    return () => window.removeEventListener('worklog:outline-snapshot', handler)
+  }, [updateFromOutline])
 
   const remindersByTask = useMemo(() => {
     const map = new Map()
-    reminders.forEach(item => {
-      if (item?.taskId) map.set(String(item.taskId), item)
+    reminders.forEach(reminder => {
+      if (reminder?.taskId) map.set(String(reminder.taskId), reminder)
     })
     return map
   }, [reminders])
 
-  const fetchAll = useCallback(async () => {
-    try {
-      const data = await getReminders()
-      setRemindersById(mapFromList(data?.reminders || []))
-    } catch (err) {
-      console.error('[reminders] failed to load', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const pendingReminders = useMemo(() => reminders.filter(reminderIsDue), [reminders])
 
-  const fetchPending = useCallback(async () => {
-    try {
-      const data = await getReminders({ pending: 1 })
-      setPendingReminders(data?.reminders || [])
-    } catch (err) {
-      console.error('[reminders] failed to load pending', err)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchAll()
-    fetchPending()
-    pollRef.current = setInterval(fetchPending, 20000)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [fetchAll, fetchPending])
-
-  const dispatchReminderEvent = useCallback((reminder) => {
+  const dispatch = useCallback((action, payload) => {
     if (typeof window === 'undefined') return
-    window.dispatchEvent(new CustomEvent('worklog:reminder-updated', { detail: { reminder } }))
+    window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail: { action, ...payload } }))
   }, [])
 
-  const dispatchReminderDeleted = useCallback((reminder) => {
-    if (typeof window === 'undefined') return
-    window.dispatchEvent(new CustomEvent('worklog:reminder-removed', { detail: { reminder } }))
-  }, [])
+  const scheduleReminder = useCallback(({ taskId, remindAt, message }) => {
+    if (!taskId || !remindAt) return Promise.resolve()
+    dispatch('schedule', { taskId: String(taskId), remindAt, message })
+    return Promise.resolve()
+  }, [dispatch])
 
-  const dispatchTaskStatusChange = useCallback((taskId, status) => {
-    if (typeof window === 'undefined') return
-    window.dispatchEvent(new CustomEvent('worklog:task-status-change', { detail: { taskId: String(taskId), status } }))
-  }, [])
+  const dismissReminder = useCallback((taskId) => {
+    if (!taskId) return Promise.resolve()
+    dispatch('dismiss', { taskId: String(taskId) })
+    return Promise.resolve()
+  }, [dispatch])
 
-  const scheduleReminder = useCallback(async ({ taskId, remindAt, message }) => {
-    const { reminder } = await apiCreateReminder({ taskId, remindAt, message })
-    setRemindersById(prev => applyReminderToMaps(prev, reminder))
-    dispatchReminderEvent(reminder)
-    fetchPending()
-    return reminder
-  }, [dispatchReminderEvent, fetchPending])
+  const completeReminder = useCallback((taskId) => {
+    if (!taskId) return Promise.resolve()
+    dispatch('complete', { taskId: String(taskId) })
+    return Promise.resolve()
+  }, [dispatch])
 
-  const dismissReminder = useCallback(async (reminderId) => {
-    const { reminder } = await apiDismissReminder(reminderId)
-    setRemindersById(prev => applyReminderToMaps(prev, reminder))
-    dispatchReminderEvent(reminder)
-    fetchPending()
-    return reminder
-  }, [dispatchReminderEvent, fetchPending])
-
-  const completeReminder = useCallback(async (reminderId) => {
-    const { reminder } = await apiCompleteReminder(reminderId)
-    setRemindersById(prev => applyReminderToMaps(prev, reminder))
-    dispatchReminderEvent(reminder)
-    if (reminder?.taskId) dispatchTaskStatusChange(reminder.taskId, 'done')
-    fetchPending()
-    return reminder
-  }, [dispatchReminderEvent, dispatchTaskStatusChange, fetchPending])
-
-  const removeReminder = useCallback(async (reminderId) => {
-    const existing = remindersById.get(reminderId)
-    await apiDeleteReminder(reminderId)
-    setRemindersById(prev => {
-      const next = new Map(prev)
-      next.delete(reminderId)
-      return next
-    })
-    if (existing) dispatchReminderDeleted(existing)
-    fetchPending()
-  }, [dispatchReminderDeleted, fetchPending, remindersById])
+  const removeReminder = useCallback((taskId) => {
+    if (!taskId) return Promise.resolve()
+    dispatch('remove', { taskId: String(taskId) })
+    return Promise.resolve()
+  }, [dispatch])
 
   const value = useMemo(() => ({
     loading,
     reminders,
     remindersByTask,
     pendingReminders,
-    refreshReminders: fetchAll,
-    refreshPending: fetchPending,
+    refreshReminders,
     scheduleReminder,
     dismissReminder,
     completeReminder,
     removeReminder
-  }), [completeReminder, dismissReminder, fetchAll, fetchPending, loading, pendingReminders, reminders, remindersByTask, scheduleReminder, removeReminder])
+  }), [loading, reminders, remindersByTask, pendingReminders, refreshReminders, scheduleReminder, dismissReminder, completeReminder, removeReminder])
 
   return (
     <ReminderContext.Provider value={value}>
@@ -149,35 +133,11 @@ export function ReminderProvider({ children }) {
 }
 
 export function useReminders() {
-  const ctx = useContext(ReminderContext)
-  if (!ctx) throw new Error('useReminders must be used within ReminderProvider')
-  return ctx
+  return useContext(ReminderContext)
 }
 
 export function useReminderForTask(taskId) {
   const { remindersByTask } = useReminders()
   if (!taskId) return null
   return remindersByTask.get(String(taskId)) || null
-}
-
-export function describeTimeUntil(reminder) {
-  if (!reminder?.remindAt) return ''
-  const target = dayjs(reminder.remindAt)
-  if (!target.isValid()) return ''
-  const now = dayjs()
-  const diffMinutes = target.diff(now, 'minute')
-  if (diffMinutes <= 0) {
-    const ago = Math.abs(diffMinutes)
-    if (ago < 1) return 'due now'
-    if (ago < 60) return `${ago}m overdue`
-    const hours = Math.round(ago / 60)
-    if (hours < 24) return `${hours}h overdue`
-    const days = Math.round(hours / 24)
-    return `${days}d overdue`
-  }
-  if (diffMinutes < 60) return `in ${diffMinutes}m`
-  const hours = Math.round(diffMinutes / 60)
-  if (hours < 24) return `in ${hours}h`
-  const days = Math.round(hours / 24)
-  return `in ${days}d`
 }

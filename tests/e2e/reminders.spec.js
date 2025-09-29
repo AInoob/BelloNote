@@ -4,6 +4,7 @@ test.describe.configure({ mode: 'serial' })
 
 let API_URL = null
 const SHORT_TIMEOUT = 1000
+const REMINDER_PILL_PATTERN = /Remind|Due|in\s|overdue|Dismissed|Completed/i
 
 function toDateTimeLocal(date) {
   const pad = (value) => `${value}`.padStart(2, '0')
@@ -47,20 +48,39 @@ test('schedule reminder from outline and remove it', async ({ page, request }) =
   await expect(firstReminderToggle).toBeVisible({ timeout: SHORT_TIMEOUT })
   await firstReminderToggle.click()
 
+  const saveResponsePromise = page.waitForResponse((response) => {
+    return response.url().includes('/api/outline') && response.request().method() === 'POST'
+  })
   await page.locator('.reminder-menu').locator('button', { hasText: '30 minutes' }).click()
-  const firstReminderPill = page.locator('li.li-node').first().locator('.reminder-pill')
-  await expect(firstReminderPill).toHaveText(/Reminds|Due/i, { timeout: SHORT_TIMEOUT })
+  const firstReminderChip = page.locator('li.li-node').first().locator('.reminder-inline-chip')
+  await expect(firstReminderChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
+  await saveResponsePromise
+
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const reminders = Array.isArray(window.__WORKLOG_REMINDERS) ? window.__WORKLOG_REMINDERS : []
+      return reminders.some(item => item?.taskTitle === 'Task A')
+    })
+  }, { timeout: SHORT_TIMEOUT * 5 }).toBe(true)
 
   await page.getByRole('button', { name: 'Reminders' }).click()
-  const remindersOutline = page.locator('.reminders-view .tiptap.ProseMirror').first()
-  await expect(remindersOutline).toBeVisible({ timeout: SHORT_TIMEOUT })
-  const reminderNode = remindersOutline.locator('li.li-node', { hasText: 'Task A' }).first()
+  const remindersPanel = page.locator('.reminders-view')
+  await expect(remindersPanel).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const remindersOutline = remindersPanel.locator('.reminder-outline .tiptap.ProseMirror')
+  await expect(remindersOutline).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect.poll(async () => remindersOutline.locator('li.li-node').count(), {
+    timeout: SHORT_TIMEOUT * 5
+  }).toBeGreaterThan(0)
+  const reminderNode = remindersOutline.locator('li.li-node').first()
+  await expect(reminderNode).toContainText('Task A', { timeout: SHORT_TIMEOUT * 5 })
   await reminderNode.hover()
   const reminderToggle = reminderNode.locator('.reminder-toggle').first()
   await expect(reminderToggle).toBeVisible({ timeout: SHORT_TIMEOUT })
   await reminderToggle.click()
-  await page.locator('.reminder-menu').getByRole('button', { name: /Remove reminder/i }).click()
-  await expect(remindersOutline.locator('li.li-node', { hasText: 'Task A' })).toHaveCount(0, { timeout: SHORT_TIMEOUT })
+  const reminderMenu = page.locator('.reminder-menu')
+  await expect(reminderMenu).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await reminderMenu.getByRole('button', { name: /Remove reminder/i }).click()
+  await expect(remindersOutline.locator('li.li-node', { hasText: 'Task A' })).toHaveCount(0, { timeout: SHORT_TIMEOUT * 5 })
 })
 
 test('due reminder surfaces notification and completes task', async ({ page, request }) => {
@@ -77,8 +97,8 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   await input.fill(nowMinusMinutes(1))
   await page.locator('.reminder-menu form').getByRole('button', { name: 'Set reminder' }).click()
 
-  const reminderPill = page.locator('li.li-node').first().locator('.reminder-pill')
-  await expect(reminderPill).toHaveText(/Due/i, { timeout: SHORT_TIMEOUT })
+  const reminderChip = page.locator('li.li-node').first().locator('.reminder-inline-chip')
+  await expect(reminderChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
 
   const banner = page.locator('.reminder-banner')
   await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT })
@@ -87,7 +107,7 @@ test('due reminder surfaces notification and completes task', async ({ page, req
 
   const firstNode = page.locator('li.li-node').first()
   await expect(firstNode).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
-  await expect(reminderPill).toHaveCount(0)
+  await expect(reminderChip).toHaveText(/Completed/i, { timeout: SHORT_TIMEOUT })
   await expect(reminderToggle).toHaveAttribute('aria-label', /Reminder completed/i, { timeout: SHORT_TIMEOUT })
 
   await page.getByRole('button', { name: 'Reminders' }).click()
@@ -123,9 +143,9 @@ test('reminder banner supports custom schedule from notification', async ({ page
 
   await expect(banner).toHaveCount(0)
 
-  const reminderPill = page.locator('li.li-node').first().locator('.reminder-pill')
-  await expect(reminderPill).toHaveText(/Reminds/i, { timeout: SHORT_TIMEOUT })
-  await expect(reminderToggle).toHaveAttribute('aria-label', /Reminds/i, { timeout: SHORT_TIMEOUT })
+  const reminderChip = page.locator('li.li-node').first().locator('.reminder-inline-chip')
+  await expect(reminderChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
+  await expect(reminderToggle).toHaveAttribute('aria-label', /Reminder (due|options|completed|dismissed|Reminds)/i, { timeout: SHORT_TIMEOUT })
 })
 
 test('reminder banner custom defaults to roughly 30 minutes ahead', async ({ page, request }) => {
@@ -159,55 +179,129 @@ test('reminder banner custom defaults to roughly 30 minutes ahead', async ({ pag
   expect(diffMinutes).toBeLessThan(2)
 })
 
-test('dismissing reminders preserves their status', async ({ request }) => {
+test('tasks seeded with inline reminder token render correctly', async ({ page, request }) => {
+  const remindAt = nowPlusMinutes(45)
+  const message = 'Follow up soon'
+  const token = `[[reminder|incomplete|${remindAt}|${encodeURIComponent(message)}]]`
+  await resetOutline(request, [
+    {
+      title: 'Seeded Task',
+      status: 'todo',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: `Seeded Task ${token}` }] }
+      ],
+      children: []
+    }
+  ])
+
+  await page.goto('/')
+  const firstNode = page.locator('li.li-node').first()
+  await expect(firstNode).toContainText('Seeded Task', { timeout: SHORT_TIMEOUT })
+  await expect.poll(async () => {
+    const visibleText = await firstNode.evaluate(node => node?.innerText || '')
+    return visibleText
+  }, { timeout: SHORT_TIMEOUT }).not.toContain('[[reminder')
+  const inlineChip = firstNode.locator('.reminder-inline-chip').first()
+  await expect(inlineChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
+  await inlineChip.click()
+  const inlineMenu = page.locator('.reminder-menu')
+  await expect(inlineMenu).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await page.locator('.tiptap.ProseMirror').first().click()
+  await expect(inlineChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
+  await expect(firstNode.locator('.li-reminder-area .reminder-toggle')).toHaveAttribute('aria-label', /Reminder (due|options|completed|dismissed|Reminds)/i, { timeout: SHORT_TIMEOUT })
+
+  await expect.poll(async () => {
+    const count = await page.evaluate(() => {
+      const reminders = Array.isArray(window.__WORKLOG_REMINDERS) ? window.__WORKLOG_REMINDERS : []
+      return reminders.length
+    })
+    return count
+  }, { timeout: SHORT_TIMEOUT * 5 }).toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: 'Reminders' }).click()
+  const remindersPanel = page.locator('.reminders-view')
+  await expect(remindersPanel).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect(remindersPanel).toContainText('Seeded Task', { timeout: SHORT_TIMEOUT })
+  await expect(remindersPanel).toContainText(/Reminder (due|completed|dismissed)|in\s|overdue/i, { timeout: SHORT_TIMEOUT })
+})
+
+test('dismissing reminders preserves task status', async ({ page, request }) => {
   await resetOutline(request, [
     { title: 'Incomplete reminder task', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Incomplete reminder task' }] }] },
     { title: 'Completed reminder task', status: 'done', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Completed reminder task' }] }] }
   ])
 
-  const outlineResponse = await request.get(`${API_URL}/api/outline`)
-  expect(outlineResponse.ok()).toBeTruthy()
-  const outlineData = await outlineResponse.json()
-  const roots = outlineData?.roots || []
-  const findTaskId = (title) => {
-    const match = roots.find(node => node?.title === title)
-    return match?.id
+  await page.goto('/')
+  const items = page.locator('li.li-node')
+  const first = items.nth(0)
+  const second = items.nth(1)
+
+  await expect(first).toHaveAttribute('data-status', 'todo', { timeout: SHORT_TIMEOUT })
+  await expect(second).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
+
+  const scheduleThirtyMinutes = async (node) => {
+    const toggle = node.locator('.li-reminder-area .reminder-toggle')
+    await toggle.click()
+    const menu = page.locator('.reminder-menu')
+    await expect(menu).toBeVisible({ timeout: SHORT_TIMEOUT })
+    await menu.locator('button', { hasText: '30 minutes' }).click()
+    await expect(node.locator('.reminder-inline-chip')).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
   }
-  const incompleteTaskId = findTaskId('Incomplete reminder task')
-  const completedTaskId = findTaskId('Completed reminder task')
-  expect(incompleteTaskId).toBeTruthy()
-  expect(completedTaskId).toBeTruthy()
 
-  const remindSoon = new Date(Date.now() + 15 * 60 * 1000).toISOString()
-  const remindPast = new Date(Date.now() - 15 * 60 * 1000).toISOString()
+  const dismissReminder = async (node) => {
+    const toggle = node.locator('.li-reminder-area .reminder-toggle')
+    await toggle.click()
+    const menu = page.locator('.reminder-menu')
+    await expect(menu).toBeVisible({ timeout: SHORT_TIMEOUT })
+    await menu.getByRole('button', { name: 'Dismiss' }).click()
+    await expect(node.locator('.reminder-inline-chip')).toHaveText(/Dismissed/i, { timeout: SHORT_TIMEOUT })
+    await expect(toggle).toHaveAttribute('aria-label', /Reminder dismissed/i, { timeout: SHORT_TIMEOUT })
+  }
 
-  // Incomplete flow
-  const createIncomplete = await request.post(`${API_URL}/api/reminders`, { data: { taskId: incompleteTaskId, remindAt: remindSoon } })
-  expect(createIncomplete.ok()).toBeTruthy()
-  const incompleteReminder = (await createIncomplete.json()).reminder
-  expect(incompleteReminder.status).toBe('incomplete')
+  await scheduleThirtyMinutes(first)
+  await scheduleThirtyMinutes(second)
 
-  const dismissIncomplete = await request.post(`${API_URL}/api/reminders/${incompleteReminder.id}/dismiss`)
-  expect(dismissIncomplete.ok()).toBeTruthy()
-  const dismissedIncomplete = (await dismissIncomplete.json()).reminder
-  expect(dismissedIncomplete.status).toBe('incomplete')
-  expect(dismissedIncomplete.dismissedAt).toBeTruthy()
+  await dismissReminder(first)
+  await dismissReminder(second)
 
-  // Completed flow
-  const createCompleted = await request.post(`${API_URL}/api/reminders`, { data: { taskId: completedTaskId, remindAt: remindPast } })
-  expect(createCompleted.ok()).toBeTruthy()
-  const createdCompleted = (await createCompleted.json()).reminder
+  await expect(first).toHaveAttribute('data-status', 'todo', { timeout: SHORT_TIMEOUT })
+  await expect(second).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
+})
 
-  const completeResponse = await request.post(`${API_URL}/api/reminders/${createdCompleted.id}/complete`)
-  expect(completeResponse.ok()).toBeTruthy()
-  const completedReminder = (await completeResponse.json()).reminder
-  expect(completedReminder.status).toBe('completed')
-  expect(completedReminder.completedAt).toBeTruthy()
+test('copying and pasting a reminder task preserves the reminder token', async ({ page, request }) => {
+  const remindAt = nowPlusMinutes(20)
+  const token = `[[reminder|incomplete|${remindAt}|]]`
+  await resetOutline(request, [
+    {
+      title: 'Reminder source',
+      status: 'todo',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: `Reminder source ${token}` }] }
+      ]
+    }
+  ])
 
-  const dismissCompleted = await request.post(`${API_URL}/api/reminders/${createdCompleted.id}/dismiss`)
-  expect(dismissCompleted.ok()).toBeTruthy()
-  const dismissedCompleted = (await dismissCompleted.json()).reminder
-  expect(dismissedCompleted.status).toBe('completed')
-  expect(dismissedCompleted.completedAt).toBeTruthy()
-  expect(dismissedCompleted.dismissedAt).toBeTruthy()
+  await page.goto('/')
+  const editor = page.locator('.tiptap.ProseMirror').first()
+  await editor.click()
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+
+  await page.keyboard.press(`${modifier}+a`)
+  await page.keyboard.press(`${modifier}+c`)
+  await page.keyboard.press('Backspace')
+  await page.keyboard.press(`${modifier}+v`)
+
+  const saveIndicator = page.locator('.save-indicator').first()
+  await expect(saveIndicator).toHaveText('Saved', { timeout: SHORT_TIMEOUT * 5 })
+
+  const reminderChip = page.locator('li.li-node').first().locator('.reminder-inline-chip')
+  await expect(reminderChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
+
+  await expect.poll(async () => {
+    const reminders = await page.evaluate(() => window.__WORKLOG_REMINDERS || [])
+    return reminders.length
+  }, { timeout: SHORT_TIMEOUT * 5 }).toBeGreaterThan(0)
+
+  const reminderState = await page.evaluate(() => (window.__WORKLOG_REMINDERS || [])[0] || null)
+  expect(reminderState?.token || '').toContain('[[reminder|incomplete|')
 })

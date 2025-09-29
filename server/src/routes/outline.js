@@ -111,7 +111,6 @@ router.post('/outline', (req, res) => {
     const unseen = existing.filter(id => !seen.has(id))
     if (unseen.length) {
       const ph = unseen.map(_ => '?').join(',')
-      db.prepare(`DELETE FROM reminders WHERE task_id IN (${ph})`).run(...unseen)
       db.prepare(`DELETE FROM work_logs WHERE task_id IN (${ph})`).run(...unseen)
       db.prepare(`DELETE FROM tasks WHERE id IN (${ph})`).run(...unseen)
     }

@@ -35,31 +35,6 @@ export async function updateTask(id, payload) { const { data } = await api.patch
 // Day timeline
 export async function getDays() { const { data } = await api.get('/day'); return data }
 
-// Reminders
-export async function getReminders(params = {}) {
-  const { data } = await api.get('/reminders', { params })
-  return data
-}
-
-export async function createReminder(payload) {
-  const { data } = await api.post('/reminders', payload)
-  return data
-}
-
-export async function dismissReminder(reminderId) {
-  const { data } = await api.post(`/reminders/${reminderId}/dismiss`)
-  return data
-}
-
-export async function completeReminder(reminderId) {
-  const { data } = await api.post(`/reminders/${reminderId}/complete`)
-  return data
-}
-
-export async function deleteReminder(reminderId) {
-  await api.delete(`/reminders/${reminderId}`)
-}
-
 // Uploads
 export async function uploadImage(file, filename) {
   const form = new FormData()

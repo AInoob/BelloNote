@@ -1,8 +1,10 @@
 
 import { Router } from 'express'
+import dayjs from 'dayjs'
 import { db } from '../lib/db.js'
 import { ensureDefaultProject } from '../lib/projects.js'
 import { parseTagsField } from '../util/tags.js'
+import { parseReminderFromTask } from '../util/reminderTokens.js'
 
 const router = Router()
 
@@ -52,6 +54,19 @@ router.get('/', (req, res) => {
   const testProjectId = ensureProjectForTests(req)
   const inferred = inferTestProjectIdIfPlaywrightDataDir()
   const projectId = testProjectId || inferred || ensureDefaultProject()
+  const all = loadAllTasks(projectId)
+  const reminderEntries = all.map(task => ({ task, reminder: parseReminderFromTask(task) }))
+    .filter(entry => {
+      const { reminder } = entry
+      if (!reminder || !reminder.remindAt) return false
+      if (reminder.status === 'completed' || reminder.status === 'dismissed') return false
+      const parsed = dayjs(reminder.remindAt)
+      return parsed.isValid()
+    })
+  const reminderDates = reminderEntries
+    .map(entry => dayjs(entry.reminder.remindAt).format('YYYY-MM-DD'))
+    .filter(Boolean)
+
   const workLogDates = db.prepare(`
     SELECT DISTINCT w.date AS date
     FROM work_logs w
@@ -59,19 +74,8 @@ router.get('/', (req, res) => {
     WHERE t.project_id = ?
   `).all(projectId).map(r => r.date).filter(Boolean)
 
-  const reminderDates = db.prepare(`
-    SELECT DISTINCT date(r.remind_at) AS date
-    FROM reminders r
-    JOIN tasks t ON t.id = r.task_id
-    WHERE t.project_id = ?
-      AND r.remind_at IS NOT NULL
-      AND r.status != 'completed'
-      AND (r.dismissed_at IS NULL OR r.dismissed_at = '')
-  `).all(projectId).map(r => r.date).filter(Boolean)
-
   const dateSet = new Set([...workLogDates, ...reminderDates])
   const dates = Array.from(dateSet).sort((a, b) => b.localeCompare(a))
-  const all = loadAllTasks(projectId)
   const byId = new Map(all.map(t => [t.id, t]))
   const children = new Map()
   for (const t of all) {
@@ -93,17 +97,9 @@ router.get('/', (req, res) => {
       ORDER BY t.created_at ASC
     `).all(d, projectId)
 
-    const reminders = db.prepare(`
-      SELECT t.*
-      FROM reminders r
-      JOIN tasks t ON t.id = r.task_id
-      WHERE t.project_id = ?
-        AND r.remind_at IS NOT NULL
-        AND date(r.remind_at) = ?
-        AND r.status != 'completed'
-        AND (r.dismissed_at IS NULL OR r.dismissed_at = '')
-      ORDER BY r.remind_at ASC
-    `).all(projectId, d)
+    const reminders = reminderEntries
+      .filter(entry => dayjs(entry.reminder.remindAt).format('YYYY-MM-DD') === d)
+      .map(entry => entry.task)
 
     const seedIdSet = new Set(rows.map(r => r.id))
     const reminderIdSet = new Set(reminders.map(r => r.id))

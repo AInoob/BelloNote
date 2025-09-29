@@ -110,26 +110,17 @@ test('timeline includes tasks scheduled via reminders on the due date', async ({
   await resetOutline(request)
   const today = todayStr()
 
+  const remindAt = `${today}T15:00`
   await seedOutline(request, [
     {
       title: 'Reminder Task',
       status: 'todo',
-      dates: [],
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: `Reminder Task [[reminder|incomplete|${remindAt}]]` }] }
+      ],
       children: []
     }
   ])
-
-  const outlineResponse = await request.get(`${API_URL}/api/outline`)
-  expect(outlineResponse.ok()).toBeTruthy()
-  const outlineData = await outlineResponse.json()
-  const taskId = outlineData?.roots?.[0]?.id
-  expect(taskId).toBeTruthy()
-
-  const remindAt = `${today}T15:00:00`
-  const reminderResponse = await request.post(`${API_URL}/api/reminders`, {
-    data: { taskId, remindAt }
-  })
-  expect(reminderResponse.ok()).toBeTruthy()
 
   await openTimeline(page)
 

@@ -6,7 +6,8 @@ import TimelineView from './views/TimelineView.jsx'
 import RemindersView from './views/RemindersView.jsx'
 import HistoryModal from './views/HistoryModal.jsx'
 import { createCheckpoint, getHealth } from './api.js'
-import { ReminderProvider, useReminders, describeTimeUntil } from './context/ReminderContext.jsx'
+import { ReminderProvider, useReminders } from './context/ReminderContext.jsx'
+import { describeTimeUntil } from './utils/reminderTokens.js'
 import dayjs from 'dayjs'
 const CLIENT_BUILD_TIME = typeof __APP_BUILD_TIME__ !== 'undefined' ? __APP_BUILD_TIME__ : null
 
@@ -236,7 +237,8 @@ function ReminderNotificationBar({ visible, onNavigateOutline }) {
 
   const openCustomPicker = (reminder) => {
     const base = buildDefaultMoment(reminder)
-    setCustomEditingId(reminder.id)
+    const key = reminder?.taskId ?? reminder?.id
+    setCustomEditingId(key != null ? String(key) : null)
     setCustomDateTime(base.format('YYYY-MM-DDTHH:mm'))
     setCustomError('')
   }
@@ -304,17 +306,23 @@ function ReminderNotificationBar({ visible, onNavigateOutline }) {
         <strong>{pendingReminders.length === 1 ? 'Reminder due' : `${pendingReminders.length} reminders due`}</strong>
         <div className="reminder-items">
           {pendingReminders.map(reminder => {
+            const reminderKey = String(reminder?.taskId ?? reminder?.id ?? '')
             const relative = describeTimeUntil(reminder)
-            const isDue = reminder?.due || (reminder?.remindAt ? dayjs(reminder.remindAt).isBefore(dayjs()) : false)
+            const status = reminder?.status || 'incomplete'
+            const isDue = reminder?.due || (status === 'incomplete' && reminder?.remindAt ? dayjs(reminder.remindAt).isBefore(dayjs()) : false)
             let relativeLabel = 'Set reminder time'
-            if (isDue) {
-              relativeLabel = reminder.dismissedAt ? 'Reminder dismissed' : 'Reminder due'
+            if (status === 'dismissed') {
+              relativeLabel = 'Reminder dismissed'
+            } else if (status === 'completed') {
+              relativeLabel = 'Reminder completed'
+            } else if (isDue) {
+              relativeLabel = 'Reminder due'
             } else if (relative) {
               relativeLabel = `Reminds ${relative}`
             }
             const absoluteLabel = formatAbsolute(reminder)
             return (
-              <div key={reminder.id} className="reminder-item">
+              <div key={reminderKey} className="reminder-item">
                 <span
                   className="reminder-title"
                   role="button"
@@ -338,7 +346,7 @@ function ReminderNotificationBar({ visible, onNavigateOutline }) {
                     <button className="btn small ghost" onClick={() => reschedule(reminder, 120)}>+2h</button>
                   </div>
                   <button className="btn small ghost" onClick={() => openCustomPicker(reminder)}>Custom…</button>
-                  {customEditingId === reminder.id && (
+                  {customEditingId === reminderKey && (
                     <form className="reminder-custom" onSubmit={(event) => handleCustomSubmit(event, reminder)}>
                       <label className="field">
                         <span>Remind at</span>
@@ -365,8 +373,8 @@ function ReminderNotificationBar({ visible, onNavigateOutline }) {
                       {customError && <span className="reminder-custom-error">{customError}</span>}
                     </form>
                   )}
-                  <button className="btn small" onClick={() => completeReminder(reminder.id)}>Mark complete</button>
-                  <button className="btn small ghost" onClick={() => dismissReminder(reminder.id)}>Dismiss</button>
+                  <button className="btn small" onClick={() => completeReminder(reminder.taskId ?? reminder.id)}>Mark complete</button>
+                  <button className="btn small ghost" onClick={() => dismissReminder(reminder.taskId ?? reminder.id)}>Dismiss</button>
                 </div>
               </div>
             )

@@ -14,11 +14,23 @@ import { DOMSerializer, Fragment, Slice } from 'prosemirror-model'
 import { ReplaceAroundStep } from 'prosemirror-transform'
 import { liftListItem, splitListItem } from 'prosemirror-schema-list'
 import { API_ROOT, absoluteUrl, getOutline, saveOutlineApi, uploadImage } from '../api.js'
-import { describeTimeUntil, useReminders } from '../context/ReminderContext.jsx'
 import { dataUriToFilePayload, isDataUri } from '../utils/dataUri.js'
 import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
+import { ReminderTokenInline } from '../extensions/reminderTokenInline.js'
 import { DetailsBlock } from '../extensions/detailsBlock.jsx'
 import { safeReactNodeViewRenderer } from '../tiptap/safeReactNodeViewRenderer.js'
+import {
+  REMINDER_TOKEN_REGEX,
+  buildReminderToken,
+  parseReminderTokenFromText,
+  upsertReminderTokenInText,
+  reminderIsDue,
+  computeReminderDisplay,
+  stripReminderDisplayBreaks,
+  encodeReminderDisplayTokens,
+  decodeReminderDisplayTokens,
+  normalizeReminderTokensInJson
+} from '../utils/reminderTokens.js'
 
 const STATUS_EMPTY = ''
 const STATUS_ORDER = ['todo', 'in-progress', 'done', STATUS_EMPTY]
@@ -135,7 +147,7 @@ const gatherOwnListItemText = (listItemNode) => {
     if (typeName === 'bulletList' || typeName === 'orderedList') return
     visit(child)
   })
-  return parts.join(' ')
+  return stripReminderDisplayBreaks(parts.join(' '))
 }
 
 const DEFAULT_STATUS_FILTER = { none: true, todo: true, 'in-progress': true, done: true }
@@ -673,9 +685,10 @@ function ListItemView(props) {
   const loadCollapsedSet = focusConfig.loadCollapsedSet || loadCollapsedSetForRoot
   const saveCollapsedSet = focusConfig.saveCollapsedSet || saveCollapsedSetForRoot
   const requestFocus = focusConfig.requestFocus || (() => {})
-  const { remindersByTask, scheduleReminder, dismissReminder, completeReminder, removeReminder } = useReminders()
-  const reminderKey = id ? String(id) : null
-  const reminder = reminderKey ? remindersByTask.get(reminderKey) || null : null
+  const reminderControlsEnabled = reminderActionsEnabledProp
+  const ownBodyText = useMemo(() => gatherOwnListItemText(node), [node])
+  const ownBodyTextAttr = useMemo(() => (ownBodyText || '').replace(/\s+/g, ' ').trim(), [ownBodyText])
+  const reminder = useMemo(() => parseReminderTokenFromText(ownBodyText), [ownBodyText])
   const [reminderMenuOpen, setReminderMenuOpen] = useState(false)
   const defaultCustomDate = () => {
     const base = reminder?.remindAt ? dayjs(reminder.remindAt) : dayjs().add(30, 'minute')
@@ -687,14 +700,11 @@ function ListItemView(props) {
   const [reminderError, setReminderError] = useState('')
   const reminderMenuRef = useRef(null)
   const rowRef = useRef(null)
-  const reminderControlsEnabled = reminderActionsEnabledProp
   const [isActive, setIsActive] = useState(false)
   const reminderAreaRef = useRef(null)
   const [reminderOffset, setReminderOffset] = useState(null)
   const [reminderInlineGap, setReminderInlineGap] = useState(0)
   const [reminderTop, setReminderTop] = useState(0)
-  const ownBodyText = useMemo(() => gatherOwnListItemText(node), [node])
-  const ownBodyTextAttr = useMemo(() => (ownBodyText || '').replace(/\s+/g, ' ').trim(), [ownBodyText])
 
   useEffect(() => {
     if (id) fallbackIdRef.current = String(id)
@@ -797,12 +807,14 @@ function ListItemView(props) {
       setReminderError('')
       const realId = await ensurePersistentTaskId()
       const remindAt = dayjs().add(minutes, 'minute').toDate().toISOString()
-      await scheduleReminder({ taskId: Number(realId), remindAt })
+      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
+        detail: { action: 'schedule', taskId: String(realId), remindAt }
+      }))
       closeReminderMenu()
     } catch (err) {
       setReminderError(err?.message || 'Failed to schedule reminder')
     }
-  }, [closeReminderMenu, ensurePersistentTaskId, scheduleReminder])
+  }, [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled])
 
   const handleCustomSubmit = useCallback(async (event) => {
     event.preventDefault()
@@ -816,45 +828,53 @@ function ListItemView(props) {
       const dateValue = new Date(customDate)
       if (Number.isNaN(dateValue.valueOf())) throw new Error('Invalid date')
       const remindAt = dateValue.toISOString()
-      await scheduleReminder({ taskId: Number(realId), remindAt })
+      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
+        detail: { action: 'schedule', taskId: String(realId), remindAt }
+      }))
       closeReminderMenu()
     } catch (err) {
       setReminderError(err?.message || 'Failed to schedule reminder')
     }
-  }, [closeReminderMenu, customDate, ensurePersistentTaskId, scheduleReminder])
+  }, [closeReminderMenu, customDate, ensurePersistentTaskId, reminderControlsEnabled])
 
   const handleDismissReminder = useCallback(async () => {
     if (!reminderControlsEnabled) return
-    if (!reminder) return
     try {
-      await dismissReminder(reminder.id)
+      const realId = await ensurePersistentTaskId()
+      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
+        detail: { action: 'dismiss', taskId: String(realId) }
+      }))
       closeReminderMenu()
     } catch (err) {
       setReminderError(err?.message || 'Unable to dismiss reminder')
     }
-  }, [closeReminderMenu, dismissReminder, reminder])
+  }, [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled])
 
   const handleCompleteReminder = useCallback(async () => {
     if (!reminderControlsEnabled) return
-    if (!reminder) return
     try {
-      await completeReminder(reminder.id)
+      const realId = await ensurePersistentTaskId()
+      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
+        detail: { action: 'complete', taskId: String(realId) }
+      }))
       closeReminderMenu()
     } catch (err) {
       setReminderError(err?.message || 'Unable to mark complete')
     }
-  }, [closeReminderMenu, completeReminder, reminder])
+  }, [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled])
 
   const handleRemoveReminder = useCallback(async () => {
     if (!reminderControlsEnabled) return
-    if (!reminder) return
     try {
-      await removeReminder(reminder.id)
+      const realId = await ensurePersistentTaskId()
+      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
+        detail: { action: 'remove', taskId: String(realId) }
+      }))
       closeReminderMenu()
     } catch (err) {
       setReminderError(err?.message || 'Unable to remove reminder')
     }
-  }, [closeReminderMenu, removeReminder, reminder])
+  }, [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled])
 
   const handleStatusKeyDown = useCallback((event) => {
     if (event.key !== 'Enter') return
@@ -969,29 +989,15 @@ function ListItemView(props) {
     toggleCollapse()
   }
 
-  const reminderDismissed = !!reminder?.dismissedAt
-  const activeReminder = reminder && reminder.status !== 'completed'
-  const reminderDue = activeReminder && !reminderDismissed && (
-    reminder?.due || (reminder?.remindAt && dayjs(reminder.remindAt).isBefore(dayjs()))
-  )
-  const reminderSummary = useMemo(() => {
-    if (!reminder) return ''
-    if (!activeReminder) return 'Reminder completed'
-    if (reminderDue) return 'Reminder due'
-    if (reminderDismissed) return 'Reminder dismissed'
-    const relative = describeTimeUntil(reminder)
-    return relative ? `Reminds ${relative}` : 'Reminder scheduled'
-  }, [activeReminder, reminder, reminderDue, reminderDismissed])
+  const reminderDismissed = reminder?.status === 'dismissed'
+  const reminderCompleted = reminder?.status === 'completed'
+  const activeReminder = reminder?.status === 'incomplete'
+  const reminderDue = reminderIsDue(reminder)
+  const reminderDisplay = useMemo(() => computeReminderDisplay(reminder), [reminder])
+  const reminderSummary = reminderDisplay.summary
   const reminderButtonLabel = reminderSummary
     ? `Reminder options (${reminderSummary})`
     : 'Reminder options'
-  const reminderPillText = useMemo(() => {
-    if (!activeReminder) return ''
-    if (reminderDue) return 'Due soon'
-    if (reminderDismissed) return 'Dismissed'
-    const relative = describeTimeUntil(reminder)
-    return relative ? `Reminds ${relative}` : ''
-  }, [activeReminder, reminder, reminderDue, reminderDismissed])
 
 
   useEffect(() => {
@@ -1110,7 +1116,7 @@ function ListItemView(props) {
       mutationObserver?.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [reminderControlsEnabled, reminderMenuOpen, reminderPillText, activeReminder, collapsed])
+  }, [reminderControlsEnabled, reminderMenuOpen, activeReminder, collapsed])
 
   return (
     <NodeViewWrapper
@@ -1179,9 +1185,6 @@ function ListItemView(props) {
               >
                 <span aria-hidden>⋮</span>
               </button>
-              {activeReminder && reminderPillText && (
-                <span className="reminder-pill" title={reminderSummary || undefined}>{reminderPillText}</span>
-              )}
               {reminderMenuOpen && (
                 <div className="reminder-menu" ref={reminderMenuRef}>
                   <div className="reminder-menu-section">
@@ -1247,6 +1250,7 @@ export default function OutlinerView({
   onSaveStateChange = () => {},
   showDebug = false,
   readOnly = false,
+  broadcastSnapshots = true,
   initialOutline = null,
   forceExpand = false,
   allowStatusToggleInReadOnly = false,
@@ -1303,7 +1307,6 @@ export default function OutlinerView({
   const initialFocusSyncRef = useRef(true)
   const pendingFocusScrollRef = useRef(null)
   const focusShortcutActiveRef = useRef(false)
-  const { remindersByTask } = useReminders()
   const activeTaskInfoRef = useRef(null)
   const lastFocusTokenRef = useRef(null)
 
@@ -1541,6 +1544,7 @@ export default function OutlinerView({
     imageExtension,
     CodeBlockWithCopy,
     WorkDateHighlighter,
+    ReminderTokenInline,
     DetailsBlock
   ], [taskListItemExtension, CodeBlockWithCopy, imageExtension])
 
@@ -1701,7 +1705,6 @@ export default function OutlinerView({
               taskId,
               hasReminder: !!info?.hasReminder,
               hasDate: !!info?.hasDate,
-              reminderId: info?.reminderId,
               remindAt: info?.remindAt,
               dates: info?.dates
             })
@@ -2117,7 +2120,10 @@ export default function OutlinerView({
           return
         }
         const query = text.slice(1)
-        if (slashQueryRef.current !== query) setSlashQuery(query)
+        if (slashQueryRef.current !== query) {
+          if (typeof window !== 'undefined') window.__WORKLOG_DEBUG_SLASH_QUERY = query
+          setSlashQuery(query)
+        }
       } catch (err) {
         if (slashQueryRef.current) setSlashQuery('')
       }
@@ -2236,6 +2242,20 @@ export default function OutlinerView({
     saveTimer.current = setTimeout(() => doSave(), delay)
   }
 
+  const notifyOutlineSnapshot = useCallback((outline) => {
+    if (typeof window === 'undefined') return
+    try {
+      window.dispatchEvent(new CustomEvent('worklog:outline-snapshot', { detail: { outline } }))
+    } catch (err) {
+      console.error('[outline] notify snapshot failed', err)
+    }
+  }, [])
+
+  const emitOutlineSnapshot = useCallback((outline) => {
+    if (!broadcastSnapshots) return
+    notifyOutlineSnapshot(outline)
+  }, [broadcastSnapshots, notifyOutlineSnapshot])
+
   const applyCollapsedStateForRoot = useCallback((rootId) => {
     if (!editor) return
     const collapsedSet = forceExpand ? new Set() : loadCollapsedSetForRoot(rootId)
@@ -2291,6 +2311,86 @@ export default function OutlinerView({
       setStatusFilter(next)
     }
   }
+
+  const applyReminderAction = useCallback((detail) => {
+    if (!editor || !detail) return
+    const { taskId, action, remindAt, message } = detail
+    if (!taskId) return
+    let targetPos = null
+    const { doc, schema } = editor.state
+    doc.descendants((node, pos) => {
+      if (node.type.name === 'listItem' && String(node.attrs?.dataId) === String(taskId)) {
+        targetPos = pos
+        return false
+      }
+      return undefined
+    })
+    if (targetPos == null) return
+    const listItemNode = doc.nodeAt(targetPos)
+    if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) return
+    const paragraphNode = listItemNode.child(0)
+    if (!paragraphNode || paragraphNode.type.name !== 'paragraph') return
+    const paragraphPos = targetPos + 1
+    const currentText = paragraphNode.textContent || ''
+    const existing = parseReminderTokenFromText(currentText)
+
+    const encodeMessage = existing?.message && !message ? existing.message : (message || existing?.message || '')
+    const nextReminder = (() => {
+      switch (action) {
+        case 'schedule':
+          if (!remindAt) return existing
+          return { status: 'incomplete', remindAt, message: encodeMessage }
+        case 'dismiss':
+          if (!existing) return null
+          return { status: 'dismissed', remindAt: existing.remindAt, message: existing.message }
+        case 'complete':
+          if (existing) return { status: 'completed', remindAt: existing.remindAt, message: existing.message }
+          if (!remindAt) return null
+          return { status: 'completed', remindAt, message: encodeMessage }
+        case 'remove':
+          return null
+        default:
+          return existing
+      }
+    })()
+
+    const token = nextReminder ? buildReminderToken(nextReminder) : null
+    const displayToken = token ? encodeReminderDisplayTokens(token) : null
+    const paragraphType = schema.nodes.paragraph
+    const newChildren = []
+    let tokenHandled = false
+    paragraphNode.content.forEach(child => {
+      if (child.type.name === 'text' && typeof child.text === 'string' && REMINDER_TOKEN_REGEX.test(child.text)) {
+        tokenHandled = true
+        const updated = upsertReminderTokenInText(child.text, token)
+        if (updated) newChildren.push(schema.text(updated, child.marks))
+      } else {
+        newChildren.push(child)
+      }
+    })
+    if (!tokenHandled && token) {
+      if (newChildren.length) {
+        newChildren.push(schema.text(' ' + (displayToken || token)))
+      } else {
+        newChildren.push(schema.text(displayToken || token))
+      }
+    }
+    if (!token && !tokenHandled) return
+    const newParagraph = paragraphType.create(paragraphNode.attrs, newChildren)
+    let tr = editor.state.tr.replaceWith(paragraphPos, paragraphPos + paragraphNode.nodeSize, newParagraph)
+    if (action === 'complete') {
+      const currentStatus = listItemNode.attrs?.status ?? STATUS_EMPTY
+      if (currentStatus !== 'done') {
+        const nextAttrs = { ...listItemNode.attrs, status: 'done' }
+        tr = tr.setNodeMarkup(targetPos, undefined, nextAttrs, listItemNode.marks)
+      }
+    }
+    editor.view.dispatch(tr.scrollIntoView())
+    markDirty()
+    queueSave(300)
+    const outline = parseOutline()
+    emitOutlineSnapshot(outline)
+  }, [editor, emitOutlineSnapshot, markDirty, queueSave])
 
   const addTagFilter = useCallback((mode, value) => {
     const parsed = parseTagInput(value)
@@ -2699,7 +2799,7 @@ export default function OutlinerView({
         const node = $from.node(depth)
         if (!node || node.type?.name !== 'listItem') continue
         const dataId = node.attrs?.dataId ? String(node.attrs.dataId) : null
-        const reminder = dataId ? remindersByTask.get(String(dataId)) || null : null
+        const reminder = parseReminderTokenFromText(node.textContent || '')
         const textContent = node.textContent || ''
         const dateMatches = textContent.match(/@\d{4}-\d{2}-\d{2}/g) || []
         const dates = Array.from(new Set(dateMatches.map(item => item.slice(1))))
@@ -2712,7 +2812,6 @@ export default function OutlinerView({
           hasDate,
           dates,
           reminderDate,
-          reminderId: reminder?.id || null,
           remindAt: reminder?.remindAt || null
         }
       }
@@ -2720,15 +2819,15 @@ export default function OutlinerView({
       return null
     }
     return null
-  }, [editor, remindersByTask])
+  }, [editor])
 
   useEffect(() => {
     if (!editor) return undefined
     const notify = () => {
       const info = computeActiveTask()
       const prev = activeTaskInfoRef.current
-      const prevKey = prev ? `${prev.id}|${prev.hasReminder}|${prev.hasDate}|${prev.reminderId}|${prev.reminderDate}|${(prev.dates || []).join(',')}` : ''
-      const nextKey = info ? `${info.id}|${info.hasReminder}|${info.hasDate}|${info.reminderId}|${info.reminderDate}|${(info.dates || []).join(',')}` : ''
+      const prevKey = prev ? `${prev.id}|${prev.hasReminder}|${prev.hasDate}|${prev.reminderDate}|${(prev.dates || []).join(',')}` : ''
+      const nextKey = info ? `${info.id}|${info.hasReminder}|${info.hasDate}|${info.reminderDate}|${(info.dates || []).join(',')}` : ''
       if (prevKey === nextKey) return
       activeTaskInfoRef.current = info
       onActiveTaskChange?.(info)
@@ -2747,6 +2846,17 @@ export default function OutlinerView({
     saveTagFilters(tagFilters)
     applyStatusFilter()
   }, [tagFilters, applyStatusFilter])
+
+  useEffect(() => {
+    if (!editor) return undefined
+    const handler = (event) => {
+      const detail = event?.detail
+      if (!detail) return
+      applyReminderAction(detail)
+    }
+    window.addEventListener('worklog:reminder-action', handler)
+    return () => window.removeEventListener('worklog:reminder-action', handler)
+  }, [editor, applyReminderAction])
 
   const handleRequestFocus = useCallback((taskId) => {
     if (!taskId) return
@@ -2844,7 +2954,7 @@ export default function OutlinerView({
 
   useEffect(() => {
     if (!focusRequest || !focusRequest.taskId || !editor) return undefined
-    const token = focusRequest.token ?? `${focusRequest.taskId}:${focusRequest.reminderId ?? ''}:${focusRequest.remindAt ?? ''}`
+    const token = focusRequest.token ?? `${focusRequest.taskId}:${focusRequest.remindAt ?? ''}`
     if (lastFocusTokenRef.current === token) return undefined
     lastFocusTokenRef.current = token
     const success = focusTaskById(focusRequest.taskId, { select: focusRequest.select !== false })
@@ -3100,6 +3210,7 @@ export default function OutlinerView({
       })
       if (changed) { tr.setMeta('addToHistory', false); editor.view.dispatch(tr) }
       const outline = parseOutline()
+      emitOutlineSnapshot(outline)
       pushDebug('save: parsed outline', { count: outline.length, titles: outline.map(n => n.title) })
       const data = await saveOutlineApi(outline)
       pushDebug('save: server reply', data)
@@ -3158,7 +3269,8 @@ export default function OutlinerView({
     dirtyRef.current = false
     setDirty(false)
     applyStatusFilter()
-  }, [editor, initialOutline, isReadOnly, applyStatusFilter])
+    emitOutlineSnapshot(roots)
+  }, [editor, initialOutline, isReadOnly, applyStatusFilter, emitOutlineSnapshot])
 
 
   useEffect(() => {
@@ -3171,18 +3283,20 @@ export default function OutlinerView({
         if (selection.empty) return
         const sliceDoc = doc.cut(selection.from, selection.to)
         const json = sliceDoc.toJSON()
+        const normalizedJson = normalizeReminderTokensInJson(json)
         const serializer = DOMSerializer.fromSchema(schema)
         const fragment = serializer.serializeFragment(sliceDoc.content)
         const container = document.createElement('div')
         container.appendChild(fragment)
-        const html = container.innerHTML
-        const selectionText = window.getSelection()?.toString() || sliceDoc.textContent || ''
+        const html = decodeReminderDisplayTokens(container.innerHTML)
+        const sliceTextContent = sliceDoc.textContent || ''
+        const plainText = stripReminderDisplayBreaks(sliceTextContent)
 
-        e.clipboardData?.setData('application/x-worklog-outline+json', JSON.stringify(json))
+        e.clipboardData?.setData('application/x-worklog-outline+json', JSON.stringify(normalizedJson))
         e.clipboardData?.setData('text/html', html)
-        e.clipboardData?.setData('text/plain', selectionText)
+        e.clipboardData?.setData('text/plain', plainText)
         if (typeof window !== 'undefined') {
-          window.__WORKLOG_TEST_COPY__ = { text: selectionText, json: JSON.stringify(json) }
+          window.__WORKLOG_TEST_COPY__ = { text: plainText, json: JSON.stringify(normalizedJson) }
         }
         e.preventDefault()
         pushDebug('copy: selection exported')
@@ -3448,7 +3562,12 @@ export default function OutlinerView({
   function extractTitle(paragraphNode) {
     let text = ''
     if (paragraphNode?.content) paragraphNode.content.forEach(n => { if (n.type === 'text') text += n.text })
-    return text.replace(DATE_RE, '').replace(/\s{2,}/g, ' ').trim() || 'Untitled'
+    const cleaned = text
+      .replace(REMINDER_TOKEN_REGEX, '')
+      .replace(DATE_RE, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+    return cleaned || 'Untitled'
   }
   function extractDates(listItemNode) {
     const dates = new Set()
@@ -3788,6 +3907,7 @@ export default function OutlinerView({
 
   const dynamicTagCommand = useMemo(() => {
     if (!parsedTagQuery) return null
+    if (typeof window !== 'undefined') window.__WORKLOG_DEBUG_TAG_QUERY = parsedTagQuery.canonical
     return {
       id: `tag:${parsedTagQuery.canonical}`,
       label: `Add tag #${parsedTagQuery.display}`,
