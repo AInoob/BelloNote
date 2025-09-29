@@ -10,7 +10,7 @@ import Highlight from '@tiptap/extension-highlight'
 import { lowlight } from 'lowlight/lib/core.js'
 import dayjs from 'dayjs'
 import { TextSelection, NodeSelection } from 'prosemirror-state'
-import { DOMSerializer, Fragment, Slice } from 'prosemirror-model'
+import { Fragment, Slice } from 'prosemirror-model'
 import { ReplaceAroundStep } from 'prosemirror-transform'
 import { liftListItem, splitListItem } from 'prosemirror-schema-list'
 import { API_ROOT, absoluteUrl, getOutline, saveOutlineApi, uploadImage } from '../api.js'
@@ -21,16 +21,20 @@ import { DetailsBlock } from '../extensions/detailsBlock.jsx'
 import { safeReactNodeViewRenderer } from '../tiptap/safeReactNodeViewRenderer.js'
 import {
   REMINDER_TOKEN_REGEX,
-  buildReminderToken,
   parseReminderTokenFromText,
-  upsertReminderTokenInText,
   reminderIsDue,
   computeReminderDisplay,
-  stripReminderDisplayBreaks,
-  encodeReminderDisplayTokens,
-  decodeReminderDisplayTokens,
-  normalizeReminderTokensInJson
+  stripReminderDisplayBreaks
 } from '../utils/reminderTokens.js'
+import {
+  findReminderTarget,
+  deriveReminderUpdate,
+  buildReminderParagraph
+} from '../utils/reminderEditor.js'
+import {
+  extractOutlineClipboardPayload,
+  prepareClipboardData
+} from '../utils/outlineClipboard.js'
 
 const STATUS_EMPTY = ''
 const STATUS_ORDER = ['todo', 'in-progress', 'done', STATUS_EMPTY]
@@ -253,7 +257,7 @@ const findListItemDepth = ($pos) => {
 }
 
 
-const runListIndentCommand = (editor, direction) => {
+const runListIndentCommand = (editor, direction, focusEmptyCallback) => {
   if (!editor) return false
   const { state, view } = editor
   if (!view) return false
@@ -299,6 +303,7 @@ const runListIndentCommand = (editor, direction) => {
   const nextSelection = TextSelection.near(tr.doc.resolve(mapped))
   tr.setSelection(nextSelection).scrollIntoView()
   view.dispatch(tr)
+  // focusEmptyCallback intentionally unused; keeping signature for future adjustments
   view.focus()
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => view.focus())
@@ -409,14 +414,14 @@ const runSplitListItemWithSelection = (editor, options = {}) => {
 }
 
 const applySplitStatusAdjustments = (editor, meta) => {
-  if (!editor || !meta) return
+  if (!editor || !meta) return null
   const { parentPos, originalIndex, newIndex, originalAttrs = {} } = meta
   const { state, view } = editor
   if (typeof console !== 'undefined') console.log('[split-adjust] invoked', meta)
   const parentNode = typeof parentPos === 'number' ? state.doc.nodeAt(parentPos) : null
   if (!parentNode) {
     if (typeof console !== 'undefined') console.log('[split-adjust] missing parent', { parentPos, originalIndex, newIndex })
-    return
+    return null
   }
 
   const tr = state.tr
@@ -469,6 +474,8 @@ const applySplitStatusAdjustments = (editor, meta) => {
   if (changed) {
     view.dispatch(tr)
   }
+
+  return { newItemPos, originalItemPos }
 }
 
 
@@ -1481,6 +1488,8 @@ export default function OutlinerView({
   const [searchQuery, setSearchQuery] = useState('')
   const searchQueryRef = useRef('')
   const convertingImagesRef = useRef(false)
+  const suppressSelectionRestoreRef = useRef(false)
+  const pendingEmptyCaretRef = useRef(false)
   const [datePickerOpen, setDatePickerOpen] = useState(false)
   const datePickerValueRef = useRef(dayjs().format('YYYY-MM-DD'))
   const datePickerCaretRef = useRef(null)
@@ -1601,20 +1610,38 @@ export default function OutlinerView({
       },
       handlePaste(view, event) {
         if (isReadOnly) return false
-        // 1) Prefer our lossless clipboard format when available
-        try {
-          const jsonStr = event.clipboardData?.getData('application/x-worklog-outline+json')
-          if (jsonStr) {
-            const parsed = JSON.parse(jsonStr)
-            event.preventDefault()
-            editor?.commands?.setContent(parsed, true)
+        const { state } = view
+        const result = extractOutlineClipboardPayload({
+          clipboardData: event.clipboardData,
+          schema: state.schema
+        })
+
+        if (result?.error) {
+          console.error('[paste] failed to decode outline slice', result.error)
+        }
+
+        if (result?.payload) {
+          event.preventDefault()
+          if (result.payload.kind === 'doc') {
+            editor?.commands?.setContent(result.payload.doc, true)
             markDirty()
             if (saveTimer.current) clearTimeout(saveTimer.current)
             void doSave()
-            pushDebug('paste: outline json restored')
+            pushDebug('paste: outline doc restored (legacy)')
             return true
           }
-        } catch {}
+          if (result.payload.kind === 'slice') {
+            const slice = result.payload.slice
+            const tr = state.tr.replaceSelection(slice).scrollIntoView()
+            view.dispatch(tr)
+            view.focus()
+            markDirty()
+            if (saveTimer.current) clearTimeout(saveTimer.current)
+            void doSave()
+            pushDebug('paste: outline slice inserted', { openStart: slice.openStart, openEnd: slice.openEnd })
+            return true
+          }
+        }
         // 2) Smart-link paste when the clipboard is a single URL and there is a selection
         const text = event.clipboardData?.getData('text/plain') || ''
         const trimmed = text.trim()
@@ -1929,7 +1956,7 @@ export default function OutlinerView({
           if (typeof console !== 'undefined') console.log('[split-debug] didSplit', didSplit)
           if (didSplit) {
             if (typeof console !== 'undefined') console.log('[split-debug] applying adjustments', splitMeta)
-            applySplitStatusAdjustments(editor, splitMeta)
+            const adjustment = applySplitStatusAdjustments(editor, splitMeta)
             const promoted = !isChild && isAtEnd && !!nestedListInfo && promoteSplitSiblingToChild(editor, {
               parentPos,
               originalIndex,
@@ -1944,8 +1971,96 @@ export default function OutlinerView({
               logCursorTiming('append-child-from-parent', enterStartedAt)
               return true
             }
+            let selectionAdjusted = false
+            let finalCaretPos = null
+            if (isChild && typeof parentPos === 'number') {
+              try {
+                const latest = view.state
+                const parentLatest = latest.doc.nodeAt(parentPos)
+                let targetPos = typeof adjustment?.newItemPos === 'number' ? adjustment.newItemPos : null
+                if (targetPos === null && parentLatest) {
+                  const originalEnd = listItemPos + listItemNode.nodeSize
+                  let cursor = parentPos + 1
+                  for (let idx = 0; idx < parentLatest.childCount; idx += 1) {
+                    const child = parentLatest.child(idx)
+                    const paraChild = child?.childCount ? child.child(0) : null
+                    const isEmpty = paraChild?.type?.name === 'paragraph' && paraChild.content.size === 0
+                    if (isEmpty && cursor >= originalEnd) {
+                      targetPos = cursor
+                      break
+                    }
+                    cursor += child.nodeSize
+                  }
+                  if (targetPos === null) {
+                    cursor = parentPos + 1
+                    for (let idx = 0; idx < parentLatest.childCount; idx += 1) {
+                      const child = parentLatest.child(idx)
+                      const paraChild = child?.childCount ? child.child(0) : null
+                      const isEmpty = paraChild?.type?.name === 'paragraph' && paraChild.content.size === 0
+                      if (isEmpty) {
+                        targetPos = cursor
+                        break
+                      }
+                      cursor += child.nodeSize
+                    }
+                  }
+                }
+                let resolvedPos = typeof targetPos === 'number' ? targetPos : null
+                let resolvedNode = typeof targetPos === 'number' ? latest.doc.nodeAt(targetPos) : null
+                if (resolvedNode && parentLatest) {
+                  const para = resolvedNode.childCount > 0 ? resolvedNode.child(0) : null
+                  const isEmpty = para?.type?.name === 'paragraph' && para.content.size === 0
+                  if (!isEmpty) {
+                    const scanStart = listItemPos + listItemNode.nodeSize
+                    let cursor = parentPos + 1
+                    for (let idx = 0; idx < parentLatest.childCount; idx += 1) {
+                      const child = parentLatest.child(idx)
+                      const paraChild = child?.childCount ? child.child(0) : null
+                      const childEmpty = paraChild?.type?.name === 'paragraph' && paraChild.content.size === 0
+                      if (childEmpty && cursor >= scanStart) {
+                        resolvedPos = cursor
+                        resolvedNode = latest.doc.nodeAt(cursor)
+                        break
+                      }
+                      cursor += child.nodeSize
+                    }
+                  }
+                }
+                if (resolvedNode && resolvedNode.childCount > 0) {
+                  const para = resolvedNode.child(0)
+                  const paragraphStart = (resolvedPos ?? 0) + 1
+                  const caretPos = para ? paragraphStart + para.content.size : (resolvedPos ?? 0) + resolvedNode.nodeSize - 1
+                  selectionAdjusted = true
+                  finalCaretPos = caretPos
+                  suppressSelectionRestoreRef.current = true
+                  pendingEmptyCaretRef.current = true
+                }
+              } catch (error) {
+                if (typeof console !== 'undefined') console.warn('[split-adjust] child caret restore failed', error)
+              }
+            }
             view.focus()
             requestAnimationFrame(() => view.focus())
+            if (selectionAdjusted) {
+              const applyCaretSelection = () => {
+                try {
+                  const refreshed = view.state
+                  const clamped = Math.max(0, Math.min(finalCaretPos ?? 0, refreshed.doc.content.size))
+                  const chainResult = editor?.chain?.().focus().setTextSelection({ from: clamped, to: clamped }).run()
+                  if (!chainResult) {
+                    const tr = refreshed.tr.setSelection(TextSelection.create(refreshed.doc, clamped)).scrollIntoView()
+                    view.dispatch(tr)
+                  }
+                } catch (error) {
+                  if (typeof console !== 'undefined') console.warn('[split-adjust] caret apply failed', error)
+                }
+              }
+              applyCaretSelection()
+              if (typeof window !== 'undefined') {
+                window.requestAnimationFrame(applyCaretSelection)
+                window.setTimeout(applyCaretSelection, 0)
+              }
+            }
             logCursorTiming('split-list-item', enterStartedAt)
             return true
           }
@@ -1956,7 +2071,32 @@ export default function OutlinerView({
           if (!inCode) {
             event.preventDefault()
             const direction = event.shiftKey ? 'lift' : 'sink'
-            const handled = runListIndentCommand(editor, direction)
+            const focusEmpty = () => {
+              if (!pendingEmptyCaretRef.current) return
+              pendingEmptyCaretRef.current = false
+              try {
+                const { state: curState, view: curView } = editor
+                let targetPos = null
+                curState.doc.descendants((node, pos) => {
+                  if (node.type.name === 'listItem') {
+                    const para = node.child(0)
+                    const empty = para && para.type.name === 'paragraph' && para.content.size === 0
+                    if (empty) targetPos = pos
+                  }
+                })
+                if (targetPos != null) {
+                  const caretPos = targetPos + 1
+                  const chainResult = editor.chain().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+                  if (!chainResult) {
+                    const tr = curState.tr.setSelection(TextSelection.create(curState.doc, caretPos)).scrollIntoView()
+                    curView.dispatch(tr)
+                  }
+                }
+              } catch (error) {
+                if (typeof console !== 'undefined') console.warn('[split-adjust] focus empty failed', error)
+              }
+            }
+            const handled = runListIndentCommand(editor, direction, focusEmpty)
             if (handled) {
               pushDebug('indentation', { shift: event.shiftKey })
               return true
@@ -2072,9 +2212,14 @@ export default function OutlinerView({
     if (!highlightMark) return
     let tr = state.tr.removeMark(0, doc.content.size, highlightMark)
     const query = searchQueryRef.current.trim()
+    const shouldRestoreSelection = !suppressSelectionRestoreRef.current
     if (!query) {
       tr.setMeta('addToHistory', false)
-      tr.setSelection(selection.map(tr.doc, tr.mapping))
+      if (shouldRestoreSelection) {
+        tr.setSelection(selection.map(tr.doc, tr.mapping))
+      } else {
+        suppressSelectionRestoreRef.current = false
+      }
       editor.view.dispatch(tr)
       return
     }
@@ -2083,7 +2228,11 @@ export default function OutlinerView({
       regex = new RegExp(escapeForRegex(query), 'gi')
     } catch {
       tr.setMeta('addToHistory', false)
-      tr.setSelection(selection.map(tr.doc, tr.mapping))
+      if (shouldRestoreSelection) {
+        tr.setSelection(selection.map(tr.doc, tr.mapping))
+      } else {
+        suppressSelectionRestoreRef.current = false
+      }
       editor.view.dispatch(tr)
       return
     }
@@ -2098,7 +2247,11 @@ export default function OutlinerView({
       }
     })
     tr.setMeta('addToHistory', false)
-    tr.setSelection(selection.map(tr.doc, tr.mapping))
+    if (shouldRestoreSelection) {
+      tr.setSelection(selection.map(tr.doc, tr.mapping))
+    } else {
+      suppressSelectionRestoreRef.current = false
+    }
     editor.view.dispatch(tr)
   }, [editor])
 
@@ -2313,79 +2466,42 @@ export default function OutlinerView({
   }
 
   const applyReminderAction = useCallback((detail) => {
-    if (!editor || !detail) return
-    const { taskId, action, remindAt, message } = detail
-    if (!taskId) return
-    let targetPos = null
-    const { doc, schema } = editor.state
-    doc.descendants((node, pos) => {
-      if (node.type.name === 'listItem' && String(node.attrs?.dataId) === String(taskId)) {
-        targetPos = pos
-        return false
-      }
-      return undefined
-    })
-    if (targetPos == null) return
-    const listItemNode = doc.nodeAt(targetPos)
-    if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) return
-    const paragraphNode = listItemNode.child(0)
-    if (!paragraphNode || paragraphNode.type.name !== 'paragraph') return
-    const paragraphPos = targetPos + 1
-    const currentText = paragraphNode.textContent || ''
-    const existing = parseReminderTokenFromText(currentText)
+    if (!editor || !detail?.taskId) return
+    const { state, view } = editor
+    if (!state || !view) return
 
-    const encodeMessage = existing?.message && !message ? existing.message : (message || existing?.message || '')
-    const nextReminder = (() => {
-      switch (action) {
-        case 'schedule':
-          if (!remindAt) return existing
-          return { status: 'incomplete', remindAt, message: encodeMessage }
-        case 'dismiss':
-          if (!existing) return null
-          return { status: 'dismissed', remindAt: existing.remindAt, message: existing.message }
-        case 'complete':
-          if (existing) return { status: 'completed', remindAt: existing.remindAt, message: existing.message }
-          if (!remindAt) return null
-          return { status: 'completed', remindAt, message: encodeMessage }
-        case 'remove':
-          return null
-        default:
-          return existing
-      }
-    })()
+    const target = findReminderTarget(state.doc, detail.taskId)
+    if (!target) return
 
-    const token = nextReminder ? buildReminderToken(nextReminder) : null
-    const displayToken = token ? encodeReminderDisplayTokens(token) : null
-    const paragraphType = schema.nodes.paragraph
-    const newChildren = []
-    let tokenHandled = false
-    paragraphNode.content.forEach(child => {
-      if (child.type.name === 'text' && typeof child.text === 'string' && REMINDER_TOKEN_REGEX.test(child.text)) {
-        tokenHandled = true
-        const updated = upsertReminderTokenInText(child.text, token)
-        if (updated) newChildren.push(schema.text(updated, child.marks))
-      } else {
-        newChildren.push(child)
-      }
+    const nextReminder = deriveReminderUpdate(target.existingReminder, detail.action, {
+      remindAt: detail.remindAt,
+      message: detail.message
     })
-    if (!tokenHandled && token) {
-      if (newChildren.length) {
-        newChildren.push(schema.text(' ' + (displayToken || token)))
-      } else {
-        newChildren.push(schema.text(displayToken || token))
-      }
-    }
-    if (!token && !tokenHandled) return
-    const newParagraph = paragraphType.create(paragraphNode.attrs, newChildren)
-    let tr = editor.state.tr.replaceWith(paragraphPos, paragraphPos + paragraphNode.nodeSize, newParagraph)
-    if (action === 'complete') {
-      const currentStatus = listItemNode.attrs?.status ?? STATUS_EMPTY
+
+    const paragraphResult = buildReminderParagraph({
+      schema: state.schema,
+      paragraphNode: target.paragraphNode,
+      action: detail.action,
+      reminder: nextReminder
+    })
+
+    if (!paragraphResult) return
+
+    let tr = state.tr.replaceWith(
+      target.paragraphPos,
+      target.paragraphPos + target.paragraphNode.nodeSize,
+      paragraphResult.paragraph
+    )
+
+    if (detail.action === 'complete') {
+      const currentStatus = target.listItemNode.attrs?.status ?? STATUS_EMPTY
       if (currentStatus !== 'done') {
-        const nextAttrs = { ...listItemNode.attrs, status: 'done' }
-        tr = tr.setNodeMarkup(targetPos, undefined, nextAttrs, listItemNode.marks)
+        const nextAttrs = { ...target.listItemNode.attrs, status: 'done' }
+        tr = tr.setNodeMarkup(target.listItemPos, undefined, nextAttrs, target.listItemNode.marks)
       }
     }
-    editor.view.dispatch(tr.scrollIntoView())
+
+    view.dispatch(tr.scrollIntoView())
     markDirty()
     queueSave(300)
     const outline = parseOutline()
@@ -3278,25 +3394,14 @@ export default function OutlinerView({
     const dom = editor.view.dom
     const onCopy = (e) => {
       try {
-        const { state } = editor.view
-        const { doc, selection, schema } = state
-        if (selection.empty) return
-        const sliceDoc = doc.cut(selection.from, selection.to)
-        const json = sliceDoc.toJSON()
-        const normalizedJson = normalizeReminderTokensInJson(json)
-        const serializer = DOMSerializer.fromSchema(schema)
-        const fragment = serializer.serializeFragment(sliceDoc.content)
-        const container = document.createElement('div')
-        container.appendChild(fragment)
-        const html = decodeReminderDisplayTokens(container.innerHTML)
-        const sliceTextContent = sliceDoc.textContent || ''
-        const plainText = stripReminderDisplayBreaks(sliceTextContent)
+        const payload = prepareClipboardData({ state: editor.view.state })
+        if (!payload) return
 
-        e.clipboardData?.setData('application/x-worklog-outline+json', JSON.stringify(normalizedJson))
-        e.clipboardData?.setData('text/html', html)
-        e.clipboardData?.setData('text/plain', plainText)
+        e.clipboardData?.setData('application/x-worklog-outline+json', JSON.stringify(payload.normalizedJson))
+        e.clipboardData?.setData('text/html', payload.html)
+        e.clipboardData?.setData('text/plain', payload.text)
         if (typeof window !== 'undefined') {
-          window.__WORKLOG_TEST_COPY__ = { text: plainText, json: JSON.stringify(normalizedJson) }
+          window.__WORKLOG_TEST_COPY__ = { text: payload.text, json: JSON.stringify(payload.normalizedJson) }
         }
         e.preventDefault()
         pushDebug('copy: selection exported')

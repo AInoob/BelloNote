@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { getOutline } from '../api.js'
 import { parseReminderFromNodeContent, reminderIsDue, describeTimeUntil } from '../utils/reminderTokens.js'
@@ -42,9 +42,16 @@ function extractRemindersFromOutline(roots = []) {
 export function ReminderProvider({ children }) {
   const [reminders, setReminders] = useState([])
   const [loading, setLoading] = useState(true)
+  const lastSnapshotRef = useRef('')
 
   const updateFromOutline = useCallback((roots) => {
     const next = extractRemindersFromOutline(roots)
+    const key = JSON.stringify((next || []).map(item => `${item.taskId}|${item.status}|${item.remindAt}`))
+    if (lastSnapshotRef.current === key) return
+    lastSnapshotRef.current = key
+    if (typeof console !== 'undefined') {
+      console.log('[reminders] outline snapshot detected', { count: next.length, due: next.filter(item => reminderIsDue(item)).length })
+    }
     setReminders(next)
     if (typeof window !== 'undefined') {
       window.__WORKLOG_REMINDERS = next
@@ -64,6 +71,17 @@ export function ReminderProvider({ children }) {
   }, [updateFromOutline])
 
   useEffect(() => { refreshReminders() }, [refreshReminders])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setReminders(prev => prev.map(reminder => {
+        const due = reminderIsDue(reminder)
+        if (due === reminder.due) return reminder
+        return { ...reminder, due }
+      }))
+    }, 30_000)
+    return () => clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     const handler = (event) => {

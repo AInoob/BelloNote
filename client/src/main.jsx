@@ -227,6 +227,12 @@ function ReminderNotificationBar({ visible, onNavigateOutline }) {
     setCustomError('')
   }
 
+  useEffect(() => {
+    if (typeof console !== 'undefined') {
+      console.log('[reminder-notification] pending reminders updated', pendingReminders.map(r => ({ id: r.taskId, status: r.status, remindAt: r.remindAt, due: r.due })))
+    }
+  }, [pendingReminders])
+
   const buildDefaultMoment = (reminder) => {
     if (reminder?.remindAt) {
       const parsed = dayjs(reminder.remindAt)

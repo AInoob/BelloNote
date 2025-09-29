@@ -27,7 +27,7 @@ function createReminderChip({ token, reminder, taskId }) {
     event.stopPropagation()
     const li = chip.closest('li.li-node')
     if (!li) return
-    const toggle = li.querySelector('.li-reminder-area .reminder-toggle')
+    const toggle = li.querySelector(':scope > .li-row > .li-main > .li-reminder-area .reminder-toggle')
     if (!toggle) return
     toggle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
     if (typeof toggle.focus === 'function') toggle.focus()

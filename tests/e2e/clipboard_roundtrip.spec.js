@@ -116,3 +116,71 @@ test('select-all copy -> delete -> paste preserves outline structure/content', a
     return { count: roots.length, titles }
   }, { message: 'outline titles should be preserved', timeout: 15000 }).toEqual({ count: 3, titles: ['task 1','task 2','task 3'] })
 })
+
+test('copying a single task pastes a duplicate without overwriting siblings', async ({ page, request, app }) => {
+  const seedTasks = (titles = []) => titles.map(title => ({
+    id: null,
+    title,
+    status: 'todo',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: title }] }],
+    children: []
+  }))
+
+  await resetOutline(app, seedTasks(['task 1', 'task 2', 'task 3']))
+
+  await page.goto('/')
+  const editor = page.locator('.tiptap.ProseMirror').first()
+  await expectOutlineState(page, [
+    outlineNode('task 1', { status: 'todo' }),
+    outlineNode('task 2', { status: 'todo' }),
+    outlineNode('task 3', { status: 'todo' })
+  ], { includeTags: false })
+  await editor.click()
+
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+
+  await page.evaluate(() => {
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
+    if (!editor?.view) throw new Error('editor not ready')
+    const { state } = editor.view
+    let targetPos = null
+    let nodeSize = 0
+    state.doc.descendants((node, pos) => {
+      if (node.type.name === 'listItem' && node.textContent.trim() === 'task 3') {
+        targetPos = pos
+        nodeSize = node.nodeSize
+        return false
+      }
+      return undefined
+    })
+    if (targetPos == null) throw new Error('task 3 list item not found')
+    editor.chain().focus().setNodeSelection(targetPos).run()
+    window.__WORKLOG_TEST_CLIPBOARD = { listItemPos: targetPos, insertPos: targetPos + nodeSize }
+  })
+
+  await page.keyboard.press(`${modifier}+c`)
+
+  await page.evaluate(() => {
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
+    const info = window.__WORKLOG_TEST_CLIPBOARD
+    if (!editor?.view) throw new Error('editor not ready for insertion')
+    if (!info) throw new Error('missing clipboard positions')
+    editor.chain().focus().setTextSelection(info.insertPos).run()
+  })
+
+  await page.keyboard.press(`${modifier}+v`)
+
+  const saveIndicator = page.locator('.save-indicator').first()
+  await expect(saveIndicator).toHaveText(/Unsaved changes|Saving…/, { timeout: 2000 })
+  await expect(saveIndicator).toHaveText('Saved', { timeout: 10000 })
+
+  await expect(page.locator('li.li-node')).toHaveCount(4)
+  await expectOutlineState(page, [
+    outlineNode('task 1', { status: 'todo' }),
+    outlineNode('task 2', { status: 'todo' }),
+    outlineNode('task 3', { status: 'todo' }),
+    outlineNode('task 3', { status: 'todo' })
+  ], { includeTags: false })
+
+  await page.evaluate(() => { delete window.__WORKLOG_TEST_CLIPBOARD })
+})

@@ -250,6 +250,7 @@ export default function HistoryModal({ onClose, onRestored }) {
                         readOnly
                         initialOutline={preview}
                         showDebug={false}
+                        broadcastSnapshots={false}
                         onSaveStateChange={() => {}}
                       />
                     </div>
@@ -345,6 +346,7 @@ function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext
             readOnly
             initialOutline={doc}
             showDebug={false}
+            broadcastSnapshots={false}
             onSaveStateChange={() => {}}
           />
         </div>

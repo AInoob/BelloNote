@@ -26,6 +26,15 @@ function nowPlusMinutes(minutes) {
   return toDateTimeLocal(date)
 }
 
+function todayDate() {
+  const now = new Date()
+  const pad = (value) => `${value}`.padStart(2, '0')
+  const localYear = now.getFullYear()
+  const localMonth = pad(now.getMonth() + 1)
+  const localDay = pad(now.getDate())
+  return `${localYear}-${localMonth}-${localDay}`
+}
+
 async function resetOutline(request, outline) {
   const response = await request.post(`${API_URL}/api/outline`, { data: { outline }, headers: { 'x-playwright-test': '1' } })
   expect(response.ok()).toBeTruthy()
@@ -109,6 +118,9 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   await expect(firstNode).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
   await expect(reminderChip).toHaveText(/Completed/i, { timeout: SHORT_TIMEOUT })
   await expect(reminderToggle).toHaveAttribute('aria-label', /Reminder completed/i, { timeout: SHORT_TIMEOUT })
+  const todayTag = `@${todayDate()}`
+  await expect(firstNode).toContainText(todayTag, { timeout: SHORT_TIMEOUT })
+  await expect(firstNode).not.toContainText(/Reminder completed at/i, { timeout: SHORT_TIMEOUT })
 
   await page.getByRole('button', { name: 'Reminders' }).click()
   await expect(page.locator('.reminders-view .tiptap.ProseMirror li.li-node', { hasText: 'Follow up item' })).toHaveCount(1, { timeout: SHORT_TIMEOUT })
@@ -225,6 +237,146 @@ test('tasks seeded with inline reminder token render correctly', async ({ page, 
   await expect(remindersPanel).toContainText(/Reminder (due|completed|dismissed)|in\s|overdue/i, { timeout: SHORT_TIMEOUT })
 })
 
+
+test('inline reminder chip targets owning task when children exist', async ({ page, request }) => {
+  await resetOutline(request, [
+    {
+      title: 'Parent holder',
+      status: 'todo',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Parent holder' }] }
+      ],
+      children: [
+        {
+          title: 'Child task',
+          status: 'todo',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Child task' }] }
+          ]
+        }
+      ]
+    }
+  ])
+
+  await page.goto('/')
+  const nodes = page.locator('li.li-node[data-id]')
+  const parent = nodes.nth(0)
+  const child = nodes.nth(1)
+
+  await expect(parent).toContainText('Parent holder', { timeout: SHORT_TIMEOUT })
+  await expect(child).toContainText('Child task', { timeout: SHORT_TIMEOUT })
+
+  const parentToggle = parent.locator(':scope > .li-row > .li-main > .li-reminder-area .reminder-toggle').first()
+  await parentToggle.click()
+  const menu = page.locator('.reminder-menu')
+  await expect(menu).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await menu.locator('button', { hasText: '30 minutes' }).click()
+
+
+  const parentId = await parent.getAttribute('data-id')
+  const childId = await child.getAttribute('data-id')
+  expect(parentId).toBeTruthy()
+  expect(childId).toBeTruthy()
+
+  await expect.poll(async () => {
+    const reminders = await page.evaluate(() => {
+      return Array.isArray(window.__WORKLOG_REMINDERS)
+        ? window.__WORKLOG_REMINDERS.map(rem => ({
+            taskId: String(rem.taskId),
+            remindAt: rem.remindAt
+          }))
+        : []
+    })
+    const parentCount = reminders.filter(rem => rem.taskId === String(parentId)).length
+    const childCount = reminders.filter(rem => rem.taskId === String(childId)).length
+    const parentReminder = reminders.find(rem => rem.taskId === String(parentId)) || null
+    return { total: reminders.length, parentCount, childCount, remindAt: parentReminder?.remindAt || null }
+  }, { timeout: SHORT_TIMEOUT * 5 }).toEqual({ total: 1, parentCount: 1, childCount: 0, remindAt: expect.any(String) })
+
+  const beforeReminder = await page.evaluate(() => {
+    const list = Array.isArray(window.__WORKLOG_REMINDERS) ? window.__WORKLOG_REMINDERS : []
+    if (!list.length) return null
+    const first = list[0]
+    return { taskId: String(first.taskId), remindAt: first.remindAt }
+  })
+  expect(beforeReminder?.taskId).toBe(String(parentId))
+
+  const inlineChip = parent.locator('.reminder-inline-chip').first()
+  await expect(inlineChip).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await inlineChip.click()
+  await expect(menu).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await menu.locator('button', { hasText: '1 hour' }).click()
+
+  await expect.poll(async () => {
+    const reminders = await page.evaluate(() => {
+      return Array.isArray(window.__WORKLOG_REMINDERS)
+        ? window.__WORKLOG_REMINDERS.map(rem => ({
+            taskId: String(rem.taskId),
+            remindAt: rem.remindAt
+          }))
+        : []
+    })
+    const parentCount = reminders.filter(rem => rem.taskId === String(parentId)).length
+    const childCount = reminders.filter(rem => rem.taskId === String(childId)).length
+    const parentReminder = reminders.find(rem => rem.taskId === String(parentId)) || null
+    return { total: reminders.length, parentCount, childCount, remindAt: parentReminder?.remindAt || null }
+  }, { timeout: SHORT_TIMEOUT * 5 }).toEqual({ total: 1, parentCount: 1, childCount: 0, remindAt: expect.any(String) })
+
+  const afterReminder = await page.evaluate(() => {
+    const list = Array.isArray(window.__WORKLOG_REMINDERS) ? window.__WORKLOG_REMINDERS : []
+    if (!list.length) return null
+    const first = list[0]
+    return { taskId: String(first.taskId), remindAt: first.remindAt }
+  })
+  expect(afterReminder?.taskId).toBe(String(parentId))
+  expect(afterReminder?.remindAt).not.toBe(beforeReminder?.remindAt)
+
+  await inlineChip.click()
+  await expect(menu).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await menu.getByRole('button', { name: 'Mark complete' }).click()
+
+  const todayTag = `@${todayDate()}`
+  const parentTextAfterComplete = await parent.evaluate(node => node?.innerText || '')
+  expect(parentTextAfterComplete).toContain(todayTag)
+  expect(parentTextAfterComplete).not.toMatch(/Reminder completed at/i)
+
+  const childTextAfterComplete = await child.evaluate(node => node?.innerText || '')
+  expect(childTextAfterComplete).not.toMatch(/Reminder completed/)
+  expect(childTextAfterComplete).not.toContain(todayTag)
+
+  const parentChipAfterComplete = parent.locator('.reminder-inline-chip').first()
+  await expect(parentChipAfterComplete).toHaveText(/Completed/i, { timeout: SHORT_TIMEOUT })
+
+  await expect.poll(async () => {
+    const reminders = await page.evaluate(() => {
+      return Array.isArray(window.__WORKLOG_REMINDERS)
+        ? window.__WORKLOG_REMINDERS.map(rem => ({
+            taskId: String(rem.taskId),
+            status: rem.status,
+            remindAt: rem.remindAt
+          }))
+        : []
+    })
+    const parentCount = reminders.filter(rem => rem.taskId === String(parentId)).length
+    const childCount = reminders.filter(rem => rem.taskId === String(childId)).length
+    const parentReminder = reminders.find(rem => rem.taskId === String(parentId)) || null
+    return { total: reminders.length, parentCount, childCount, status: parentReminder?.status || null }
+  }, { timeout: SHORT_TIMEOUT * 5 }).toEqual({ total: 1, parentCount: 1, childCount: 0, status: 'completed' })
+
+  const finalReminder = await page.evaluate(() => {
+    const list = Array.isArray(window.__WORKLOG_REMINDERS) ? window.__WORKLOG_REMINDERS : []
+    if (!list.length) return null
+    const first = list[0]
+    return { taskId: String(first.taskId), status: first.status, remindAt: first.remindAt }
+  })
+  expect(finalReminder?.taskId).toBe(String(parentId))
+  expect(finalReminder?.status).toBe('completed')
+
+  const childBodyText = await child.evaluate(node => node?.innerText || '')
+  expect(childBodyText).not.toContain('[[reminder')
+})
+
+
 test('dismissing reminders preserves task status', async ({ page, request }) => {
   await resetOutline(request, [
     { title: 'Incomplete reminder task', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Incomplete reminder task' }] }] },
@@ -245,6 +397,7 @@ test('dismissing reminders preserves task status', async ({ page, request }) => 
     const menu = page.locator('.reminder-menu')
     await expect(menu).toBeVisible({ timeout: SHORT_TIMEOUT })
     await menu.locator('button', { hasText: '30 minutes' }).click()
+
     await expect(node.locator('.reminder-inline-chip')).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
   }
 

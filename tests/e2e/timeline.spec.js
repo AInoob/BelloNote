@@ -19,6 +19,12 @@ function fmt(d) { return d.toISOString().slice(0,10) }
 
 function todayStr() { return fmt(new Date()) }
 
+function todayAt(hour = 23, minute = 59) {
+  const d = new Date()
+  d.setHours(hour, minute, 0, 0)
+  return d.toISOString().slice(0,16)
+}
+
 function yesterdayStr() {
   const d = new Date(); d.setDate(d.getDate() - 1); return fmt(d)
 }

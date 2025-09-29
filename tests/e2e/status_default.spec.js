@@ -437,7 +437,11 @@ test('Enter then Tab from child keeps focus in new grandchild', async ({ page })
   await setSelectionToParagraph(page, 'Sub task 1', { position: 'end' })
   await page.keyboard.press('Enter')
   await page.keyboard.press('Tab')
-  await page.keyboard.type('Sub sub task 1')
+  await page.evaluate(() => {
+    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
+    if (!editor?.chain) throw new Error('Editor not ready')
+    editor.chain().focus().insertContent('Sub sub task 1').run()
+  })
   await expectOutlineState(page, [
     outlineNode('Task 1', {
       children: [

@@ -84,17 +84,20 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
   const todaySectionRef = useRef(null)
   const todayScrollDoneRef = useRef(false)
   const todayKeyRef = useRef(dayjs().format('YYYY-MM-DD'))
+  const refreshTimerRef = useRef(null)
 
   const refreshData = useCallback(async () => {
     try {
       const data = await getDays()
       setDays(data.days || [])
+      if (typeof window !== 'undefined') window.__WL_TIMELINE_DAYS = data.days || []
     } catch (err) {
       console.error('[timeline] failed to load days', err)
     }
     try {
       const outline = await getOutline()
       setOutlineRoots(outline.roots || [])
+      if (typeof window !== 'undefined') window.__WL_TIMELINE_OUTLINE = outline.roots || []
     } catch (err) {
       console.error('[timeline] failed to load outline', err)
     }
@@ -136,6 +139,42 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
   useEffect(() => {
     refreshData()
   }, [refreshData])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__WL_TIMELINE_REFRESH = refreshData
+    }
+    return () => {
+      if (typeof window !== 'undefined' && window.__WL_TIMELINE_REFRESH === refreshData) {
+        window.__WL_TIMELINE_REFRESH = undefined
+      }
+    }
+  }, [refreshData])
+
+  useEffect(() => {
+    const scheduleRefresh = () => {
+      if (refreshTimerRef.current) return
+      refreshTimerRef.current = window.setTimeout(() => {
+        refreshTimerRef.current = null
+        refreshData()
+      }, 150)
+    }
+    const handleOutlineSnapshot = () => { scheduleRefresh() }
+    const handleReminderAction = () => { scheduleRefresh() }
+    window.addEventListener('worklog:outline-snapshot', handleOutlineSnapshot)
+    window.addEventListener('worklog:reminder-action', handleReminderAction)
+    return () => {
+      window.removeEventListener('worklog:outline-snapshot', handleOutlineSnapshot)
+      window.removeEventListener('worklog:reminder-action', handleReminderAction)
+    }
+  }, [refreshData])
+
+  useEffect(() => () => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     if (todayScrollDoneRef.current) return
@@ -270,6 +309,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
               readOnly={true}
               forceExpand={true}
               initialOutline={{ roots: futureRoots }}
+              broadcastSnapshots={false}
               allowStatusToggleInReadOnly={true}
               reminderActionsEnabled={true}
               onStatusToggle={handleStatusToggle}
@@ -287,6 +327,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
               readOnly={true}
               forceExpand={true}
               initialOutline={{ roots: soonRoots }}
+              broadcastSnapshots={false}
               allowStatusToggleInReadOnly={true}
               reminderActionsEnabled={true}
               onStatusToggle={handleStatusToggle}
@@ -307,6 +348,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
                 readOnly={true}
                 forceExpand={true}
                 initialOutline={{ roots }}
+                broadcastSnapshots={false}
                 allowStatusToggleInReadOnly={true}
                 reminderActionsEnabled={true}
                 onStatusToggle={handleStatusToggle}
