@@ -13,34 +13,67 @@ import { useBuildInfo } from './hooks/useBuildInfo.js'
 import { usePersistentFlag } from './hooks/usePersistentFlag.js'
 import { useFocusRouter } from './hooks/useFocusRouter.js'
 
-const CLIENT_BUILD_TIME = typeof __APP_BUILD_TIME__ !== 'undefined' ? __APP_BUILD_TIME__ : null
+// ============================================================================
+// Constants
+// ============================================================================
 
-function getInitialTab() {
-  if (typeof window === 'undefined') return 'outline'
-  return 'outline'
+const CLIENT_BUILD_TIME = typeof __APP_BUILD_TIME__ !== 'undefined' ? __APP_BUILD_TIME__ : null
+const DEFAULT_TAB = 'outline'
+const DEBUG_FLAG_KEY = 'WL_DEBUG'
+const DEBUG_DEFAULT = true
+
+// Checkpoint states
+const CHECKPOINT_STATE = {
+  IDLE: 'idle',
+  SAVING: 'saving',
+  SUCCESS: 'success',
+  ERROR: 'error'
 }
 
+// Save states
+const SAVE_TEXT = {
+  SAVING: 'Saving…',
+  DIRTY: 'Unsaved changes',
+  SAVED: 'Saved'
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Gets the initial tab to display
+ * @returns {string} The initial tab name
+ */
+function getInitialTab() {
+  if (typeof window === 'undefined') return DEFAULT_TAB
+  return DEFAULT_TAB
+}
+
+// ============================================================================
+// Main Component
+// ============================================================================
+
 export default function App() {
+  // State
   const [tab, setTab] = useState(getInitialTab)
   const [saveState, setSaveState] = useState({ dirty: false, saving: false })
   const [showHistory, setShowHistory] = useState(false)
   const [checkpointOpen, setCheckpointOpen] = useState(false)
   const [checkpointNote, setCheckpointNote] = useState('')
-  const [checkpointStatus, setCheckpointStatus] = useState({ state: 'idle', message: '' })
-  const { value: showDebug, toggle: toggleDebug } = usePersistentFlag('WL_DEBUG', true)
+  const [checkpointStatus, setCheckpointStatus] = useState({
+    state: CHECKPOINT_STATE.IDLE,
+    message: ''
+  })
+
+  // Hooks
+  const { value: showDebug, toggle: toggleDebug } = usePersistentFlag(DEBUG_FLAG_KEY, DEBUG_DEFAULT)
   const { serverBuildTime, healthFetchedAt } = useBuildInfo()
 
   const { pendingReminders } = useReminders()
   const hasPendingReminders = pendingReminders.length > 0
 
-  const showHistoryPanel = useCallback(() => {
-    setShowHistory(true)
-  }, [setShowHistory])
-
-  const closeHistoryPanel = useCallback(() => {
-    setShowHistory(false)
-  }, [setShowHistory])
-
+  // Focus router for coordinating between views
   const {
     timelineFocusRequest,
     outlineFocusRequest,
@@ -50,38 +83,25 @@ export default function App() {
     handleOutlineFocusHandled
   } = useFocusRouter(setTab)
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.__APP_ACTIVE_TAB__ = tab
-      window.__APP_SET_TAB__ = setTab
-    }
-  }, [tab])
+  // History panel handlers
+  const showHistoryPanel = useCallback(() => {
+    setShowHistory(true)
+  }, [])
 
+  const closeHistoryPanel = useCallback(() => {
+    setShowHistory(false)
+  }, [])
+
+  // Checkpoint modal handlers
   const openCheckpoint = useCallback(() => {
     setCheckpointNote('')
-    setCheckpointStatus({ state: 'idle', message: '' })
+    setCheckpointStatus({ state: CHECKPOINT_STATE.IDLE, message: '' })
     setCheckpointOpen(true)
   }, [])
 
   const closeCheckpoint = useCallback(() => {
     setCheckpointOpen(false)
   }, [])
-
-  const submitCheckpoint = useCallback(async (event) => {
-    event.preventDefault()
-    if (checkpointStatus.state === 'saving') return
-    setCheckpointStatus({ state: 'saving', message: '' })
-
-    try {
-      await createCheckpoint(checkpointNote.trim())
-      setCheckpointStatus({ state: 'success', message: 'Checkpoint saved!' })
-    } catch (err) {
-      setCheckpointStatus({
-        state: 'error',
-        message: err?.message || 'Failed to save checkpoint'
-      })
-    }
-  }, [checkpointNote, checkpointStatus.state])
 
   const handleViewHistory = useCallback(() => {
     setCheckpointOpen(false)
@@ -92,9 +112,38 @@ export default function App() {
     toggleDebug()
   }, [toggleDebug])
 
+  // Effects
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__APP_ACTIVE_TAB__ = tab
+      window.__APP_SET_TAB__ = setTab
+    }
+  }, [tab])
+
+  const submitCheckpoint = useCallback(async (event) => {
+    event.preventDefault()
+    if (checkpointStatus.state === CHECKPOINT_STATE.SAVING) return
+
+    setCheckpointStatus({ state: CHECKPOINT_STATE.SAVING, message: '' })
+
+    try {
+      await createCheckpoint(checkpointNote.trim())
+      setCheckpointStatus({
+        state: CHECKPOINT_STATE.SUCCESS,
+        message: 'Checkpoint saved!'
+      })
+    } catch (err) {
+      setCheckpointStatus({
+        state: CHECKPOINT_STATE.ERROR,
+        message: err?.message || 'Failed to save checkpoint'
+      })
+    }
+  }, [checkpointNote, checkpointStatus.state])
+
+  // Computed values
   const statusText = useMemo(() => {
-    if (saveState.saving) return 'Saving…'
-    return saveState.dirty ? 'Unsaved changes' : 'Saved'
+    if (saveState.saving) return SAVE_TEXT.SAVING
+    return saveState.dirty ? SAVE_TEXT.DIRTY : SAVE_TEXT.SAVED
   }, [saveState.dirty, saveState.saving])
 
   return (

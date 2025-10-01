@@ -1,80 +1,48 @@
+// ============================================================================
+// Timeline View Component
+// Displays dated work logs, Soon, and Future sections
+// ============================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { getDays, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
 import { useOutlineSnapshot } from '../hooks/useOutlineSnapshot.js'
+import { buildOutlineFromItems, collectSoonAndFuture } from './timeline/timelineUtils.js'
 
-function buildOutlineFromItems(items, seedIds = [], date = null) {
-  // Reconstruct a tree from path arrays so we can render with OutlinerView in read-only mode
-  const seedSet = new Set(seedIds)
-  const byId = new Map()
-  const rootsSet = new Set()
-  const ensureNode = (seg) => {
-    if (!byId.has(seg.id)) byId.set(seg.id, { id: seg.id, title: seg.title, status: seg.status ?? '', content: seg.content ?? null, children: [], ownWorkedOnDates: [] })
-    return byId.get(seg.id)
-  }
-  items.forEach(it => {
-    const path = Array.isArray(it.path) ? it.path : []
-    if (!path.length) return
-    rootsSet.add(path[0].id)
-    for (let i = 0; i < path.length; i++) {
-      const cur = ensureNode(path[i])
-      // mark the node if it is a seed (directly logged for the day)
-      if (date && seedSet.has(cur.id) && !cur.ownWorkedOnDates.includes(date)) cur.ownWorkedOnDates.push(date)
-      const prev = i > 0 ? ensureNode(path[i - 1]) : null
-      if (prev) {
-        if (!prev.children.find(ch => ch.id === cur.id)) prev.children.push(cur)
-      }
-    }
-  })
-  const roots = Array.from(rootsSet).map(id => byId.get(id)).filter(Boolean)
-  return roots
-}
-
-const DATE_RE = /@\d{4}-\d{2}-\d{2}\b/
-const hasTag = (node, tag) => {
-  const t = (node?.title || '').toLowerCase()
-  const bodyLower = JSON.stringify(node?.content || []).toLowerCase()
-  const needle = `@${tag}`
-  return t.includes(needle) || bodyLower.includes(needle)
-}
-const hasDate = (node) => {
-  const t = node?.title || ''
-  const body = JSON.stringify(node?.content || [])
-  return DATE_RE.test(t) || DATE_RE.test(body)
-}
-
+/**
+ * Escapes a string for safe use in CSS selectors
+ * @param {string} value - Value to escape
+ * @returns {string} Escaped CSS selector string
+ */
 const cssEscape = (value) => {
   if (typeof value !== 'string') value = String(value ?? '')
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value)
   return value.replace(/[^a-zA-Z0-9\-_]/g, (match) => `\\${match}`)
 }
 
-function collectSoonAndFuture(roots) {
-  const soonRoots = []
-  const futureRoots = []
-  function walk(node, parentSoon=false, parentFuture=false) {
-    const selfSoon = hasTag(node, 'soon')
-    const selfFuture = hasTag(node, 'future')
-    const effSoon = parentSoon || selfSoon
-    const effFuture = parentFuture || selfFuture
-    const dated = hasDate(node)
-    if (effSoon && !dated) { soonRoots.push(node); return }
-    if (effFuture && !parentSoon && !dated) { futureRoots.push(node); return }
-    for (const ch of (node.children || [])) walk(ch, effSoon, effFuture)
-  }
-  for (const r of (roots || [])) walk(r, false, false)
-  return { soonRoots, futureRoots }
-}
+// ============================================================================
+// Timeline View Component
+// ============================================================================
 
-
+/**
+ * TimelineView Component
+ * Displays timeline with dated work logs, Soon, and Future sections
+ * Supports focus navigation and status updates in read-only mode
+ * @param {Object} props - Component props
+ * @param {Object|null} [props.focusRequest=null] - Request to focus a specific task
+ * @param {Function} [props.onFocusHandled] - Callback when focus is handled
+ * @param {Function|null} [props.onNavigateOutline=null] - Callback to navigate to outline
+ */
 export default function TimelineView({ focusRequest = null, onFocusHandled = () => {}, onNavigateOutline = null }) {
+  // State for timeline data and filters
   const [days, setDays] = useState([])
   const [showFuture, setShowFuture] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.future'); return v === '0' ? false : true } catch { return true } })
   const [showSoon, setShowSoon] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.soon'); return v === '0' ? false : true } catch { return true } })
   const [showFilters, setShowFilters] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.filters'); return v === '0' ? false : true } catch { return true } })
   const [activeTaskId, setActiveTaskId] = useState(null)
+
+  // Refs for DOM elements and focus management
   const containerRef = useRef(null)
   const flashTimerRef = useRef(null)
   const lastFocusTokenRef = useRef(null)
@@ -88,6 +56,13 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
 
   const { outlineRoots } = useOutlineSnapshot()
 
+  // ============================================================================
+  // Data Loading
+  // ============================================================================
+
+  /**
+   * Refreshes timeline data from server
+   */
   const refreshData = useCallback(async () => {
     try {
       const data = await getDays()
@@ -98,6 +73,15 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     }
   }, [])
 
+  // ============================================================================
+  // Focus Management
+  // ============================================================================
+
+  /**
+   * Focuses a task by ID, scrolling it into view and highlighting it
+   * @param {string|number} taskId - Task ID to focus
+   * @returns {boolean} True if task was found and focused
+   */
   const focusTaskById = useCallback((taskId) => {
     if (!taskId) return false
     const root = containerRef.current
@@ -131,10 +115,16 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     return true
   }, [])
 
+  // ============================================================================
+  // Effects - Data Loading and Refresh
+  // ============================================================================
+
+  // Initial data load
   useEffect(() => {
     refreshData()
   }, [refreshData])
 
+  // Expose refresh function globally for external triggers
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.__WL_TIMELINE_REFRESH = refreshData
@@ -146,6 +136,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     }
   }, [refreshData])
 
+  // Listen for outline changes and trigger refresh
   useEffect(() => {
     const scheduleRefresh = () => {
       if (refreshTimerRef.current) return
@@ -164,6 +155,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     }
   }, [refreshData])
 
+  // Cleanup refresh timer
   useEffect(() => () => {
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current)
@@ -171,6 +163,11 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     }
   }, [])
 
+  // ============================================================================
+  // Effects - Outline Snapshot
+  // ============================================================================
+
+  // Expose outline roots globally for debugging
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.__WL_TIMELINE_OUTLINE = outlineRoots || []
@@ -182,6 +179,11 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     }
   }, [outlineRoots])
 
+  // ============================================================================
+  // Effects - Auto-scroll to Today
+  // ============================================================================
+
+  // Scroll to today's section on initial load
   useEffect(() => {
     if (todayScrollDoneRef.current) return
     const target = todaySectionRef.current
@@ -194,14 +196,20 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     })
   }, [days])
 
+  // ============================================================================
+  // Effects - Focus Request Handling
+  // ============================================================================
+
   const focusRequestTaskId = focusRequest?.taskId ? String(focusRequest.taskId) : null
 
+  // Set active task ID from focus request
   useEffect(() => {
     if (!focusRequestTaskId) return
     setActiveTaskId(focusRequestTaskId)
     lastFocusedTaskIdRef.current = focusRequestTaskId
   }, [focusRequestTaskId])
 
+  // Attempt to focus requested task
   useEffect(() => {
     if (!focusRequestTaskId) return undefined
     const token = focusRequest?.token ?? `${focusRequestTaskId}:${focusRequest?.reminderId ?? ''}:${focusRequest?.remindAt ?? ''}`
@@ -217,6 +225,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     return undefined
   }, [focusRequest, focusRequestTaskId, focusTaskById, onFocusHandled])
 
+  // Retry pending focus when data updates
   useEffect(() => {
     if (!pendingFocusRef.current || !focusRequestTaskId) return undefined
     const success = focusTaskById(focusRequestTaskId)
@@ -228,10 +237,16 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     return undefined
   }, [days, outlineRoots, focusTaskById, focusRequestTaskId, onFocusHandled])
 
+  // Cleanup flash timer
   useEffect(() => () => {
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
   }, [])
 
+  // ============================================================================
+  // Effects - Click Handling
+  // ============================================================================
+
+  // Track active task on click
   useEffect(() => {
     const root = containerRef.current
     if (!root) return undefined
@@ -245,6 +260,11 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     return () => root.removeEventListener('click', handleClick)
   }, [])
 
+  // ============================================================================
+  // Effects - Keyboard Shortcuts
+  // ============================================================================
+
+  // Cmd/Ctrl+S to navigate to outline
   useEffect(() => {
     const handler = (event) => {
       if (!(event.metaKey || event.ctrlKey)) return
@@ -261,10 +281,25 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     return () => window.removeEventListener('keydown', handler, true)
   }, [activeTaskId, onNavigateOutline, focusRequestTaskId])
 
+  // ============================================================================
+  // Computed Values
+  // ============================================================================
+
+  // Extract Soon and Future tasks from outline
   const { soonRoots, futureRoots } = useMemo(() => collectSoonAndFuture(outlineRoots), [outlineRoots])
 
+  // Check if there's any timeline data to display
   const hasTimelineData = (days?.length || 0) > 0 || soonRoots.length > 0 || futureRoots.length > 0
 
+  // ============================================================================
+  // Event Handlers
+  // ============================================================================
+
+  /**
+   * Handles status toggle for tasks in read-only timeline
+   * @param {string|number} id - Task ID
+   * @param {string} nextStatus - New status value
+   */
   const handleStatusToggle = async (id, nextStatus) => {
     try {
       await updateTask(id, { status: nextStatus })
@@ -274,6 +309,11 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       console.error('[timeline] failed to update status', e)
     }
   }
+
+  // ============================================================================
+  // Render
+  // ============================================================================
+
   return (
     <div className="timeline" ref={containerRef}>
       {/* Filter bar for timeline-specific toggles */}

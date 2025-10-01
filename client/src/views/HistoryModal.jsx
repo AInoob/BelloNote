@@ -1,24 +1,53 @@
+// ============================================================================
+// History Modal Component
+// Modal for viewing, comparing, and restoring document versions
+// ============================================================================
+
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import OutlinerView from './OutlinerView.jsx'
 import { listHistory, getVersionDoc, diffVersion, restoreVersion } from '../api.js'
+import { SnapshotViewer } from './history/SnapshotViewer.jsx'
+import { groupHistory, versionMetaText, formatTime } from './history/historyUtils.js'
 
+// ============================================================================
+// Main Component
+// ============================================================================
+
+/**
+ * HistoryModal Component
+ * Displays version history with preview, diff, and restore functionality
+ * @param {Object} props - Component props
+ * @param {Function} props.onClose - Handler for closing the modal
+ * @param {Function} props.onRestored - Handler called after successful restore
+ */
 export default function HistoryModal({ onClose, onRestored }) {
+  // State for history list and selection
   const [items, setItems] = useState([])
   const [selected, setSelected] = useState(null)
   const [preview, setPreview] = useState(null)
   const [diff, setDiff] = useState(null)
   const [loading, setLoading] = useState(false)
   const [restoring, setRestoring] = useState(false)
-  // Custom confirm modal state
+
+  // State for confirmation dialog
   const [confirming, setConfirming] = useState(false)
   const [confirmMessage, setConfirmMessage] = useState('')
   const pendingRestoreIdRef = useRef(null)
+
+  // State for snapshot viewer
   const [snapshotDoc, setSnapshotDoc] = useState(null)
   const [snapshotVersionId, setSnapshotVersionId] = useState(null)
   const [snapshotLoadingId, setSnapshotLoadingId] = useState(null)
-  const [collapsedDays, setCollapsedDays] = useState(new Set())
   const snapshotRequestRef = useRef(0)
 
+  // State for collapsible day groups
+  const [collapsedDays, setCollapsedDays] = useState(new Set())
+
+  // ============================================================================
+  // Data Loading
+  // ============================================================================
+
+  // Load history items on mount
   useEffect(() => {
     (async () => {
       const rows = await listHistory(100, 0)
@@ -27,6 +56,14 @@ export default function HistoryModal({ onClose, onRestored }) {
     })()
   }, [])
 
+  // ============================================================================
+  // Selection and Actions
+  // ============================================================================
+
+  /**
+   * Selects a version and loads its preview and diff
+   * @param {Object} it - Version item to select
+   */
   async function select(it) {
     setSelected(it)
     setLoading(true)
@@ -40,6 +77,10 @@ export default function HistoryModal({ onClose, onRestored }) {
     }
   }
 
+  /**
+   * Performs the actual restore operation
+   * @param {string|number} versionId - Version ID to restore
+   */
   async function doRestoreNow(versionId) {
     if (!versionId) return
     setRestoring(true)
@@ -51,13 +92,22 @@ export default function HistoryModal({ onClose, onRestored }) {
     }
   }
 
+  // ============================================================================
+  // Computed Values
+  // ============================================================================
+
+  // Group history items by day
   const grouped = useMemo(() => groupHistory(items), [items])
   const hasItems = grouped.length > 0
+
+  // Build index map for navigation
   const versionIndexMap = useMemo(() => {
     const map = new Map()
     items.forEach((it, index) => map.set(it.id, index))
     return map
   }, [items])
+
+  // Derive navigation state
   const selectedIndex = useMemo(() => (selected ? versionIndexMap.get(selected.id) ?? -1 : -1), [selected, versionIndexMap])
   const totalVersions = items.length
   const snapshotIndex = snapshotVersionId != null ? (versionIndexMap.get(snapshotVersionId) ?? null) : null
@@ -65,6 +115,11 @@ export default function HistoryModal({ onClose, onRestored }) {
   const hasNewerSnapshot = snapshotIndex !== null && snapshotIndex > 0
   const hasOlderSnapshot = snapshotIndex !== null && snapshotIndex < totalVersions - 1
 
+  // ============================================================================
+  // Effects
+  // ============================================================================
+
+  // Auto-collapse all days except the first
   useEffect(() => {
     setCollapsedDays(prev => {
       const next = new Set(prev)
@@ -79,6 +134,16 @@ export default function HistoryModal({ onClose, onRestored }) {
     })
   }, [grouped])
 
+  // ============================================================================
+  // Snapshot Management
+  // ============================================================================
+
+  /**
+   * Opens a snapshot viewer for a version at the given index
+   * @param {number} index - Index in items array
+   * @param {Object} [options={}] - Options
+   * @param {Object|null} [options.reuseDoc=null] - Reuse existing doc instead of loading
+   */
   const openSnapshotAtIndex = async (index, { reuseDoc = null } = {}) => {
     if (index == null || index < 0 || index >= items.length) return
     const target = items[index]
@@ -104,6 +169,11 @@ export default function HistoryModal({ onClose, onRestored }) {
     }
   }
 
+  /**
+   * Opens snapshot for a specific version item
+   * @param {Event} event - Click event
+   * @param {Object} it - Version item
+   */
   const openSnapshot = (event, it) => {
     event.stopPropagation()
     const index = versionIndexMap.get(it.id)
@@ -112,6 +182,9 @@ export default function HistoryModal({ onClose, onRestored }) {
     openSnapshotAtIndex(index, { reuseDoc })
   }
 
+  /**
+   * Closes the snapshot viewer
+   */
   const closeSnapshot = () => {
     snapshotRequestRef.current += 1
     setSnapshotDoc(null)
@@ -119,15 +192,21 @@ export default function HistoryModal({ onClose, onRestored }) {
     setSnapshotLoadingId(null)
   }
 
+  /** Navigates to newer version in snapshot viewer */
   const handleSnapshotNewer = () => {
     if (!hasNewerSnapshot || snapshotIndex == null) return
     openSnapshotAtIndex(snapshotIndex - 1)
   }
 
+  /** Navigates to older version in snapshot viewer */
   const handleSnapshotOlder = () => {
     if (!hasOlderSnapshot || snapshotIndex == null) return
     openSnapshotAtIndex(snapshotIndex + 1)
   }
+
+  // ============================================================================
+  // Render
+  // ============================================================================
 
   return (
     <div className="overlay" style={{ zIndex: 900 }} onClick={onClose}>
@@ -304,130 +383,22 @@ export default function HistoryModal({ onClose, onRestored }) {
   )
 }
 
-function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext = false, isLoading = false, onRestore = null, restoring = false, isDimmed = false }) {
-  if (!doc) return null
-  const prevDisabled = !hasPrev || typeof onPrev !== 'function' || isLoading
-  const nextDisabled = !hasNext || typeof onNext !== 'function' || isLoading
-  return (
-    <div className="snapshot-fullscreen" role="dialog" aria-modal="true" onClick={onClose} style={{ zIndex: 1000, position: 'fixed', inset: 0, pointerEvents: isDimmed ? 'none' : 'auto' }}>
-      <div className="snapshot-fullscreen-inner" onClick={e => e.stopPropagation()}>
-        <div className="snapshot-fullscreen-bar">
-          <div className="snapshot-fullscreen-title">Snapshot preview</div>
-          <div className="snapshot-fullscreen-actions">
-            <button
-              className="btn ghost"
-              type="button"
-              onClick={() => { if (!prevDisabled) onPrev() }}
-              disabled={prevDisabled}
-            >
-              Newer
-            </button>
-            <button
-              className="btn ghost"
-              type="button"
-              onClick={() => { if (!nextDisabled) onNext() }}
-              disabled={nextDisabled}
-            >
-              Older
-            </button>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => { if (typeof onRestore === 'function' && !isLoading && !restoring) onRestore() }}
-              disabled={isLoading || restoring}
-            >
-              {restoring ? 'Restoring…' : 'Restore'}
-            </button>
-            <button className="btn" type="button" onClick={onClose}>Close</button>
-          </div>
-        </div>
-        <div className="snapshot-fullscreen-body snapshot-fullscreen-body--outline">
-          <OutlinerView
-            readOnly
-            initialOutline={doc}
-            showDebug={false}
-            broadcastSnapshots={false}
-            onSaveStateChange={() => {}}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
+// ============================================================================
+// Snapshot Viewer Component
+// ============================================================================
 
-function groupHistory(rows) {
-  const byDay = new Map()
-  rows.forEach(row => {
-    const date = parseTimestamp(row.created_at)
-    if (!date) return
-    const dayKey = date.toISOString().slice(0, 10)
-    if (!byDay.has(dayKey)) {
-      byDay.set(dayKey, {
-        key: dayKey,
-        label: formatDayLabel(date),
-        items: []
-      })
-    }
-    byDay.get(dayKey).items.push(row)
-  })
-  const groups = Array.from(byDay.values())
-  groups.forEach(group => {
-    group.items.sort((a, b) => {
-      const da = parseTimestamp(a.created_at)
-      const db = parseTimestamp(b.created_at)
-      return (db?.getTime() || 0) - (da?.getTime() || 0)
-    })
-  })
-  groups.sort((a, b) => (a.key > b.key ? -1 : (a.key < b.key ? 1 : 0)))
-  return groups
-}
-
-function parseTimestamp(ts) {
-  try {
-    const date = new Date(ts + 'Z')
-    return Number.isNaN(date.valueOf()) ? null : date
-  } catch {
-    return null
-  }
-}
-
-function formatDayLabel(date) {
-  const today = startOfDay(new Date())
-  const target = startOfDay(date)
-  const diffDays = Math.round((today.getTime() - target.getTime()) / DAY_MS)
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return 'Yesterday'
-  const opts = { weekday: 'short', month: 'short', day: 'numeric' }
-  if (today.getFullYear() !== target.getFullYear()) opts.year = 'numeric'
-  return date.toLocaleDateString(undefined, opts)
-}
-
-function formatTime(ts) {
-  const date = parseTimestamp(ts)
-  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ts
-}
-
-function formatVersionTime(ts) {
-  const date = parseTimestamp(ts)
-  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
-}
-
-function formatSize(bytes) {
-  if (!Number.isFinite(bytes)) return ''
-  if (bytes < 1024) return `${bytes} B`
-  return `${Math.round(bytes / 1024)} KB`
-}
-
-function versionMetaText(it) {
-  const time = formatVersionTime(it.created_at)
-  const size = formatSize(it.size_bytes)
-  return [time, size].filter(Boolean).join(' · ')
-}
-
-function startOfDay(date) {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  return d
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000
+/**
+ * SnapshotViewer Component
+ * Fullscreen viewer for exploring a version snapshot
+ * @param {Object} props - Component props
+ * @param {Object} props.doc - Document to display
+ * @param {Function} props.onClose - Handler for closing the viewer
+ * @param {Function|null} props.onPrev - Handler for navigating to newer version
+ * @param {Function|null} props.onNext - Handler for navigating to older version
+ * @param {boolean} [props.hasPrev=false] - Whether a newer version exists
+ * @param {boolean} [props.hasNext=false] - Whether an older version exists
+ * @param {boolean} [props.isLoading=false] - Whether snapshot is loading
+ * @param {Function|null} [props.onRestore=null] - Handler for restoring this version
+ * @param {boolean} [props.restoring=false] - Whether restore is in progress
+ * @param {boolean} [props.isDimmed=false] - Whether viewer should be dimmed (confirm modal open)
+ */

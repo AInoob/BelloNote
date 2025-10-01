@@ -1,3 +1,8 @@
+// ============================================================================
+// Outline Filters Hook
+// React hook for managing all outline filter state and handlers
+// ============================================================================
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   DEFAULT_STATUS_FILTER,
@@ -10,6 +15,11 @@ import {
 } from './filterPreferences.js'
 import { parseTagInput } from './tagUtils.js'
 
+/**
+ * Custom hook for managing outline filter state
+ * Handles status filters, visibility toggles, and tag filters
+ * @returns {Object} Filter state, setters, refs, and handlers
+ */
 export function useOutlineFilters() {
   const [showFuture, setShowFuture] = useState(() => loadFutureVisible())
   const [showSoon, setShowSoon] = useState(() => loadSoonVisible())
@@ -19,18 +29,31 @@ export function useOutlineFilters() {
   const [includeTagInput, setIncludeTagInput] = useState('')
   const [excludeTagInput, setExcludeTagInput] = useState('')
 
+  // Refs for accessing current filter state in event handlers
   const statusFilterRef = useRef(statusFilter)
   const showFutureRef = useRef(showFuture)
   const showSoonRef = useRef(showSoon)
   const showArchivedRef = useRef(showArchived)
   const tagFiltersRef = useRef(tagFilters)
 
+  // Keep refs in sync with state
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
   useEffect(() => { showFutureRef.current = showFuture }, [showFuture])
   useEffect(() => { showSoonRef.current = showSoon }, [showSoon])
   useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
   useEffect(() => { tagFiltersRef.current = tagFilters }, [tagFilters])
 
+  // ============================================================================
+  // Tag Filter Management
+  // ============================================================================
+
+  /**
+   * Adds a tag to the include or exclude filter list
+   * Removes tag from opposite list if present
+   * @param {string} mode - 'include' or 'exclude'
+   * @param {string} value - Tag value to add
+   * @returns {boolean} True if tag was added
+   */
   const addTagFilter = useCallback((mode, value) => {
     const parsed = parseTagInput(value)
     if (!parsed) return false
@@ -57,6 +80,12 @@ export function useOutlineFilters() {
     return added
   }, [])
 
+  /**
+   * Removes a tag from the include or exclude filter list
+   * @param {string} mode - 'include' or 'exclude'
+   * @param {string} tag - Canonical tag to remove
+   * @returns {boolean} True if tag was removed
+   */
   const removeTagFilter = useCallback((mode, tag) => {
     const canonical = typeof tag === 'string' ? tag.toLowerCase() : ''
     if (!canonical) return false
@@ -77,6 +106,10 @@ export function useOutlineFilters() {
     return removed
   }, [])
 
+  /**
+   * Clears all tag filters (both include and exclude)
+   * Also clears input field values
+   */
   const clearTagFilters = useCallback(() => {
     setTagFilters((prev) => {
       const include = Array.isArray(prev?.include) ? prev.include : []
@@ -88,13 +121,29 @@ export function useOutlineFilters() {
     setExcludeTagInput('')
   }, [])
 
+  // ============================================================================
+  // Tag Input Handlers
+  // ============================================================================
+
+  /**
+   * Creates onChange handler for tag filter input
+   * @param {string} mode - 'include' or 'exclude'
+   * @returns {Function} Event handler
+   */
   const handleTagInputChange = useCallback((mode) => (event) => {
     const value = event.target.value
     if (mode === 'include') setIncludeTagInput(value)
     else setExcludeTagInput(value)
   }, [])
 
+  /**
+   * Creates onKeyDown handler for tag filter input
+   * Commits tag on Enter/Tab/comma/space, removes last tag on Backspace when empty
+   * @param {string} mode - 'include' or 'exclude'
+   * @returns {Function} Event handler
+   */
   const handleTagInputKeyDown = useCallback((mode) => (event) => {
+    // Commit current input to tag list on these keys
     const commitKeys = ['Enter', 'Tab', ',', ' ']
     if (commitKeys.includes(event.key)) {
       const value = event.currentTarget.value
@@ -109,6 +158,7 @@ export function useOutlineFilters() {
       return
     }
 
+    // Remove last tag on backspace when input is empty
     if (event.key === 'Backspace' && !event.currentTarget.value) {
       const current = tagFiltersRef.current || DEFAULT_TAG_FILTER
       const list = Array.isArray(current[mode]) ? current[mode] : []
@@ -121,6 +171,12 @@ export function useOutlineFilters() {
     }
   }, [addTagFilter, removeTagFilter])
 
+  /**
+   * Creates onBlur handler for tag filter input
+   * Commits any remaining input value as a tag
+   * @param {string} mode - 'include' or 'exclude'
+   * @returns {Function} Event handler
+   */
   const handleTagInputBlur = useCallback((mode) => (event) => {
     const value = event.currentTarget.value
     const trimmed = value.trim()

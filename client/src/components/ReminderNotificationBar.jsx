@@ -4,6 +4,21 @@ import { useReminders } from '../context/ReminderContext.jsx'
 import { describeTimeUntil } from '../utils/reminderTokens.js'
 import { formatReminderAbsolute, isReminderDue } from '../utils/reminders.js'
 
+// ============================================================================
+// Reminder Notification Bar Component
+// Shows a banner for due/overdue reminders with action buttons
+// ============================================================================
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Builds a default datetime moment for a reminder
+ * Uses existing remindAt or defaults to 30 minutes from now
+ * @param {Object} reminder - Reminder object
+ * @returns {dayjs.Dayjs} Default datetime moment
+ */
 function buildDefaultMoment(reminder) {
   if (reminder?.remindAt) {
     const parsed = dayjs(reminder.remindAt)
@@ -12,12 +27,25 @@ function buildDefaultMoment(reminder) {
   return dayjs().add(30, 'minute')
 }
 
+// ============================================================================
+// Main Component
+// ============================================================================
+
+/**
+ * ReminderNotificationBar Component
+ * Displays a banner with pending reminders and actions
+ * @param {Object} props - Component props
+ * @param {boolean} props.visible - Whether the bar should be visible
+ * @param {Function} props.onNavigateOutline - Callback to navigate to task in outline
+ */
 export function ReminderNotificationBar({ visible, onNavigateOutline }) {
+  // Context and state
   const { pendingReminders, dismissReminder, completeReminder, scheduleReminder } = useReminders()
   const [customEditingId, setCustomEditingId] = useState(null)
   const [customDateTime, setCustomDateTime] = useState('')
   const [customError, setCustomError] = useState('')
 
+  // Debug logging for pending reminders
   useEffect(() => {
     if (typeof console !== 'undefined') {
       console.log(
@@ -32,6 +60,7 @@ export function ReminderNotificationBar({ visible, onNavigateOutline }) {
     }
   }, [pendingReminders])
 
+  // Custom datetime picker handlers
   const resetCustomState = useCallback(() => {
     setCustomEditingId(null)
     setCustomDateTime('')
@@ -49,16 +78,22 @@ export function ReminderNotificationBar({ visible, onNavigateOutline }) {
   const handleCustomSubmit = useCallback(async (event, reminder) => {
     event.preventDefault()
     if (!reminder?.taskId) return
+
+    // Validate datetime input
     if (!customDateTime) {
       setCustomError('Select a date and time')
       return
     }
+
     let combined = dayjs(customDateTime)
     if (!combined.isValid()) {
       setCustomError('Pick a valid date and time')
       return
     }
+
+    // Normalize to zero seconds/milliseconds
     combined = combined.second(0).millisecond(0)
+
     try {
       await scheduleReminder({
         taskId: reminder.taskId,
@@ -72,15 +107,24 @@ export function ReminderNotificationBar({ visible, onNavigateOutline }) {
     }
   }, [customDateTime, resetCustomState, scheduleReminder])
 
+  // Quick reschedule actions (+10m, +30m, etc.)
   const reschedule = useCallback(async (reminder, minutes) => {
     if (!reminder?.taskId) return
+
     try {
-      const remindAt = dayjs().add(minutes, 'minute').second(0).millisecond(0).toISOString()
+      const remindAt = dayjs()
+        .add(minutes, 'minute')
+        .second(0)
+        .millisecond(0)
+        .toISOString()
+
       await scheduleReminder({
         taskId: reminder.taskId,
         remindAt,
         message: reminder.message || undefined
       })
+
+      // Close custom picker if it's open for this reminder
       if (customEditingId === String(reminder?.taskId ?? reminder?.id ?? '')) {
         resetCustomState()
       }
@@ -89,6 +133,7 @@ export function ReminderNotificationBar({ visible, onNavigateOutline }) {
     }
   }, [customEditingId, resetCustomState, scheduleReminder])
 
+  // Navigation handlers
   const openInOutline = useCallback((reminder) => {
     if (!reminder?.taskId) return
     onNavigateOutline?.({
@@ -105,12 +150,14 @@ export function ReminderNotificationBar({ visible, onNavigateOutline }) {
     }
   }, [openInOutline])
 
+  // Compute display labels for each reminder
   const remindersWithLabels = useMemo(() => {
     return pendingReminders.map((reminder) => {
       const status = reminder?.status || 'incomplete'
       const due = isReminderDue(reminder)
       const relative = describeTimeUntil(reminder)
 
+      // Determine relative label based on status
       let relativeLabel = 'Set reminder time'
       if (status === 'dismissed') {
         relativeLabel = 'Reminder dismissed'
@@ -131,6 +178,7 @@ export function ReminderNotificationBar({ visible, onNavigateOutline }) {
     })
   }, [pendingReminders])
 
+  // Don't render if not visible
   if (!visible) return null
 
   return (

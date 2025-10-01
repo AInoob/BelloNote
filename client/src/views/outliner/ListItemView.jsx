@@ -1,70 +1,45 @@
-import React, {
-  useCallback,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState
-} from 'react'
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { NodeViewWrapper, NodeViewContent } from '@tiptap/react'
+import { TextSelection, NodeSelection } from 'prosemirror-state'
 import dayjs from 'dayjs'
-import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
-import ListItem from '@tiptap/extension-list-item'
-import { NodeSelection, TextSelection } from 'prosemirror-state'
-import { STATUS_EMPTY, STATUS_ICON, STATUS_ORDER } from './constants.js'
-import { FocusContext, focusContextDefaults } from './FocusContext.js'
-import { loadCollapsedSetForRoot, saveCollapsedSetForRoot } from './collapsedState.js'
 import {
-  computeReminderDisplay,
+  focusContextDefaults,
+  FocusContext,
+  loadCollapsedSetForRoot,
+  saveCollapsedSetForRoot,
+  gatherOwnListItemText
+} from './filterUtils.js'
+import {
+  findListItemDepth,
+  runSplitListItemWithSelection,
+  applySplitStatusAdjustments
+} from './listItemHelpers.js'
+import {
   parseReminderTokenFromText,
   reminderIsDue,
-  stripReminderDisplayBreaks
+  computeReminderDisplay
 } from '../../utils/reminderTokens.js'
-import { safeReactNodeViewRenderer } from '../../tiptap/safeReactNodeViewRenderer.js'
-import {
-  applySplitStatusAdjustments,
-  findListItemDepth,
-  runSplitListItemWithSelection
-} from './listCommands.js'
 
-function gatherOwnListItemText(listItemNode) {
-  if (!listItemNode || listItemNode.type?.name !== 'listItem') return ''
-  const parts = []
-  const visit = (pmNode) => {
-    if (!pmNode) return
-    const typeName = pmNode.type?.name
-    if (typeName === 'bulletList' || typeName === 'orderedList') return
-    if (pmNode.isText && pmNode.text) {
-      parts.push(pmNode.text)
-      return
-    }
-    if (typeof pmNode.forEach === 'function') {
-      pmNode.forEach((child) => visit(child))
-    }
-  }
-  listItemNode.forEach((child) => {
-    const typeName = child.type?.name
-    if (typeName === 'bulletList' || typeName === 'orderedList') return
-    visit(child)
-  })
-  return stripReminderDisplayBreaks(parts.join(' '))
-}
+const STATUS_EMPTY = ''
+const STATUS_ORDER = ['todo', 'in-progress', 'done', STATUS_EMPTY]
+const STATUS_ICON = { [STATUS_EMPTY]: '', 'todo': 'Ë', 'in-progress': 'Ð', 'done': '' }
 
-function ListItemView({
-  node,
-  updateAttributes,
-  editor,
-  getPos,
-  readOnly = false,
-  draggingState,
-  allowStatusToggleInReadOnly = false,
-  onStatusToggle = null,
-  reminderActionsEnabled: reminderActionsEnabledProp = false
-}) {
+export function ListItemView(props) {
+  const {
+    node,
+    updateAttributes,
+    editor,
+    getPos,
+    readOnly = false,
+    draggingState,
+    allowStatusToggleInReadOnly = false,
+    onStatusToggle = null,
+    reminderActionsEnabled: reminderActionsEnabledProp = false
+  } = props
   const id = node.attrs.dataId
   const statusAttr = node.attrs.status ?? STATUS_EMPTY
   const collapsed = !!node.attrs.collapsed
-  const tags = Array.isArray(node.attrs.tags) ? node.attrs.tags.map((t) => String(t || '').toLowerCase()) : []
+  const tags = Array.isArray(node.attrs.tags) ? node.attrs.tags.map(t => String(t || '').toLowerCase()) : []
   const fallbackIdRef = useRef(id ? String(id) : `temp-${Math.random().toString(36).slice(2, 8)}`)
   const justDraggedRef = useRef(false)
   const draggingRef = draggingState || { current: null }
@@ -139,7 +114,8 @@ function ListItemView({
   }, [id, collapsed, updateAttributes, loadCollapsedSet, focusRootId])
 
   useEffect(() => {
-    if (!reminderControlsEnabled || !reminderMenuOpen) return
+    if (!reminderControlsEnabled) return
+    if (!reminderMenuOpen) return
     const handleClick = (event) => {
       if (reminderMenuRef.current && !reminderMenuRef.current.contains(event.target)) {
         setReminderMenuOpen(false)
@@ -168,12 +144,13 @@ function ListItemView({
     return li.getAttribute('data-id') || li.dataset?.id || (id ? String(id) : fallbackIdRef.current)
   }
 
+
   const ensurePersistentTaskId = useCallback(async () => {
     let currentId = readCurrentDomId()
     if (currentId && !String(currentId).startsWith('new-')) return currentId
     window.dispatchEvent(new CustomEvent('worklog:request-save'))
     for (let attempt = 0; attempt < 15; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      await new Promise(resolve => setTimeout(resolve, 200))
       currentId = readCurrentDomId()
       if (currentId && !String(currentId).startsWith('new-')) return currentId
     }
@@ -298,13 +275,13 @@ function ListItemView({
         })
       }
     } catch {}
-  }, [allowStatusToggleInReadOnly, editor, getPos, readOnly])
+  }, [editor, getPos, readOnly, allowStatusToggleInReadOnly])
 
   const cycle = (event) => {
     if (readOnly && !allowStatusToggleInReadOnly) return
     const li = rowRef.current?.closest('li.li-node')
     const liveStatus = li?.getAttribute('data-status')
-    const currentStatus = typeof liveStatus === 'string' ? liveStatus : node?.attrs?.status ?? STATUS_EMPTY
+    const currentStatus = typeof liveStatus === 'string' ? liveStatus : (node?.attrs?.status ?? STATUS_EMPTY)
     const currentIndex = STATUS_ORDER.indexOf(currentStatus)
     const idx = currentIndex >= 0 ? currentIndex : 0
     const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
@@ -333,6 +310,7 @@ function ListItemView({
       const view = editor.view
       const tr = view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos))
       view.dispatch(tr)
+      console.log('[drag] start', { id: currentId, pos })
       if (event.dataTransfer) {
         event.dataTransfer.setData('text/plain', ' ')
         event.dataTransfer.effectAllowed = 'move'
@@ -357,13 +335,17 @@ function ListItemView({
 
   const handleDragEnd = () => {
     if (readOnly) return
+    const last = draggingRef?.current
+    if (last) console.log('[drag] end', { id: last.id })
     if (draggingRef) draggingRef.current = null
     if (editor?.view) editor.view.dragging = null
+    // Defer resetting until after click events complete so we can detect drag+click
     setTimeout(() => { justDraggedRef.current = false }, 0)
   }
 
   const handleToggleClick = () => {
     if (justDraggedRef.current) {
+      // Skip toggling when the control was just used for dragging
       justDraggedRef.current = false
       return
     }
@@ -379,6 +361,7 @@ function ListItemView({
   const reminderButtonLabel = reminderSummary
     ? `Reminder options (${reminderSummary})`
     : 'Reminder options'
+
 
   useEffect(() => {
     if (!reminderControlsEnabled) {
@@ -410,9 +393,10 @@ function ListItemView({
           range.selectNodeContents(paragraph)
           const rects = range.getClientRects()
           if (rects.length > 0) {
-            firstRect = Array.from(rects).reduce((acc, rect) => (
-              !acc || rect.right > acc.right ? rect : acc
-            ), null)
+            firstRect = Array.from(rects).reduce((acc, rect) => {
+              if (!acc) return rect
+              return rect.right > acc.right ? rect : acc
+            }, null)
           } else {
             const rect = range.getBoundingClientRect()
             if (rect && rect.width) firstRect = rect
@@ -426,9 +410,10 @@ function ListItemView({
             range.selectNodeContents(fallbackCandidate)
             const rects = range.getClientRects()
             if (rects.length > 0) {
-              firstRect = Array.from(rects).reduce((acc, rect) => (
-                !acc || rect.right > acc.right ? rect : acc
-              ), null)
+              firstRect = Array.from(rects).reduce((acc, rect) => {
+                if (!acc) return rect
+                return rect.right > acc.right ? rect : acc
+              }, null)
             } else {
               const rect = range.getBoundingClientRect()
               if (rect && rect.width) firstRect = rect
@@ -448,7 +433,7 @@ function ListItemView({
       const maxOffset = Math.max(0, hostWidth - areaWidth - 4)
       const desiredOffset = Math.max(0, (textRight - mainRect.left) + spacing)
       const offset = Math.min(maxOffset, desiredOffset)
-      setReminderOffset((prev) => {
+      setReminderOffset(prev => {
         if (prev !== null && Math.abs(prev - offset) < 0.5) return prev
         return offset
       })
@@ -456,10 +441,13 @@ function ListItemView({
       const reserveGap = areaWidth
         ? Math.max(
             0,
-            Math.min(Math.ceil(Math.max(areaWidth + spacing, spacing + 6)), reserveCeiling)
+            Math.min(
+              Math.ceil(Math.max(areaWidth + spacing, spacing + 6)),
+              reserveCeiling
+            )
           )
         : 0
-      setReminderInlineGap((prev) => {
+      setReminderInlineGap(prev => {
         if (Math.abs(prev - reserveGap) < 0.5) return prev
         return reserveGap
       })
@@ -472,7 +460,7 @@ function ListItemView({
         const textMid = (textTop - mainRect.top) + textHeight / 2
         verticalOffset = Math.max(0, textMid - areaHeight / 2)
       }
-      setReminderTop((prev) => {
+      setReminderTop(prev => {
         if (Math.abs(prev - verticalOffset) < 0.5) return prev
         return verticalOffset
       })
@@ -484,9 +472,7 @@ function ListItemView({
     if (reminderAreaRef.current) resizeObserver.observe(reminderAreaRef.current)
     const contentEl = rowRef.current?.querySelector(':scope > .li-main .li-content')
     const mutationObserver = contentEl ? new MutationObserver(() => measure()) : null
-    if (contentEl && mutationObserver) {
-      mutationObserver.observe(contentEl, { childList: true, subtree: true, characterData: true })
-    }
+    if (contentEl && mutationObserver) mutationObserver.observe(contentEl, { childList: true, subtree: true, characterData: true })
     window.addEventListener('resize', measure)
     return () => {
       resizeObserver.disconnect()
@@ -521,8 +507,8 @@ function ListItemView({
           onDragStart={readOnly ? undefined : handleDragStart}
           type="button"
         >
-          <span className="caret-arrow" aria-hidden>{collapsed ? 'â–¸' : 'â–¾'}</span>
-          <span className="caret-grip" aria-hidden>â‹®</span>
+          <span className="caret-arrow" aria-hidden>{collapsed ? '¸' : '¾'}</span>
+          <span className="caret-grip" aria-hidden>î</span>
         </button>
         <button
           className="status-chip inline"
@@ -531,7 +517,7 @@ function ListItemView({
           disabled={readOnly && !allowStatusToggleInReadOnly}
           onKeyDown={handleStatusKeyDown}
         >
-          {statusAttr === STATUS_EMPTY ? '' : (STATUS_ICON[statusAttr] ?? 'â—‹')}
+          {statusAttr === STATUS_EMPTY ? '' : (STATUS_ICON[statusAttr] ?? 'Ë')}
         </button>
         <div className="li-main">
           <NodeViewContent
@@ -544,23 +530,23 @@ function ListItemView({
               className={`li-reminder-area ${reminderOffset !== null ? 'floating' : ''} ${activeReminder ? 'has-reminder' : ''} ${reminderDue ? 'due' : ''} ${reminderDismissed ? 'dismissed' : ''}`}
               style={reminderOffset !== null ? { left: `${reminderOffset}px`, top: `${reminderTop}px` } : undefined}
               contentEditable={false}
-              onMouseDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             >
               <button
                 type="button"
                 className="reminder-toggle icon-only"
                 aria-label={reminderButtonLabel}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
                   setReminderError('')
                   setCustomMode(false)
                   setCustomDate(defaultCustomDate())
-                  setReminderMenuOpen((value) => !value)
+                  setReminderMenuOpen(v => !v)
                 }}
               >
-                <span aria-hidden>â‹®</span>
+                <span aria-hidden>î</span>
               </button>
               {reminderMenuOpen && (
                 <div className="reminder-menu" ref={reminderMenuRef}>
@@ -577,17 +563,17 @@ function ListItemView({
                       type="button"
                       className="btn small ghost"
                       onClick={() => {
-                        setCustomMode((value) => !value)
+                        setCustomMode(v => !v)
                         setReminderError('')
                         setCustomDate(defaultCustomDate())
                       }}
-                    >Customâ€¦</button>
+                    >Custom&</button>
                     {customMode && (
                       <form className="menu-custom" onSubmit={handleCustomSubmit}>
                         <input
                           type="datetime-local"
                           value={customDate}
-                          onChange={(event) => setCustomDate(event.target.value)}
+                          onChange={(e) => setCustomDate(e.target.value)}
                           required
                         />
                         <div className="menu-buttons">
@@ -621,41 +607,4 @@ function ListItemView({
       </div>
     </NodeViewWrapper>
   )
-}
-
-export function createTaskListItemExtension({
-  readOnly,
-  draggingState,
-  allowStatusToggleInReadOnly,
-  onStatusToggle,
-  reminderActionsEnabled
-}) {
-  return ListItem.extend({
-    name: 'listItem',
-    draggable: !readOnly,
-    selectable: true,
-    addAttributes() {
-      return {
-        dataId: { default: null },
-        status: { default: STATUS_EMPTY },
-        collapsed: { default: false },
-        archivedSelf: { default: false },
-        futureSelf: { default: false },
-        soonSelf: { default: false },
-        tags: { default: [] }
-      }
-    },
-    addNodeView() {
-      return safeReactNodeViewRenderer((props) => (
-        <ListItemView
-          {...props}
-          readOnly={readOnly}
-          draggingState={draggingState}
-          allowStatusToggleInReadOnly={allowStatusToggleInReadOnly}
-          onStatusToggle={onStatusToggle}
-          reminderActionsEnabled={reminderActionsEnabled}
-        />
-      ))
-    }
-  })
 }

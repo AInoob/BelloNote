@@ -1,3 +1,8 @@
+// ============================================================================
+// Reminder Token Inline Extension
+// TipTap extension for rendering reminder tokens as interactive chips
+// ============================================================================
+
 import { Extension } from '@tiptap/core'
 import { Plugin } from 'prosemirror-state'
 import { Decoration, DecorationSet } from 'prosemirror-view'
@@ -8,8 +13,23 @@ import {
   encodeReminderDisplayTokens
 } from '../utils/reminderTokens.js'
 
+// ============================================================================
+// Chip Creation
+// ============================================================================
+
+/**
+ * Creates an interactive reminder chip DOM element
+ * Displays reminder status and provides click interaction to open reminder menu
+ * @param {Object} params - Chip parameters
+ * @param {string} params.token - Raw reminder token string
+ * @param {Object} params.reminder - Parsed reminder object
+ * @param {string|number|null} params.taskId - Associated task ID
+ * @returns {HTMLElement} Configured reminder chip element
+ */
 function createReminderChip({ token, reminder, taskId }) {
   const display = computeReminderDisplay(reminder)
+
+  // Create chip element with appropriate styling
   const chip = document.createElement('span')
   chip.className = 'reminder-inline-chip'
   if (display.due) chip.classList.add('due')
@@ -22,6 +42,10 @@ function createReminderChip({ token, reminder, taskId }) {
   chip.dataset.reminderToken = token
   if (taskId != null) chip.dataset.reminderTaskId = String(taskId)
 
+  /**
+   * Activates the reminder by clicking the reminder toggle button in the list item
+   * Opens the reminder menu for the associated task
+   */
   const activate = (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -33,6 +57,7 @@ function createReminderChip({ token, reminder, taskId }) {
     if (typeof toggle.focus === 'function') toggle.focus()
   }
 
+  // Set up event listeners
   chip.addEventListener('click', activate)
   chip.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') activate(event)
@@ -45,10 +70,27 @@ function createReminderChip({ token, reminder, taskId }) {
   return chip
 }
 
+// ============================================================================
+// TipTap Extension Definition
+// ============================================================================
+
+/**
+ * ReminderTokenInline TipTap Extension
+ * Renders reminder tokens as interactive chips and manages display encoding
+ * Features:
+ * - Hides raw reminder tokens in the editor
+ * - Displays interactive reminder chips in their place
+ * - Auto-encodes display-only content with zero-width spaces
+ * - Extracts task ID from parent list item for chip interaction
+ */
 export const ReminderTokenInline = Extension.create({
   name: 'reminderTokenInline',
   addProseMirrorPlugins() {
     return [new Plugin({
+      /**
+       * Encodes reminder display tokens after document changes
+       * Wraps display-only content in zero-width spaces to prevent editing
+       */
       appendTransaction(transactions, oldState, newState) {
         if (!transactions.some(tr => tr.docChanged)) return null
         let tr = newState.tr
@@ -74,12 +116,18 @@ export const ReminderTokenInline = Extension.create({
         return null
       },
       props: {
+        /**
+         * Creates decorations for reminder tokens
+         * Hides raw tokens and displays chips in their place
+         */
         decorations: (state) => {
           const { doc } = state
           const decorations = []
           doc.descendants((node, pos) => {
             if (node.type?.name !== 'paragraph') return
             const $pos = state.doc.resolve(pos)
+
+            // Find parent list item's task ID
             let taskId = null
             for (let depth = $pos.depth; depth >= 0; depth -= 1) {
               const ancestor = $pos.node(depth)
@@ -89,6 +137,8 @@ export const ReminderTokenInline = Extension.create({
                 break
               }
             }
+
+            // Find and decorate reminder tokens
             node.forEach((child, childOffset) => {
               if (!child.isText) return
               const text = child.text || ''
@@ -99,10 +149,14 @@ export const ReminderTokenInline = Extension.create({
                 const reminder = parseReminderTokenFromText(raw)
                 const from = pos + 1 + childOffset + match.index
                 const to = from + raw.length
+
+                // Hide the raw token
                 decorations.push(Decoration.inline(from, to, {
                   class: 'reminder-token-hidden',
                   style: 'display: none;'
                 }))
+
+                // Display a chip in its place
                 if (reminder) {
                   const chip = () => createReminderChip({ token: raw, reminder, taskId })
                   const keyParts = [from, reminder.status || 'unknown', reminder.remindAt || '']

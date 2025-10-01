@@ -1,9 +1,23 @@
+// ============================================================================
+// Slash Commands Hook
+// React hook for managing slash command menu and command execution
+// ============================================================================
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
-import { TextSelection } from 'prosemirror-state'
-import { uploadImage, absoluteUrl } from '../../api.js'
 import { parseTagInput } from './tagUtils.js'
+import { createCommandExecutors } from './slashCommandExecutors.js'
+import { consumeSlashMarker as consumeMarker, cleanDanglingSlash as cleanSlash } from './slashMarkerHelpers.js'
 
+/**
+ * Custom hook for slash command functionality in the editor
+ * Manages command menu state, filtering, and execution
+ * @param {Object} params - Hook parameters
+ * @param {Editor} params.editor - TipTap editor instance
+ * @param {boolean} params.isReadOnly - Whether editor is in read-only mode
+ * @param {Function} params.pushDebug - Function to push debug messages
+ * @returns {Object} Slash command state, handlers, and refs
+ */
 export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashPos, setSlashPos] = useState({ x: 0, y: 0 })
@@ -19,13 +33,26 @@ export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
   const datePickerValueRef = useRef(dayjs().format('YYYY-MM-DD'))
   const datePickerCaretRef = useRef(null)
 
-  const normalizeImageSrc = useCallback((src) => absoluteUrl(src), [])
+  // ============================================================================
+  // Helper Functions
+  // ============================================================================
 
+  /**
+   * Updates the active command index in slash menu
+   * @param {number} idx - Index to set as active
+   */
   const updateSlashActive = useCallback((idx) => {
     slashSelectedRef.current = idx
     setSlashActiveIndex(idx)
   }, [])
 
+  /**
+   * Opens slash command menu at specified coordinates
+   * @param {Object} [options={}] - Options
+   * @param {number} options.x - X coordinate
+   * @param {number} options.y - Y coordinate
+   * @param {boolean} [options.preserveMarker=false] - Whether to preserve slash marker
+   */
   const openSlashAt = useCallback(({ x, y, preserveMarker = false } = {}) => {
     if (!preserveMarker) {
       slashMarkerRef.current = null
@@ -36,6 +63,11 @@ export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
     setSlashQuery('')
   }, [updateSlashActive])
 
+  /**
+   * Closes slash command menu and optionally restores cursor
+   * @param {Object} [options={}] - Options
+   * @param {boolean} [options.preserveMarker=false] - Whether to preserve slash marker
+   */
   const closeSlash = useCallback(({ preserveMarker = false } = {}) => {
     if (!preserveMarker) {
       const marker = slashMarkerRef.current
@@ -52,285 +84,55 @@ export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
     setSlashOpen(false)
   }, [editor, updateSlashActive])
 
+  // Wrapper functions for extracted helpers
   const consumeSlashMarker = useCallback(() => {
-    if (!editor) return null
-    const query = slashQueryRef.current
-    const { state } = editor
-    const { $from } = state.selection
-    const queryLength = query.length
-    const suffix = `/${query}`
-    let from = null
-    let to = null
-    let source = 'cursor'
-
-    if ($from.parent?.isTextblock) {
-      try {
-        const textBefore = $from.parent.textBetween(0, $from.parentOffset, '\uFFFC', '\uFFFC')
-        if (textBefore && textBefore.endsWith(suffix)) {
-          const startOffset = $from.parentOffset - suffix.length
-          if (startOffset >= 0) {
-            from = $from.start() + startOffset
-            to = from + suffix.length
-          }
-        }
-      } catch (err) {
-        pushDebug('popup: inspect textBefore failed', { error: err.message })
-      }
-    }
-
-    if (from === null) {
-      const marker = slashMarkerRef.current
-      if (!marker) {
-        pushDebug('popup: no slash marker to consume')
-        setSlashQuery('')
-        return null
-      }
-      from = marker.pos
-      const docSize = state.doc.content.size
-      const probeEnd = Math.min(marker.pos + 1 + query.length, docSize)
-      const slice = state.doc.textBetween(marker.pos, probeEnd, '\n', '\n') || ''
-      if (queryLength && slice.startsWith('/' + query)) {
-        to = marker.pos + 1 + queryLength
-      } else {
-        to = marker.pos + 1
-      }
-      source = 'marker'
-    }
-
-    let removed = null
-    try {
-      pushDebug('popup: doc before slash removal', { doc: editor.getJSON() })
-      const ok = editor.chain().focus().deleteRange({ from, to }).run()
-      if (ok) {
-        removed = { from, to }
-        pushDebug('popup: removed slash marker', { from, to, source })
-      } else {
-        pushDebug('popup: remove slash marker skipped', { from, to, source })
-      }
-      pushDebug('popup: doc after slash removal', { doc: editor.getJSON() })
-    } catch (e) {
-      pushDebug('popup: remove slash marker failed', { error: e.message })
-    }
-
-    slashMarkerRef.current = null
-    setSlashQuery('')
-    return removed
+    return consumeMarker({
+      editor,
+      slashQueryRef,
+      slashMarkerRef,
+      setSlashQuery,
+      pushDebug
+    })
   }, [editor, pushDebug])
 
   const cleanDanglingSlash = useCallback((from) => {
-    if (!editor) return
-    const char = editor.state.doc.textBetween(from, from + 1, '\n', '\n')
-    if (char !== '/') return
-    try {
-      editor.chain().focus().deleteRange({ from, to: from + 1 }).run()
-      pushDebug('popup: cleaned dangling slash', { from })
-    } catch (e) {
-      pushDebug('popup: clean dangling slash failed', { error: e.message })
-    }
+    return cleanSlash(editor, pushDebug, from)
   }, [editor, pushDebug])
 
-  const insertBlockNodeInList = useCallback((nodeName, attrs = {}, options = {}) => {
-    if (!editor) return false
-    const { select = 'after' } = options
-    return editor.chain().focus().command(({ state, dispatch, tr, commands }) => {
-      const type = state.schema.nodes[nodeName]
-      if (!type) return false
-      const { $from } = state.selection
+  // ============================================================================
+  // Command Implementations
+  // ============================================================================
 
-      let listItemDepth = -1
-      for (let depth = $from.depth; depth >= 0; depth--) {
-        if ($from.node(depth).type.name === 'listItem') {
-          listItemDepth = depth
-          break
-        }
-      }
+  // Create command executors with all necessary dependencies
+  const commandExecutors = useMemo(() => createCommandExecutors({
+    editor,
+    consumeSlashMarker,
+    cleanDanglingSlash,
+    closeSlash,
+    pushDebug,
+    setDatePickerOpen,
+    datePickerValueRef,
+    datePickerCaretRef
+  }), [editor, consumeSlashMarker, cleanDanglingSlash, closeSlash, pushDebug])
 
-      if (listItemDepth === -1) {
-        return commands.insertContent({ type: nodeName, attrs })
-      }
+  const {
+    insertToday,
+    insertPick,
+    insertArchived,
+    insertFuture,
+    insertSoon,
+    insertTagFromSlash,
+    insertCode,
+    applyPickedDate,
+    insertImage,
+    insertDetails
+  } = commandExecutors
 
-      let contentNode = null
-      const defaultType = type.contentMatch?.defaultType
-      if (defaultType) {
-        if (defaultType.isText) {
-          contentNode = state.schema.text('')
-        } else {
-          contentNode = defaultType.create()
-        }
-      }
+  // ============================================================================
+  // Command Definitions
+  // ============================================================================
 
-      const newNode = type.create(attrs, contentNode ? [contentNode] : undefined)
-
-      let blockDepth = -1
-      for (let depth = $from.depth; depth > listItemDepth; depth--) {
-        const current = $from.node(depth)
-        if (current.isBlock) {
-          blockDepth = depth
-          break
-        }
-      }
-
-      const insertPos = blockDepth >= 0
-        ? $from.after(blockDepth)
-        : $from.end(listItemDepth)
-
-      tr.insert(insertPos, newNode)
-
-      if (!dispatch) return true
-
-      const targetPos = select === 'inside'
-        ? insertPos + 1
-        : insertPos + newNode.nodeSize
-
-      try {
-        tr.setSelection(TextSelection.near(tr.doc.resolve(targetPos), 1))
-      } catch (err) {
-        try {
-          tr.setSelection(TextSelection.create(tr.doc, targetPos))
-        } catch {
-          tr.setSelection(TextSelection.near(tr.doc.resolve(tr.doc.content.size), -1))
-        }
-      }
-
-      dispatch(tr.scrollIntoView())
-      pushDebug('insert block node', {
-        nodeName,
-        insertPos,
-        select,
-        listItemDepth,
-        blockDepth,
-        from: $from.pos
-      })
-      return true
-    }).run()
-  }, [editor, pushDebug])
-
-  const insertToday = useCallback(() => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor?.chain().focus().insertContent(' @' + dayjs().format('YYYY-MM-DD')).run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert date today')
-  }, [cleanDanglingSlash, closeSlash, consumeSlashMarker, editor, pushDebug])
-
-  const insertPick = useCallback(() => {
-    const today = dayjs().format('YYYY-MM-DD')
-    datePickerValueRef.current = today
-    const selFrom = editor?.state?.selection?.from ?? null
-    datePickerCaretRef.current = selFrom
-
-    setDatePickerOpen(true)
-    closeSlash({ preserveMarker: true })
-  }, [closeSlash, editor])
-
-  const insertTagged = useCallback((tag) => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor?.chain().focus().insertContent(` @${tag}`).run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug(`insert ${tag} tag`)
-  }, [cleanDanglingSlash, closeSlash, consumeSlashMarker, editor, pushDebug])
-
-  const insertArchived = useCallback(() => insertTagged('archived'), [insertTagged])
-  const insertFuture = useCallback(() => insertTagged('future'), [insertTagged])
-  const insertSoon = useCallback(() => insertTagged('soon'), [insertTagged])
-
-  const insertTagFromSlash = useCallback((tagInfo) => {
-    if (!tagInfo) return
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    let insertion = `#${tagInfo.display}`
-    try {
-      const { doc } = editor?.state || {}
-      const pos = caretPos ?? 0
-      if (doc && pos > 0) {
-        const prevChar = doc.textBetween(pos - 1, pos, '\n', '\n') || ''
-        if (prevChar && !/\s/.test(prevChar)) insertion = ' ' + insertion
-      }
-    } catch {}
-    editor?.chain().focus().insertContent(insertion).run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert tag', { tag: tagInfo.canonical })
-  }, [cleanDanglingSlash, closeSlash, consumeSlashMarker, editor, pushDebug])
-
-  const insertCode = useCallback(() => {
-    const removed = consumeSlashMarker()
-    const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    const inserted = insertBlockNodeInList('codeBlock', {}, { select: 'inside' })
-    if (inserted) {
-      pushDebug('doc after code insert', { doc: editor.getJSON() })
-    } else {
-      pushDebug('insert code block fallback')
-      editor.chain().focus().insertContent({ type: 'codeBlock' }).run()
-    }
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert code block')
-  }, [cleanDanglingSlash, closeSlash, consumeSlashMarker, editor, insertBlockNodeInList, pushDebug])
-
-  const applyPickedDate = useCallback(() => {
-    const value = datePickerValueRef.current
-    setDatePickerOpen(false)
-    if (!value) return
-    const caretPos = datePickerCaretRef.current ?? editor?.state?.selection?.from ?? null
-    if (caretPos !== null) {
-      editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-    }
-    editor?.chain().focus().insertContent(' @' + value).run()
-    if (slashMarkerRef.current?.pos != null) cleanDanglingSlash(slashMarkerRef.current.pos)
-    pushDebug('insert date picked', { value })
-  }, [cleanDanglingSlash, editor, pushDebug])
-
-  const insertImage = useCallback(() => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*'
-    closeSlash({ preserveMarker: true })
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) return
-      const removed = consumeSlashMarker()
-      const result = await uploadImage(file)
-      const caretPos = removed?.from ?? editor?.state?.selection?.from ?? null
-      if (caretPos !== null) {
-        editor?.commands?.setTextSelection({ from: caretPos, to: caretPos })
-      }
-      const normalized = normalizeImageSrc(result.url)
-      const attrs = { src: normalized }
-      if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
-      if (result?.id) attrs['data-file-id'] = result.id
-      editor?.chain().focus().setImage(attrs).run()
-      if (removed) cleanDanglingSlash(removed.from)
-      pushDebug('insert image', { url: normalized, id: result?.id })
-      closeSlash()
-    }
-    input.click()
-  }, [cleanDanglingSlash, closeSlash, consumeSlashMarker, editor, normalizeImageSrc, pushDebug])
-
-  const insertDetails = useCallback(() => {
-    const removed = consumeSlashMarker()
-    const inserted = insertBlockNodeInList('detailsBlock')
-    if (!inserted) editor?.chain().focus().insertContent({ type: 'detailsBlock' }).run()
-    if (removed) cleanDanglingSlash(removed.from)
-    closeSlash()
-    pushDebug('insert details block')
-  }, [cleanDanglingSlash, closeSlash, consumeSlashMarker, editor, insertBlockNodeInList, pushDebug])
-
+  // Base static commands available in slash menu
   const baseSlashCommands = useMemo(() => ([
     { id: 'today', label: 'Date worked on (today)', hint: 'Insert @YYYY-MM-DD for today', keywords: ['today', 'date', 'now'], run: insertToday },
     { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },

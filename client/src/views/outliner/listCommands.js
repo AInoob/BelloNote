@@ -4,6 +4,20 @@ import { ReplaceAroundStep } from 'prosemirror-transform'
 import { splitListItem } from 'prosemirror-schema-list'
 import { STATUS_EMPTY } from './constants.js'
 
+// ============================================================================
+// List Command Utilities
+// ProseMirror commands for list manipulation (indent, split, etc.)
+// ============================================================================
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Finds the depth of the nearest list item ancestor
+ * @param {ResolvedPos} $pos - Resolved position in document
+ * @returns {number} Depth of list item, or -1 if not found
+ */
 export function findListItemDepth($pos) {
   if (!$pos) return -1
   for (let depth = $pos.depth; depth >= 0; depth -= 1) {
@@ -12,11 +26,19 @@ export function findListItemDepth($pos) {
   return -1
 }
 
+/**
+ * Runs indent/outdent command on list items
+ * @param {Editor} editor - TipTap editor instance
+ * @param {string} direction - 'lift' to outdent, 'sink' to indent
+ * @param {Function} focusEmptyCallback - Unused, kept for API compatibility
+ * @returns {boolean} True if command succeeded
+ */
 export function runListIndentCommand(editor, direction, focusEmptyCallback) {
   if (!editor) return false
   const { state, view } = editor
   if (!view) return false
 
+  // Handle lift/outdent
   if (direction === 'lift') {
     const lifted = editor.chain().focus().liftListItem('listItem').run()
     if (lifted) {
@@ -28,17 +50,22 @@ export function runListIndentCommand(editor, direction, focusEmptyCallback) {
     return lifted
   }
 
+  // Handle sink/indent
   const listItemType = state.schema.nodes.listItem
   if (!listItemType) return false
+
   const { $from, $to } = state.selection
   const range = $from.blockRange($to, (node) => node.childCount > 0 && node.firstChild?.type === listItemType)
   if (!range) return false
+
   const startIndex = range.startIndex
   if (startIndex === 0) return false
+
   const parent = range.parent
   const nodeBefore = parent.child(startIndex - 1)
   if (nodeBefore.type !== listItemType) return false
 
+  // Check if previous sibling already has nested list
   const nestedBefore = nodeBefore.lastChild && nodeBefore.lastChild.type === parent.type
   const inner = Fragment.from(nestedBefore ? listItemType.create() : null)
   const slice = new Slice(
@@ -48,41 +75,72 @@ export function runListIndentCommand(editor, direction, focusEmptyCallback) {
     nestedBefore ? 3 : 1,
     0
   )
+
   const before = range.start
   const after = range.end
   const originalFrom = state.selection.from
+
   const tr = state.tr
   tr.step(new ReplaceAroundStep(before - (nestedBefore ? 3 : 1), after, before, after, slice, 1, true))
 
+  // Restore selection
   const mapped = tr.mapping.map(originalFrom, 1)
   const nextSelection = TextSelection.near(tr.doc.resolve(mapped))
   tr.setSelection(nextSelection).scrollIntoView()
+
   view.dispatch(tr)
+
   // focusEmptyCallback intentionally unused; keeping signature for future adjustments
   view.focus()
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => view.focus())
   }
+
   return true
 }
 
+/**
+ * Gets the document position of a child node within a parent
+ * @param {Node} parentNode - Parent ProseMirror node
+ * @param {number} parentPos - Document position of parent
+ * @param {number} childIndex - Index of child within parent
+ * @returns {number|null} Document position of child, or null if invalid
+ */
 export function positionOfListChild(parentNode, parentPos, childIndex) {
   if (!parentNode || typeof parentPos !== 'number') return null
   if (childIndex < 0 || childIndex >= parentNode.childCount) return null
+
   let pos = parentPos + 1
   for (let i = 0; i < parentNode.childCount; i += 1) {
     if (i === childIndex) return pos
     pos += parentNode.child(i).nodeSize
   }
+
   return null
 }
 
+// ============================================================================
+// List Splitting
+// ============================================================================
+
+/**
+ * Splits a list item, handling nested lists specially
+ * When splitting, moves nested lists to the previous sibling
+ * @param {Editor} editor - TipTap editor instance
+ * @param {Object} [options={}] - Split options
+ * @param {boolean} [options.splitAtStart] - Whether splitting at start of item
+ * @returns {boolean} True if split succeeded
+ */
 export function runSplitListItemWithSelection(editor, options = {}) {
   if (!editor) return false
+
   const listItemType = editor.schema.nodes.listItem
   const bulletListType = editor.schema.nodes.bulletList
   if (!listItemType) return false
+
+  // Debug tracking
   if (typeof window !== 'undefined') window.__WL_LAST_SPLIT = { reason: 'start' }
+
   const { state, view } = editor
   const { selection } = state
   const { $from } = selection
@@ -170,10 +228,23 @@ export function runSplitListItemWithSelection(editor, options = {}) {
   return true
 }
 
+// ============================================================================
+// Status Adjustments
+// ============================================================================
+
+/**
+ * Applies status/attribute adjustments after splitting a list item
+ * Clears status on new item, restores attributes on original item
+ * @param {Editor} editor - TipTap editor instance
+ * @param {Object} meta - Metadata from split operation
+ * @returns {Object|null} Positions of items, or null if failed
+ */
 export function applySplitStatusAdjustments(editor, meta) {
   if (!editor || !meta) return null
+
   const { parentPos, originalIndex, newIndex, originalAttrs = {} } = meta
-  const { state, view } = editor
+  const { state, view} = editor
+
   if (typeof console !== 'undefined') console.log('[split-adjust] invoked', meta)
   const parentNode = typeof parentPos === 'number' ? state.doc.nodeAt(parentPos) : null
   if (!parentNode) {
@@ -235,11 +306,24 @@ export function applySplitStatusAdjustments(editor, meta) {
   return { newItemPos, originalItemPos }
 }
 
+// ============================================================================
+// Sibling Promotion
+// ============================================================================
+
+/**
+ * Promotes a split sibling to become a child of the original item
+ * Used when Tab is pressed after Enter to create a nested child
+ * @param {Editor} editor - TipTap editor instance
+ * @param {Object} context - Context with parentPos, indices, and node types
+ * @returns {boolean} True if promotion succeeded
+ */
 export function promoteSplitSiblingToChild(editor, context) {
   if (!editor || !context) return false
+
   const { parentPos, originalIndex, newIndex, listItemType, bulletListType, paragraphType } = context
   const { state, view } = editor
   const parentNode = typeof parentPos === 'number' ? state.doc.nodeAt(parentPos) : null
+
   if (!parentNode || !listItemType || !bulletListType || !paragraphType) return false
   if (originalIndex < 0 || originalIndex >= parentNode.childCount) return false
   if (newIndex < 0 || newIndex >= parentNode.childCount) return false

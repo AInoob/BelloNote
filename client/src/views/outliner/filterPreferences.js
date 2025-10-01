@@ -9,6 +9,15 @@ import {
 } from './constants.js'
 import { parseTagInput } from './tagUtils.js'
 
+// ============================================================================
+// Filter Preferences Management
+// Manages user filter preferences with localStorage persistence
+// ============================================================================
+
+// ============================================================================
+// Constants
+// ============================================================================
+
 export const DEFAULT_STATUS_FILTER = {
   none: true,
   todo: true,
@@ -16,6 +25,19 @@ export const DEFAULT_STATUS_FILTER = {
   done: true
 }
 
+export const DEFAULT_TAG_FILTER = {
+  include: [],
+  exclude: []
+}
+
+// ============================================================================
+// Status Filter
+// ============================================================================
+
+/**
+ * Loads status filter preferences from localStorage
+ * @returns {Object} Filter object with boolean flags for each status
+ */
 export function loadStatusFilter() {
   try {
     const raw = JSON.parse(localStorage.getItem(FILTER_STATUS_KEY) || 'null')
@@ -31,15 +53,29 @@ export function loadStatusFilter() {
   }
 }
 
+/**
+ * Saves status filter preferences to localStorage
+ * @param {Object} filter - Filter object with status visibility flags
+ */
 export function saveStatusFilter(filter) {
   try {
     localStorage.setItem(
       FILTER_STATUS_KEY,
       JSON.stringify({ ...DEFAULT_STATUS_FILTER, ...(filter || {}) })
     )
-  } catch {}
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
+// ============================================================================
+// Visibility Toggles
+// ============================================================================
+
+/**
+ * Loads archived items visibility preference
+ * @returns {boolean} True if archived items should be visible
+ */
 export function loadArchivedVisible() {
   try {
     const value = localStorage.getItem(FILTER_ARCHIVED_KEY)
@@ -49,12 +85,22 @@ export function loadArchivedVisible() {
   }
 }
 
+/**
+ * Saves archived items visibility preference
+ * @param {boolean} value - Whether archived items should be visible
+ */
 export function saveArchivedVisible(value) {
   try {
     localStorage.setItem(FILTER_ARCHIVED_KEY, value ? '1' : '0')
-  } catch {}
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
+/**
+ * Loads future items visibility preference
+ * @returns {boolean} True if future items should be visible
+ */
 export function loadFutureVisible() {
   try {
     const value = localStorage.getItem(FILTER_FUTURE_KEY)
@@ -64,12 +110,22 @@ export function loadFutureVisible() {
   }
 }
 
+/**
+ * Saves future items visibility preference
+ * @param {boolean} value - Whether future items should be visible
+ */
 export function saveFutureVisible(value) {
   try {
     localStorage.setItem(FILTER_FUTURE_KEY, value ? '1' : '0')
-  } catch {}
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
+/**
+ * Loads "soon" items visibility preference
+ * @returns {boolean} True if "soon" items should be visible
+ */
 export function loadSoonVisible() {
   try {
     const value = localStorage.getItem(FILTER_SOON_KEY)
@@ -79,14 +135,27 @@ export function loadSoonVisible() {
   }
 }
 
+/**
+ * Saves "soon" items visibility preference
+ * @param {boolean} value - Whether "soon" items should be visible
+ */
 export function saveSoonVisible(value) {
   try {
     localStorage.setItem(FILTER_SOON_KEY, value ? '1' : '0')
-  } catch {}
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
-export const DEFAULT_TAG_FILTER = { include: [], exclude: [] }
+// ============================================================================
+// Tag Filters
+// ============================================================================
 
+/**
+ * Normalizes an array of tag strings into canonical form
+ * @param {Array<string>} input - Array of tag strings
+ * @returns {Array<string>} Sorted array of normalized tags
+ */
 function normalizeTagArray(input) {
   const set = new Set()
   if (Array.isArray(input)) {
@@ -99,6 +168,10 @@ function normalizeTagArray(input) {
   return Array.from(set).sort((a, b) => a.localeCompare(b))
 }
 
+/**
+ * Loads tag filter preferences from localStorage
+ * @returns {Object} Object with include and exclude tag arrays
+ */
 export function loadTagFilters() {
   if (typeof window === 'undefined') return { ...DEFAULT_TAG_FILTER }
   try {
@@ -106,6 +179,7 @@ export function loadTagFilters() {
     const excludeRaw = JSON.parse(localStorage.getItem(FILTER_TAG_EXCLUDE_KEY) || '[]')
     const include = normalizeTagArray(includeRaw)
     const includeSet = new Set(include)
+    // Exclude tags that are in include set (no duplicates)
     const exclude = normalizeTagArray(excludeRaw).filter((tag) => !includeSet.has(tag))
     return { include, exclude }
   } catch {
@@ -113,6 +187,10 @@ export function loadTagFilters() {
   }
 }
 
+/**
+ * Saves tag filter preferences to localStorage
+ * @param {Object} filters - Object with include and exclude tag arrays
+ */
 export function saveTagFilters(filters) {
   try {
     const include = normalizeTagArray(filters?.include)
@@ -120,9 +198,19 @@ export function saveTagFilters(filters) {
     const exclude = normalizeTagArray(filters?.exclude).filter((tag) => !includeSet.has(tag))
     localStorage.setItem(FILTER_TAG_INCLUDE_KEY, JSON.stringify(include))
     localStorage.setItem(FILTER_TAG_EXCLUDE_KEY, JSON.stringify(exclude))
-  } catch {}
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
+// ============================================================================
+// Scroll State
+// ============================================================================
+
+/**
+ * Loads saved scroll position from localStorage
+ * @returns {Object|null} Scroll state object with scrollY, or null if not found
+ */
 export function loadScrollState() {
   if (typeof window === 'undefined') return null
   try {

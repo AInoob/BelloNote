@@ -1,5 +1,21 @@
+// ============================================================================
+// Checkpoint Modal Component
+// Modal dialog for saving named snapshots/checkpoints
+// ============================================================================
+
 import React from 'react'
 
+/**
+ * CheckpointModal Component
+ * Displays a modal for creating named checkpoints with optional notes
+ * @param {Object} props - Component props
+ * @param {string} props.note - Current note text
+ * @param {Function} props.onChange - Handler for note text changes
+ * @param {Object} props.status - Status object with state and message
+ * @param {Function} props.onSubmit - Handler for form submission
+ * @param {Function} props.onClose - Handler for closing the modal
+ * @param {Function} props.onViewHistory - Handler for opening history panel
+ */
 export function CheckpointModal({ note, onChange, status, onSubmit, onClose, onViewHistory }) {
   return (
     <div className="overlay" onClick={onClose}>

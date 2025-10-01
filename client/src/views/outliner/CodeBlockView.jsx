@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react'
-import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
+import { NodeViewWrapper, NodeViewContent } from '@tiptap/react'
 
-export function CodeBlockView({ node }) {
+export function CodeBlockView(props) {
+  const { node, extension, updateAttributes, editor } = props
   const [copied, setCopied] = useState(false)
   const codeText = useMemo(() => node.textContent || '', [node])
   const languageLabel = useMemo(() => {
