@@ -1,7 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import dayjs from 'dayjs'
 import { getOutline } from '../api.js'
-import { parseReminderFromNodeContent, reminderIsDue, describeTimeUntil } from '../utils/reminderTokens.js'
+import { parseReminderFromNodeContent, reminderIsDue } from '../utils/reminderTokens.js'
+
+const SNAPSHOT_EVENT = 'worklog:outline-snapshot'
+const REMINDER_ACTION_EVENT = 'worklog:reminder-action'
+const DUE_REFRESH_INTERVAL_MS = 30_000
 
 const ReminderContext = createContext({
   loading: false,
@@ -17,8 +20,10 @@ const ReminderContext = createContext({
 
 function extractRemindersFromOutline(roots = []) {
   const reminders = []
+
   const visit = (node) => {
     if (!node || typeof node !== 'object') return
+
     const reminder = parseReminderFromNodeContent(node?.content)
     if (reminder && node.id != null) {
       reminders.push({
@@ -33,10 +38,76 @@ function extractRemindersFromOutline(roots = []) {
         due: reminderIsDue(reminder)
       })
     }
-    if (Array.isArray(node.children)) node.children.forEach(visit)
+
+    if (Array.isArray(node.children)) {
+      node.children.forEach(visit)
+    }
   }
-  (roots || []).forEach(visit)
+
+  ;(roots || []).forEach(visit)
   return reminders
+}
+
+function snapshotKey(reminders) {
+  return JSON.stringify(reminders.map((item) => `${item.taskId}|${item.status}|${item.remindAt}`))
+}
+
+function exposeToWindow(reminders, roots) {
+  if (typeof window === 'undefined') return
+  window.__WORKLOG_REMINDERS = reminders
+  window.__WORKLOG_REMINDER_OUTLINE = roots
+}
+
+function useDueRefresh(setReminders) {
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setReminders((previous) => previous.map((reminder) => {
+        const due = reminderIsDue(reminder)
+        if (due === reminder.due) return reminder
+        return { ...reminder, due }
+      }))
+    }, DUE_REFRESH_INTERVAL_MS)
+
+    return () => clearInterval(interval)
+  }, [setReminders])
+}
+
+function useSnapshotListener(updateFromOutline) {
+  useEffect(() => {
+    const handler = (event) => {
+      if (!Array.isArray(event?.detail?.outline)) return
+      updateFromOutline(event.detail.outline)
+    }
+
+    window.addEventListener(SNAPSHOT_EVENT, handler)
+    return () => window.removeEventListener(SNAPSHOT_EVENT, handler)
+  }, [updateFromOutline])
+}
+
+function useReminderActions() {
+  const dispatch = useCallback((action, payload) => {
+    if (typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent(REMINDER_ACTION_EVENT, { detail: { action, ...payload } }))
+  }, [])
+
+  const taskOnlyAction = useCallback((action) => (taskId) => {
+    if (!taskId) return Promise.resolve()
+    dispatch(action, { taskId: String(taskId) })
+    return Promise.resolve()
+  }, [dispatch])
+
+  const scheduleReminder = useCallback(({ taskId, remindAt, message }) => {
+    if (!taskId || !remindAt) return Promise.resolve()
+    dispatch('schedule', { taskId: String(taskId), remindAt, message })
+    return Promise.resolve()
+  }, [dispatch])
+
+  return {
+    scheduleReminder,
+    dismissReminder: taskOnlyAction('dismiss'),
+    completeReminder: taskOnlyAction('complete'),
+    removeReminder: taskOnlyAction('remove')
+  }
 }
 
 export function ReminderProvider({ children }) {
@@ -45,91 +116,53 @@ export function ReminderProvider({ children }) {
   const lastSnapshotRef = useRef('')
 
   const updateFromOutline = useCallback((roots) => {
-    const next = extractRemindersFromOutline(roots)
-    const key = JSON.stringify((next || []).map(item => `${item.taskId}|${item.status}|${item.remindAt}`))
-    if (lastSnapshotRef.current === key) return
-    lastSnapshotRef.current = key
+    const nextReminders = extractRemindersFromOutline(roots)
+    const nextKey = snapshotKey(nextReminders)
+    if (lastSnapshotRef.current === nextKey) return
+    lastSnapshotRef.current = nextKey
+
     if (typeof console !== 'undefined') {
-      console.log('[reminders] outline snapshot detected', { count: next.length, due: next.filter(item => reminderIsDue(item)).length })
+      console.log('[reminders] outline snapshot detected', {
+        count: nextReminders.length,
+        due: nextReminders.filter(reminderIsDue).length
+      })
     }
-    setReminders(next)
-    if (typeof window !== 'undefined') {
-      window.__WORKLOG_REMINDERS = next
-      window.__WORKLOG_REMINDER_OUTLINE = roots
-    }
+
+    setReminders(nextReminders)
+    exposeToWindow(nextReminders, roots)
   }, [])
 
   const refreshReminders = useCallback(async () => {
     try {
       const data = await getOutline()
       updateFromOutline(Array.isArray(data?.roots) ? data.roots : [])
-    } catch (err) {
-      console.error('[reminders] failed to load outline', err)
+    } catch (error) {
+      console.error('[reminders] failed to load outline', error)
     } finally {
       setLoading(false)
     }
   }, [updateFromOutline])
 
-  useEffect(() => { refreshReminders() }, [refreshReminders])
-
   useEffect(() => {
-    const interval = setInterval(() => {
-      setReminders(prev => prev.map(reminder => {
-        const due = reminderIsDue(reminder)
-        if (due === reminder.due) return reminder
-        return { ...reminder, due }
-      }))
-    }, 30_000)
-    return () => clearInterval(interval)
-  }, [])
+    refreshReminders()
+  }, [refreshReminders])
 
-  useEffect(() => {
-    const handler = (event) => {
-      const roots = event?.detail?.outline
-      if (Array.isArray(roots)) updateFromOutline(roots)
-    }
-    window.addEventListener('worklog:outline-snapshot', handler)
-    return () => window.removeEventListener('worklog:outline-snapshot', handler)
-  }, [updateFromOutline])
+  useDueRefresh(setReminders)
+  useSnapshotListener(updateFromOutline)
+
+  const { scheduleReminder, dismissReminder, completeReminder, removeReminder } = useReminderActions()
 
   const remindersByTask = useMemo(() => {
     const map = new Map()
-    reminders.forEach(reminder => {
-      if (reminder?.taskId) map.set(String(reminder.taskId), reminder)
+    reminders.forEach((reminder) => {
+      if (reminder?.taskId) {
+        map.set(String(reminder.taskId), reminder)
+      }
     })
     return map
   }, [reminders])
 
   const pendingReminders = useMemo(() => reminders.filter(reminderIsDue), [reminders])
-
-  const dispatch = useCallback((action, payload) => {
-    if (typeof window === 'undefined') return
-    window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail: { action, ...payload } }))
-  }, [])
-
-  const scheduleReminder = useCallback(({ taskId, remindAt, message }) => {
-    if (!taskId || !remindAt) return Promise.resolve()
-    dispatch('schedule', { taskId: String(taskId), remindAt, message })
-    return Promise.resolve()
-  }, [dispatch])
-
-  const dismissReminder = useCallback((taskId) => {
-    if (!taskId) return Promise.resolve()
-    dispatch('dismiss', { taskId: String(taskId) })
-    return Promise.resolve()
-  }, [dispatch])
-
-  const completeReminder = useCallback((taskId) => {
-    if (!taskId) return Promise.resolve()
-    dispatch('complete', { taskId: String(taskId) })
-    return Promise.resolve()
-  }, [dispatch])
-
-  const removeReminder = useCallback((taskId) => {
-    if (!taskId) return Promise.resolve()
-    dispatch('remove', { taskId: String(taskId) })
-    return Promise.resolve()
-  }, [dispatch])
 
   const value = useMemo(() => ({
     loading,

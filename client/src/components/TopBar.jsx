@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useCallback, useMemo } from 'react'
 import { formatTimestamp } from '../utils/formatTimestamp.js'
 
 const TABS = [
@@ -6,6 +6,14 @@ const TABS = [
   { id: 'timeline', label: 'Timeline' },
   { id: 'reminders', label: 'Reminders' }
 ]
+
+const DEFAULT_TAB_CLASS = 'btn'
+const ACTIVE_TAB_CLASS = 'btn active'
+
+function VersionStamp({ label, value, hideWhenEmpty = false }) {
+  if (hideWhenEmpty && !value) return null
+  return <span>{label} {formatTimestamp(value)}</span>
+}
 
 export function TopBar({
   activeTab,
@@ -19,12 +27,18 @@ export function TopBar({
   serverBuildTime,
   healthFetchedAt
 }) {
+  const handleTabSelect = useCallback((tabId) => {
+    onSelectTab?.(tabId)
+  }, [onSelectTab])
+
+  const debugLabel = useMemo(() => (showDebug ? 'Hide Debug' : 'Show Debug'), [showDebug])
+
   return (
     <div className="topbar">
       <div className="version-banner">
-        <span>Client built {formatTimestamp(clientBuildTime)}</span>
-        <span>Server built {formatTimestamp(serverBuildTime)}</span>
-        {healthFetchedAt && <span>Checked {formatTimestamp(healthFetchedAt)}</span>}
+        <VersionStamp label="Client built" value={clientBuildTime} />
+        <VersionStamp label="Server built" value={serverBuildTime} />
+        <VersionStamp label="Checked" value={healthFetchedAt} hideWhenEmpty />
       </div>
       <header>
         <h1>Daily Worklog</h1>
@@ -32,8 +46,8 @@ export function TopBar({
         {TABS.map((tab) => (
           <button
             key={tab.id}
-            className={`btn ${activeTab === tab.id ? 'active' : ''}`}
-            onClick={() => onSelectTab(tab.id)}
+            className={activeTab === tab.id ? ACTIVE_TAB_CLASS : DEFAULT_TAB_CLASS}
+            onClick={() => handleTabSelect(tab.id)}
           >
             {tab.label}
           </button>
@@ -41,7 +55,7 @@ export function TopBar({
         <div className="spacer" />
         <button className="btn" onClick={onOpenCheckpoint}>Checkpoint</button>
         <button className="btn" onClick={onShowHistory}>History</button>
-        <button className="btn" onClick={onToggleDebug}>{showDebug ? 'Hide' : 'Show'} Debug</button>
+        <button className="btn" onClick={onToggleDebug}>{debugLabel}</button>
         <div className="save-indicator">{statusText}</div>
       </header>
     </div>

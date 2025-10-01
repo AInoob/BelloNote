@@ -1,316 +1,332 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import OutlinerView from './OutlinerView.jsx'
-import { listHistory, getVersionDoc, diffVersion, restoreVersion } from '../api.js'
+import {
+  listHistory,
+  getVersionDoc,
+  diffVersion,
+  restoreVersion as restoreVersionApi
+} from '../api.js'
+
+const HISTORY_FETCH_LIMIT = 100
+const RESTORE_CONFIRM_MESSAGE = 'Restore this version? This will replace your current outline.'
 
 export default function HistoryModal({ onClose, onRestored }) {
-  const [items, setItems] = useState([])
-  const [selected, setSelected] = useState(null)
-  const [preview, setPreview] = useState(null)
-  const [diff, setDiff] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [restoring, setRestoring] = useState(false)
-  // Custom confirm modal state
-  const [confirming, setConfirming] = useState(false)
-  const [confirmMessage, setConfirmMessage] = useState('')
-  const pendingRestoreIdRef = useRef(null)
-  const [snapshotDoc, setSnapshotDoc] = useState(null)
-  const [snapshotVersionId, setSnapshotVersionId] = useState(null)
-  const [snapshotLoadingId, setSnapshotLoadingId] = useState(null)
-  const [collapsedDays, setCollapsedDays] = useState(new Set())
-  const snapshotRequestRef = useRef(0)
+  const history = useHistoryVersions(onRestored)
+  const grouped = useMemo(() => groupHistory(history.items), [history.items])
+  const { collapsedDays, toggleDay } = useCollapsedDays(grouped)
+  const versionIndexMap = useMemo(() => buildVersionIndexMap(history.items), [history.items])
 
-  useEffect(() => {
-    (async () => {
-      const rows = await listHistory(100, 0)
-      setItems(rows)
-      if (rows.length) select(rows[0])
-    })()
-  }, [])
+  const selectedIndex = useMemo(() => {
+    if (!history.selected) return -1
+    return versionIndexMap.get(history.selected.id) ?? -1
+  }, [history.selected, versionIndexMap])
 
-  async function select(it) {
-    setSelected(it)
-    setLoading(true)
-    try {
-      const doc = await getVersionDoc(it.id)
-      setPreview(doc.doc)
-      const d = await diffVersion(it.id, 'current')
-      setDiff(d)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const snapshot = useSnapshotManager({ items: history.items, versionIndexMap })
+  const confirmRestore = useRestoreConfirmation(history.restoreVersion)
 
-  async function doRestoreNow(versionId) {
-    if (!versionId) return
-    setRestoring(true)
-    try {
-      await restoreVersion(versionId)
-      onRestored && onRestored()
-    } finally {
-      setRestoring(false)
-    }
-  }
+  const handleSelect = useCallback((version) => {
+    history.selectVersion(version)
+  }, [history])
 
-  const grouped = useMemo(() => groupHistory(items), [items])
-  const hasItems = grouped.length > 0
-  const versionIndexMap = useMemo(() => {
-    const map = new Map()
-    items.forEach((it, index) => map.set(it.id, index))
-    return map
-  }, [items])
-  const selectedIndex = useMemo(() => (selected ? versionIndexMap.get(selected.id) ?? -1 : -1), [selected, versionIndexMap])
-  const totalVersions = items.length
-  const snapshotIndex = snapshotVersionId != null ? (versionIndexMap.get(snapshotVersionId) ?? null) : null
-  const isSnapshotLoading = snapshotLoadingId !== null
-  const hasNewerSnapshot = snapshotIndex !== null && snapshotIndex > 0
-  const hasOlderSnapshot = snapshotIndex !== null && snapshotIndex < totalVersions - 1
+  const handlePreview = useCallback((version) => {
+    const reuseDoc = history.selected?.id === version.id && history.preview ? history.preview : null
+    snapshot.openForVersion(version, reuseDoc)
+  }, [history.preview, history.selected?.id, snapshot])
 
-  useEffect(() => {
-    setCollapsedDays(prev => {
-      const next = new Set(prev)
-      grouped.forEach((day, index) => {
-        if (index === 0) {
-          next.delete(day.key)
-        } else if (!prev.has(day.key)) {
-          next.add(day.key)
-        }
-      })
-      return next
-    })
-  }, [grouped])
+  const handleRestoreSelected = useCallback(() => {
+    if (!history.selected) return
+    confirmRestore.open(history.selected.id, RESTORE_CONFIRM_MESSAGE)
+  }, [history.selected, confirmRestore])
 
-  const openSnapshotAtIndex = async (index, { reuseDoc = null } = {}) => {
-    if (index == null || index < 0 || index >= items.length) return
-    const target = items[index]
-    if (!target) return
-    const token = snapshotRequestRef.current + 1
-    snapshotRequestRef.current = token
-    if (reuseDoc) {
-      setSnapshotVersionId(target.id)
-      setSnapshotDoc(reuseDoc)
-      setSnapshotLoadingId(null)
-      return
-    }
-    setSnapshotLoadingId(target.id)
-    try {
-      const doc = await getVersionDoc(target.id)
-      if (snapshotRequestRef.current !== token) return
-      setSnapshotDoc(doc.doc)
-      setSnapshotVersionId(target.id)
-    } catch (err) {
-      if (snapshotRequestRef.current === token) console.error('[history] snapshot load failed', err)
-    } finally {
-      if (snapshotRequestRef.current === token) setSnapshotLoadingId(null)
-    }
-  }
-
-  const openSnapshot = (event, it) => {
-    event.stopPropagation()
-    const index = versionIndexMap.get(it.id)
-    if (typeof index !== 'number') return
-    const reuseDoc = selected?.id === it.id && preview ? preview : null
-    openSnapshotAtIndex(index, { reuseDoc })
-  }
-
-  const closeSnapshot = () => {
-    snapshotRequestRef.current += 1
-    setSnapshotDoc(null)
-    setSnapshotVersionId(null)
-    setSnapshotLoadingId(null)
-  }
-
-  const handleSnapshotNewer = () => {
-    if (!hasNewerSnapshot || snapshotIndex == null) return
-    openSnapshotAtIndex(snapshotIndex - 1)
-  }
-
-  const handleSnapshotOlder = () => {
-    if (!hasOlderSnapshot || snapshotIndex == null) return
-    openSnapshotAtIndex(snapshotIndex + 1)
-  }
+  const handleSnapshotRestore = useCallback(() => {
+    if (!snapshot.snapshotVersionId) return
+    const versionId = snapshot.snapshotVersionId
+    snapshot.close()
+    confirmRestore.open(versionId, RESTORE_CONFIRM_MESSAGE)
+  }, [snapshot, confirmRestore])
 
   return (
     <div className="overlay" style={{ zIndex: 900 }} onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="left">
-          <h2 style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-            <span style={{marginLeft:12}}>History</span>
-            <button className="btn" style={{marginRight:12}} onClick={onClose}>Close</button>
-          </h2>
-          <div className="meta" style={{padding:'0 12px 12px', fontSize:'.85rem'}}>
-            Autosave snapshots let you roll back mistakes. Manual checkpoints capture a named version instantly.
-          </div>
-          {!hasItems && !loading && (
-            <div className="history-empty">
-              <strong>No history yet.</strong>
-              <div className="meta">Make some edits or create a checkpoint to see past versions here.</div>
-            </div>
-          )}
-          {grouped.map(day => {
-            const collapsed = collapsedDays.has(day.key)
-            return (
-              <div className={`history-day ${collapsed ? 'collapsed' : ''}`} key={day.key}>
-                <button
-                  type="button"
-                  className="history-day-toggle"
-                  aria-expanded={!collapsed}
-                  onClick={() => setCollapsedDays(prev => {
-                    const next = new Set(prev)
-                    if (next.has(day.key)) next.delete(day.key)
-                    else next.add(day.key)
-                    return next
-                  })}
-                >
-                  <span className={`history-day-caret ${collapsed ? '' : 'open'}`} aria-hidden>▸</span>
-                  <span className="history-day-label">{day.label}</span>
-                  <span className="meta">{day.items.length} version{day.items.length === 1 ? '' : 's'}</span>
-                </button>
-                {!collapsed && (
-                  <div className="history-day-list">
-                    {day.items.map(it => (
-                      <div
-                        key={it.id}
-                        className={`history-item ${selected?.id===it.id ? 'active' : ''}`}
-                        onClick={() => select(it)}
-                      >
-                        <div>
-                          <div>v{it.id} · {formatTime(it.created_at)}</div>
-                          <div className="meta">{it.cause}{it.meta?.note ? ` · ${it.meta.note}` : ''}</div>
-                        </div>
-                        <div className="history-item-actions">
-                          <div className="meta">{versionMetaText(it)}</div>
-                          <button
-                            className="btn ghost xs"
-                            type="button"
-                            onClick={(event) => openSnapshot(event, it)}
-                            disabled={snapshotLoadingId === it.id}
-                          >
-                            {snapshotLoadingId === it.id ? 'Opening…' : 'Preview'}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-        <div className="right">
-          {!selected ? <div className="meta">Select a version…</div> : null}
-          {loading ? <div className="meta">Loading…</div> : null}
-          {selected && !loading && (
-            <>
-              <div style={{display:'flex', gap:8, alignItems:'center', marginBottom:8}}>
-                <div><strong>Version v{selected.id}</strong> · {new Date(selected.created_at + 'Z').toLocaleString()} · {selected.cause}</div>
-                <div className="spacer"></div>
-                <button
-                  className="btn ghost"
-                  onClick={() => {
-                    if (!preview || selectedIndex < 0) return
-                    openSnapshotAtIndex(selectedIndex, { reuseDoc: preview })
-                  }}
-                  disabled={!preview}
-                >
-                  View snapshot
-                </button>
-                <button
-                  className="btn"
-                  onClick={() => {
-                    if (!selected) return
-                    pendingRestoreIdRef.current = selected.id
-                    setConfirmMessage('Restore this version? This will replace your current outline.')
-                    setConfirming(true)
-                  }}
-                  disabled={restoring}
-                >{restoring ? 'Restoring…' : 'Restore'}</button>
-              </div>
-              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px'}}>
-                <div>
-                  <h3 style={{margin:'6px 0'}}>Diff vs current</h3>
-                  {diff ? (
-                    <div className="diff-list">
-                      <div>+ added: {diff.summary.added}</div>
-                      <div>- removed: {diff.summary.removed}</div>
-                      <div>~ modified: {diff.summary.modified}</div>
-                      <ul>
-                        {diff.added.slice(0,20).map(x => <li key={'a'+x.id}>+ {x.title}</li>)}
-                        {diff.removed.slice(0,20).map(x => <li key={'r'+x.id}>- {x.title}</li>)}
-                        {diff.modified.slice(0,20).map(x => <li key={'m'+x.id}>~ {x.title}</li>)}
-                      </ul>
-                    </div>
-                  ) : <div className="meta">No diff available.</div>}
-                </div>
-                <div>
-                  <h3 style={{margin:'6px 0'}}>Preview</h3>
-                  {preview ? (
-                    <div className="history-inline-preview">
-                      <OutlinerView
-                        key={`inline-${selected?.id ?? 'preview'}`}
-                        readOnly
-                        initialOutline={preview}
-                        showDebug={false}
-                        broadcastSnapshots={false}
-                        onSaveStateChange={() => {}}
-                      />
-                    </div>
-                  ) : <div className="meta">No preview</div>}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-      {snapshotDoc && !confirming && (
-        <SnapshotViewer
-          doc={snapshotDoc}
-          onClose={closeSnapshot}
-          onPrev={hasNewerSnapshot ? handleSnapshotNewer : null}
-          onNext={hasOlderSnapshot ? handleSnapshotOlder : null}
-          hasPrev={hasNewerSnapshot}
-          hasNext={hasOlderSnapshot}
-          isLoading={isSnapshotLoading}
-          onRestore={async () => {
-            if (!snapshotVersionId) return
-            pendingRestoreIdRef.current = snapshotVersionId
-            // Ensure snapshot overlay is closed so confirm sits on top and is clickable
-            closeSnapshot()
-            setConfirmMessage('Restore this version? This will replace your current outline.')
-            setConfirming(true)
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <HistorySidebar
+          grouped={grouped}
+          collapsedDays={collapsedDays}
+          onToggleDay={toggleDay}
+          selected={history.selected}
+          onSelectVersion={handleSelect}
+          onPreviewVersion={handlePreview}
+          snapshotLoadingId={snapshot.loadingVersionId}
+          hasItems={grouped.length > 0}
+          loading={history.loading}
+          onClose={onClose}
+        />
+        <HistoryDetails
+          selected={history.selected}
+          loading={history.loading}
+          preview={history.preview}
+          diff={history.diff}
+          selectedIndex={selectedIndex}
+          onViewSnapshot={(reuseDoc) => {
+            if (selectedIndex < 0) return
+            snapshot.openAtIndex(selectedIndex, { reuseDoc })
           }}
-          restoring={restoring}
-          isDimmed={confirming}
+          restoring={history.restoring}
+          onRequestRestore={handleRestoreSelected}
+        />
+      </div>
+      {snapshot.snapshotDoc && !confirmRestore.visible && (
+        <SnapshotViewer
+          doc={snapshot.snapshotDoc}
+          onClose={snapshot.close}
+          onPrev={snapshot.hasNewer ? snapshot.viewNewer : null}
+          onNext={snapshot.hasOlder ? snapshot.viewOlder : null}
+          hasPrev={snapshot.hasNewer}
+          hasNext={snapshot.hasOlder}
+          isLoading={snapshot.isLoading}
+          onRestore={handleSnapshotRestore}
+          restoring={history.restoring}
+          isDimmed={confirmRestore.visible}
         />
       )}
-      {confirming && (
-        <div className="overlay" style={{ zIndex: 99999, position: 'fixed', inset: 0, pointerEvents: 'auto' }} onClick={() => setConfirming(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3 style={{marginTop:0}}>Confirm restore</h3>
-            <div className="meta" style={{marginBottom:12}}>{confirmMessage || 'Are you sure?'}</div>
-            <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
-              <button className="btn ghost" type="button" onClick={() => setConfirming(false)}>Cancel</button>
-              <button
-                className="btn"
-                type="button"
-                onClick={async () => { const id = pendingRestoreIdRef.current; setConfirming(false); await doRestoreNow(id) }}
-                disabled={restoring}
-              >{restoring ? 'Restoring…' : 'Restore'}</button>
-            </div>
-          </div>
-        </div>
+      {confirmRestore.visible && (
+        <ConfirmRestoreDialog
+          message={confirmRestore.message}
+          restoring={history.restoring}
+          onCancel={confirmRestore.close}
+          onConfirm={confirmRestore.confirm}
+        />
       )}
-
     </div>
   )
 }
 
-function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext = false, isLoading = false, onRestore = null, restoring = false, isDimmed = false }) {
+function HistorySidebar({
+  grouped,
+  collapsedDays,
+  onToggleDay,
+  selected,
+  onSelectVersion,
+  onPreviewVersion,
+  snapshotLoadingId,
+  hasItems,
+  loading,
+  onClose
+}) {
+  return (
+    <div className="left">
+      <h2 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ marginLeft: 12 }}>History</span>
+        <button className="btn" style={{ marginRight: 12 }} onClick={onClose}>Close</button>
+      </h2>
+      <div className="meta" style={{ padding: '0 12px 12px', fontSize: '.85rem' }}>
+        Autosave snapshots let you roll back mistakes. Manual checkpoints capture a named version instantly.
+      </div>
+      {!hasItems && !loading && (
+        <div className="history-empty">
+          <strong>No history yet.</strong>
+          <div className="meta">Make some edits or create a checkpoint to see past versions here.</div>
+        </div>
+      )}
+      {grouped.map((day) => (
+        <HistoryDay
+          key={day.key}
+          day={day}
+          collapsed={collapsedDays.has(day.key)}
+          onToggle={() => onToggleDay(day.key)}
+          selectedId={selected?.id ?? null}
+          onSelectVersion={onSelectVersion}
+          onPreviewVersion={onPreviewVersion}
+          snapshotLoadingId={snapshotLoadingId}
+        />
+      ))}
+    </div>
+  )
+}
+
+function HistoryDay({
+  day,
+  collapsed,
+  onToggle,
+  selectedId,
+  onSelectVersion,
+  onPreviewVersion,
+  snapshotLoadingId
+}) {
+  return (
+    <div className={`history-day ${collapsed ? 'collapsed' : ''}`}>
+      <button
+        type="button"
+        className="history-day-toggle"
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+      >
+        <span className={`history-day-caret ${collapsed ? '' : 'open'}`} aria-hidden>▸</span>
+        <span className="history-day-label">{day.label}</span>
+        <span className="meta">{day.items.length} version{day.items.length === 1 ? '' : 's'}</span>
+      </button>
+      {!collapsed && (
+        <div className="history-day-list">
+          {day.items.map((version) => {
+            const isSelected = selectedId === version.id
+            const loading = snapshotLoadingId === version.id
+            return (
+              <div
+                key={version.id}
+                className={`history-item ${isSelected ? 'active' : ''}`}
+                onClick={() => onSelectVersion(version)}
+              >
+                <div>
+                  <div>v{version.id} · {formatTime(version.created_at)}</div>
+                  <div className="meta">{version.cause}{version.meta?.note ? ` · ${version.meta.note}` : ''}</div>
+                </div>
+                <div className="history-item-actions">
+                  <div className="meta">{versionMetaText(version)}</div>
+                  <button
+                    className="btn ghost xs"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onPreviewVersion(version)
+                    }}
+                    disabled={loading}
+                  >
+                    {loading ? 'Opening…' : 'Preview'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HistoryDetails({
+  selected,
+  loading,
+  preview,
+  diff,
+  selectedIndex,
+  onViewSnapshot,
+  restoring,
+  onRequestRestore
+}) {
+  if (!selected) {
+    return (
+      <div className="right">
+        <div className="meta">Select a version…</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="right">
+      {loading && <div className="meta">Loading…</div>}
+      {!loading && (
+        <>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+            <div><strong>Version v{selected.id}</strong> · {new Date(`${selected.created_at}Z`).toLocaleString()} · {selected.cause}</div>
+            <div className="spacer" />
+            <button
+              className="btn ghost"
+              onClick={() => onViewSnapshot(preview)}
+              disabled={!preview || selectedIndex < 0}
+            >
+              View snapshot
+            </button>
+            <button className="btn" onClick={onRequestRestore} disabled={restoring}>
+              {restoring ? 'Restoring…' : 'Restore'}
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <h3 style={{ margin: '6px 0' }}>Diff vs current</h3>
+              {diff ? <DiffSummary diff={diff} /> : <div className="meta">No diff available.</div>}
+            </div>
+            <div>
+              <h3 style={{ margin: '6px 0' }}>Preview</h3>
+              {preview ? (
+                <div className="history-inline-preview">
+                  <OutlinerView
+                    key={`inline-${selected.id}`}
+                    readOnly
+                    initialOutline={preview}
+                    showDebug={false}
+                    broadcastSnapshots={false}
+                    onSaveStateChange={() => {}}
+                  />
+                </div>
+              ) : <div className="meta">No preview</div>}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function DiffSummary({ diff }) {
+  return (
+    <div className="diff-list">
+      <div>+ added: {diff.summary.added}</div>
+      <div>- removed: {diff.summary.removed}</div>
+      <div>~ modified: {diff.summary.modified}</div>
+      <ul>
+        {diff.added.slice(0, 20).map((item) => <li key={`a${item.id}`}>+ {item.title}</li>)}
+        {diff.removed.slice(0, 20).map((item) => <li key={`r${item.id}`}>- {item.title}</li>)}
+        {diff.modified.slice(0, 20).map((item) => <li key={`m${item.id}`}>~ {item.title}</li>)}
+      </ul>
+    </div>
+  )
+}
+
+function ConfirmRestoreDialog({ message, restoring, onCancel, onConfirm }) {
+  return (
+    <div
+      className="overlay"
+      style={{ zIndex: 99999, position: 'fixed', inset: 0, pointerEvents: 'auto' }}
+      onClick={onCancel}
+    >
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <h3 style={{ marginTop: 0 }}>Confirm restore</h3>
+        <div className="meta" style={{ marginBottom: 12 }}>{message || 'Are you sure?'}</div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn ghost" type="button" onClick={onCancel}>Cancel</button>
+          <button className="btn" type="button" onClick={onConfirm} disabled={restoring}>
+            {restoring ? 'Restoring…' : 'Restore'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SnapshotViewer({
+  doc,
+  onClose,
+  onPrev,
+  onNext,
+  hasPrev = false,
+  hasNext = false,
+  isLoading = false,
+  onRestore = null,
+  restoring = false,
+  isDimmed = false
+}) {
   if (!doc) return null
   const prevDisabled = !hasPrev || typeof onPrev !== 'function' || isLoading
   const nextDisabled = !hasNext || typeof onNext !== 'function' || isLoading
+
   return (
-    <div className="snapshot-fullscreen" role="dialog" aria-modal="true" onClick={onClose} style={{ zIndex: 1000, position: 'fixed', inset: 0, pointerEvents: isDimmed ? 'none' : 'auto' }}>
-      <div className="snapshot-fullscreen-inner" onClick={e => e.stopPropagation()}>
+    <div
+      className="snapshot-fullscreen"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{ zIndex: 1000, position: 'fixed', inset: 0, pointerEvents: isDimmed ? 'none' : 'auto' }}
+    >
+      <div className="snapshot-fullscreen-inner" onClick={(event) => event.stopPropagation()}>
         <div className="snapshot-fullscreen-bar">
           <div className="snapshot-fullscreen-title">Snapshot preview</div>
           <div className="snapshot-fullscreen-actions">
@@ -355,9 +371,219 @@ function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext
   )
 }
 
+function useHistoryVersions(onRestored) {
+  const [items, setItems] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const [diff, setDiff] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+
+  const selectVersion = useCallback(async (version) => {
+    if (!version) return
+    setSelected(version)
+    setLoading(true)
+    try {
+      const doc = await getVersionDoc(version.id)
+      setPreview(doc.doc)
+      const diffResult = await diffVersion(version.id, 'current')
+      setDiff(diffResult)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const restoreVersion = useCallback(async (versionId) => {
+    if (!versionId) return
+    setRestoring(true)
+    try {
+      await restoreVersionApi(versionId)
+      if (typeof onRestored === 'function') {
+        onRestored()
+      }
+    } finally {
+      setRestoring(false)
+    }
+  }, [onRestored])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const rows = await listHistory(HISTORY_FETCH_LIMIT, 0)
+      if (cancelled) return
+      setItems(rows)
+      if (rows.length) {
+        selectVersion(rows[0])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [selectVersion])
+
+  return {
+    items,
+    selected,
+    preview,
+    diff,
+    loading,
+    restoring,
+    selectVersion,
+    restoreVersion
+  }
+}
+
+function useSnapshotManager({ items, versionIndexMap }) {
+  const [snapshotDoc, setSnapshotDoc] = useState(null)
+  const [snapshotVersionId, setSnapshotVersionId] = useState(null)
+  const [loadingVersionId, setLoadingVersionId] = useState(null)
+  const requestRef = useRef(0)
+
+  const openAtIndex = useCallback(async (index, { reuseDoc = null } = {}) => {
+    if (index == null || index < 0 || index >= items.length) return
+    const target = items[index]
+    if (!target) return
+    const token = requestRef.current + 1
+    requestRef.current = token
+
+    if (reuseDoc) {
+      setSnapshotVersionId(target.id)
+      setSnapshotDoc(reuseDoc)
+      setLoadingVersionId(null)
+      return
+    }
+
+    setLoadingVersionId(target.id)
+    try {
+      const doc = await getVersionDoc(target.id)
+      if (requestRef.current !== token) return
+      setSnapshotDoc(doc.doc)
+      setSnapshotVersionId(target.id)
+    } catch (error) {
+      if (requestRef.current === token) {
+        console.error('[history] snapshot load failed', error)
+      }
+    } finally {
+      if (requestRef.current === token) {
+        setLoadingVersionId(null)
+      }
+    }
+  }, [items])
+
+  const openForVersion = useCallback((version, reuseDoc = null) => {
+    if (!version) return
+    const index = versionIndexMap.get(version.id)
+    if (typeof index !== 'number') return
+    openAtIndex(index, { reuseDoc })
+  }, [openAtIndex, versionIndexMap])
+
+  const close = useCallback(() => {
+    requestRef.current += 1
+    setSnapshotDoc(null)
+    setSnapshotVersionId(null)
+    setLoadingVersionId(null)
+  }, [])
+
+  const snapshotIndex = useMemo(() => {
+    if (snapshotVersionId == null) return null
+    return versionIndexMap.get(snapshotVersionId) ?? null
+  }, [snapshotVersionId, versionIndexMap])
+
+  const hasNewer = snapshotIndex !== null && snapshotIndex > 0
+  const hasOlder = snapshotIndex !== null && snapshotIndex < items.length - 1
+
+  const viewNewer = useCallback(() => {
+    if (!hasNewer || snapshotIndex == null) return
+    openAtIndex(snapshotIndex - 1)
+  }, [hasNewer, snapshotIndex, openAtIndex])
+
+  const viewOlder = useCallback(() => {
+    if (!hasOlder || snapshotIndex == null) return
+    openAtIndex(snapshotIndex + 1)
+  }, [hasOlder, snapshotIndex, openAtIndex])
+
+  return {
+    snapshotDoc,
+    snapshotVersionId,
+    loadingVersionId,
+    isLoading: loadingVersionId !== null,
+    hasNewer,
+    hasOlder,
+    openAtIndex,
+    openForVersion,
+    close,
+    viewNewer,
+    viewOlder
+  }
+}
+
+function useRestoreConfirmation(onRestore) {
+  const [visible, setVisible] = useState(false)
+  const [message, setMessage] = useState('')
+  const pendingVersionRef = useRef(null)
+
+  const open = useCallback((versionId, confirmMessage) => {
+    pendingVersionRef.current = versionId
+    setMessage(confirmMessage || '')
+    setVisible(true)
+  }, [])
+
+  const close = useCallback(() => {
+    pendingVersionRef.current = null
+    setVisible(false)
+  }, [])
+
+  const confirm = useCallback(async () => {
+    const versionId = pendingVersionRef.current
+    pendingVersionRef.current = null
+    setVisible(false)
+    if (!versionId) return
+    await onRestore(versionId)
+  }, [onRestore])
+
+  return { visible, message, open, close, confirm }
+}
+
+function useCollapsedDays(groupedDays) {
+  const [collapsedDays, setCollapsedDays] = useState(new Set())
+
+  useEffect(() => {
+    setCollapsedDays((previous) => {
+      const next = new Set(previous)
+      groupedDays.forEach((day, index) => {
+        if (index === 0) {
+          next.delete(day.key)
+        } else if (!previous.has(day.key)) {
+          next.add(day.key)
+        }
+      })
+      return next
+    })
+  }, [groupedDays])
+
+  const toggleDay = useCallback((dayKey) => {
+    setCollapsedDays((previous) => {
+      const next = new Set(previous)
+      if (next.has(dayKey)) next.delete(dayKey)
+      else next.add(dayKey)
+      return next
+    })
+  }, [])
+
+  return { collapsedDays, toggleDay }
+}
+
+function buildVersionIndexMap(items) {
+  const map = new Map()
+  items.forEach((item, index) => {
+    map.set(item.id, index)
+  })
+  return map
+}
+
 function groupHistory(rows) {
   const byDay = new Map()
-  rows.forEach(row => {
+  rows.forEach((row) => {
     const date = parseTimestamp(row.created_at)
     if (!date) return
     const dayKey = date.toISOString().slice(0, 10)
@@ -371,7 +597,7 @@ function groupHistory(rows) {
     byDay.get(dayKey).items.push(row)
   })
   const groups = Array.from(byDay.values())
-  groups.forEach(group => {
+  groups.forEach((group) => {
     group.items.sort((a, b) => {
       const da = parseTimestamp(a.created_at)
       const db = parseTimestamp(b.created_at)
@@ -384,7 +610,7 @@ function groupHistory(rows) {
 
 function parseTimestamp(ts) {
   try {
-    const date = new Date(ts + 'Z')
+    const date = new Date(`${ts}Z`)
     return Number.isNaN(date.valueOf()) ? null : date
   } catch {
     return null
@@ -418,9 +644,9 @@ function formatSize(bytes) {
   return `${Math.round(bytes / 1024)} KB`
 }
 
-function versionMetaText(it) {
-  const time = formatVersionTime(it.created_at)
-  const size = formatSize(it.size_bytes)
+function versionMetaText(version) {
+  const time = formatVersionTime(version.created_at)
+  const size = formatSize(version.size_bytes)
   return [time, size].filter(Boolean).join(' · ')
 }
 

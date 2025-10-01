@@ -66,7 +66,7 @@ export function runListIndentCommand(editor, direction, focusEmptyCallback) {
   return true
 }
 
-export function positionOfListChild(parentNode, parentPos, childIndex) {
+function positionOfListChild(parentNode, parentPos, childIndex) {
   if (!parentNode || typeof parentPos !== 'number') return null
   if (childIndex < 0 || childIndex >= parentNode.childCount) return null
   let pos = parentPos + 1

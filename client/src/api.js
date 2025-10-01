@@ -1,10 +1,5 @@
-
 import axios from 'axios'
 
-const RAW = (import.meta.env.VITE_API_URL ?? '').trim();
-let apiRoot = (RAW === '/' || RAW === '') ? '' : RAW.replace(/\/$/, '');
-export const API_ROOT = apiRoot;
-const defaultHeaders = {}
 const PLAYWRIGHT_HOSTS = new Set([
   '127.0.0.1:4173',
   'localhost:4173',
@@ -14,63 +9,150 @@ const PLAYWRIGHT_HOSTS = new Set([
   'localhost:5232'
 ])
 
-try {
-  if (typeof window !== 'undefined') {
-    const host = window.location && window.location.host
-    if (host && PLAYWRIGHT_HOSTS.has(host)) {
-      defaultHeaders['x-playwright-test'] = '1'
-    }
+function normalizeApiRoot(rawValue) {
+  const trimmed = (rawValue ?? '').trim()
+  if (trimmed === '' || trimmed === '/') {
+    return ''
   }
-} catch {}
-export const api = axios.create({ baseURL: `${API_ROOT}/api`, headers: defaultHeaders })
+  return trimmed.replace(/\/$/, '')
+}
 
-// Outline
-export async function getOutline() { const { data } = await api.get('/outline'); return data }
-export async function saveOutlineApi(outline) { const { data } = await api.post('/outline', { outline }); return data }
+function detectPlaywrightHeader() {
+  const headers = {}
 
-// Task details
-export async function getTask(id) { const { data } = await api.get(`/tasks/${id}`); return data }
-export async function updateTask(id, payload) { const { data } = await api.patch(`/tasks/${id}`, payload); return data }
+  try {
+    if (typeof window === 'undefined') {
+      return headers
+    }
 
-// Day timeline
-export async function getDays() { const { data } = await api.get('/day'); return data }
+    const host = window?.location?.host
+    const port = Number(window?.location?.port || host?.split(':')[1])
+    const usePlaywrightHeader = host && PLAYWRIGHT_HOSTS.has(host)
+    const isPlaywrightPort = Number.isFinite(port) && port >= 6000 && port <= 7999
+    if (usePlaywrightHeader || isPlaywrightPort) {
+      headers['x-playwright-test'] = '1'
+      try {
+        window.__PLAYWRIGHT_TEST__ = true
+      } catch {}
+    }
+  } catch {
+    // Ignore environment issues when window is not accessible
+  }
 
-// Uploads
+  return headers
+}
+
+function buildApiBaseUrl(root) {
+  return `${root}/api`
+}
+
+function isAbsoluteUrl(path) {
+  return /^https?:\/\//i.test(path)
+}
+
+export const API_ROOT = normalizeApiRoot(import.meta.env.VITE_API_URL)
+const defaultHeaders = detectPlaywrightHeader()
+
+export const api = axios.create({
+  baseURL: buildApiBaseUrl(API_ROOT),
+  headers: defaultHeaders
+})
+
+export async function getOutline() {
+  const { data } = await api.get('/outline')
+  return data
+}
+
+export async function saveOutlineApi(outline) {
+  const { data } = await api.post('/outline', { outline })
+  return data
+}
+
+export async function getTask(id) {
+  const { data } = await api.get(`/tasks/${id}`)
+  return data
+}
+
+export async function updateTask(id, payload) {
+  const { data } = await api.patch(`/tasks/${id}`, payload)
+  return data
+}
+
+export async function getDays() {
+  const { data } = await api.get('/day')
+  return data
+}
+
 export async function uploadImage(file, filename) {
   const form = new FormData()
-  const name = filename || (file && typeof file.name === 'string' ? file.name : null)
-  if (name) form.append('image', file, name)
-  else form.append('image', file)
-  const { data } = await api.post('/upload/image', form, { headers: { 'Content-Type': 'multipart/form-data' } })
-  const relRaw = typeof data.url === 'string' ? data.url : ''
-  const relativeUrl = relRaw.startsWith('/') ? relRaw : (relRaw ? `/${relRaw}` : '')
-  const abs = /^https?:\/\//i.test(relativeUrl)
+  const resolvedName = filename || (file && typeof file.name === 'string' ? file.name : null)
+
+  if (resolvedName) {
+    form.append('image', file, resolvedName)
+  } else {
+    form.append('image', file)
+  }
+
+  const { data } = await api.post('/upload/image', form, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+
+  const rawUrl = typeof data.url === 'string' ? data.url : ''
+  const relativeUrl = rawUrl.startsWith('/') ? rawUrl : rawUrl ? `/${rawUrl}` : ''
+  const absoluteUrl = isAbsoluteUrl(relativeUrl)
     ? relativeUrl
     : `${API_ROOT}${relativeUrl}`
+
   return {
-    url: abs,
-    relativeUrl: relativeUrl || abs,
+    url: absoluteUrl,
+    relativeUrl: relativeUrl || absoluteUrl,
     id: data.id,
     mimeType: data.mimeType,
     size: data.size
   }
 }
 
-// History
-export async function listHistory(limit=50, offset=0) { const { data } = await api.get(`/history?limit=${limit}&offset=${offset}`); return data.items || [] }
-export async function getVersionDoc(id) { const { data } = await api.get(`/history/${id}`); return data }
-export async function diffVersion(id, against='current') { const { data } = await api.get(`/history/${id}/diff?against=${against}`); return data }
-export async function restoreVersion(id) { const { data } = await api.post(`/history/${id}/restore`); return data }
-export async function createCheckpoint(note='') { const { data } = await api.post('/history/checkpoint', { note }); return data }
+export async function listHistory(limit = 50, offset = 0) {
+  const { data } = await api.get(`/history?limit=${limit}&offset=${offset}`)
+  return data.items || []
+}
+
+export async function getVersionDoc(id) {
+  const { data } = await api.get(`/history/${id}`)
+  return data
+}
+
+export async function diffVersion(id, against = 'current') {
+  const { data } = await api.get(`/history/${id}/diff?against=${against}`)
+  return data
+}
+
+export async function restoreVersion(id) {
+  const { data } = await api.post(`/history/${id}/restore`)
+  return data
+}
+
+export async function createCheckpoint(note = '') {
+  const { data } = await api.post('/history/checkpoint', { note })
+  return data
+}
 
 export function absoluteUrl(path) {
-  if (!path) return path
-  if (/^https?:\/\//i.test(path)) return path
-  if (!API_ROOT) return path
+  if (!path) {
+    return path
+  }
+
+  if (isAbsoluteUrl(path)) {
+    return path
+  }
+
+  if (!API_ROOT) {
+    return path
+  }
+
   return path.startsWith('/') ? `${API_ROOT}${path}` : `${API_ROOT}/${path}`
 }
 
-// Health
 export async function getHealth() {
   const { data } = await api.get('/health')
   return data

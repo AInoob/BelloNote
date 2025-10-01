@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { TextSelection } from 'prosemirror-state'
 import { uploadImage, absoluteUrl } from '../../api.js'
+import { applyPlaywrightImageFallback } from '../../utils/imageFallback.js'
 import { parseTagInput } from './tagUtils.js'
 
 export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
@@ -19,7 +20,10 @@ export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
   const datePickerValueRef = useRef(dayjs().format('YYYY-MM-DD'))
   const datePickerCaretRef = useRef(null)
 
-  const normalizeImageSrc = useCallback((src) => absoluteUrl(src), [])
+  const normalizeImageSrc = useCallback((src) => {
+    const resolved = absoluteUrl(src)
+    return applyPlaywrightImageFallback(resolved)
+  }, [])
 
   const updateSlashActive = useCallback((idx) => {
     slashSelectedRef.current = idx

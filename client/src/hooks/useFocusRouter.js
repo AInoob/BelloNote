@@ -9,38 +9,34 @@ function normalizePayload(payload) {
   }
 }
 
+function useFocusChannel(setTab, targetTab) {
+  const [request, setRequest] = useState(null)
+
+  const askForFocus = useCallback((payload) => {
+    const normalized = normalizePayload(payload)
+    if (!normalized) return
+    setTab(targetTab)
+    setRequest(normalized)
+  }, [setTab, targetTab])
+
+  const acknowledge = useCallback((handled) => {
+    if (!handled) return
+    setRequest(null)
+  }, [])
+
+  return { request, askForFocus, acknowledge }
+}
+
 export function useFocusRouter(setTab) {
-  const [timelineFocusRequest, setTimelineFocusRequest] = useState(null)
-  const [outlineFocusRequest, setOutlineFocusRequest] = useState(null)
-
-  const requestTimelineFocus = useCallback((payload) => {
-    const normalized = normalizePayload(payload)
-    if (!normalized) return
-    setTab('timeline')
-    setTimelineFocusRequest(normalized)
-  }, [setTab])
-
-  const handleTimelineFocusHandled = useCallback((success) => {
-    if (success) setTimelineFocusRequest(null)
-  }, [setTimelineFocusRequest])
-
-  const requestOutlineFocus = useCallback((payload) => {
-    const normalized = normalizePayload(payload)
-    if (!normalized) return
-    setTab('outline')
-    setOutlineFocusRequest(normalized)
-  }, [setTab])
-
-  const handleOutlineFocusHandled = useCallback((success) => {
-    if (success) setOutlineFocusRequest(null)
-  }, [setOutlineFocusRequest])
+  const timeline = useFocusChannel(setTab, 'timeline')
+  const outline = useFocusChannel(setTab, 'outline')
 
   return {
-    timelineFocusRequest,
-    outlineFocusRequest,
-    requestTimelineFocus,
-    requestOutlineFocus,
-    handleTimelineFocusHandled,
-    handleOutlineFocusHandled
+    timelineFocusRequest: timeline.request,
+    outlineFocusRequest: outline.request,
+    requestTimelineFocus: timeline.askForFocus,
+    requestOutlineFocus: outline.askForFocus,
+    handleTimelineFocusHandled: timeline.acknowledge,
+    handleOutlineFocusHandled: outline.acknowledge
   }
 }

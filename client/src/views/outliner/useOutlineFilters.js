@@ -6,7 +6,12 @@ import {
   loadFutureVisible,
   loadSoonVisible,
   loadStatusFilter,
-  loadTagFilters
+  loadTagFilters,
+  saveArchivedVisible,
+  saveFutureVisible,
+  saveSoonVisible,
+  saveStatusFilter,
+  saveTagFilters
 } from './filterPreferences.js'
 import { parseTagInput } from './tagUtils.js'
 
@@ -136,15 +141,71 @@ export function useOutlineFilters() {
     }
   }, [addTagFilter])
 
+  const toggleShowFuture = useCallback(() => {
+    let result = showFutureRef.current
+    setShowFuture((prev) => {
+      const next = !prev
+      result = next
+      showFutureRef.current = next
+      return next
+    })
+    return result
+  }, [])
+
+  const toggleShowSoon = useCallback(() => {
+    let result = showSoonRef.current
+    setShowSoon((prev) => {
+      const next = !prev
+      result = next
+      showSoonRef.current = next
+      return next
+    })
+    return result
+  }, [])
+
+  const toggleShowArchived = useCallback(() => {
+    let result = showArchivedRef.current
+    setShowArchived((prev) => {
+      const next = !prev
+      result = next
+      showArchivedRef.current = next
+      return next
+    })
+    return result
+  }, [])
+
+  useEffect(() => {
+    try { saveStatusFilter(statusFilter) } catch {}
+  }, [statusFilter])
+
+  useEffect(() => {
+    try { saveFutureVisible(showFuture) } catch {}
+  }, [showFuture])
+
+  useEffect(() => {
+    try { saveSoonVisible(showSoon) } catch {}
+  }, [showSoon])
+
+  useEffect(() => {
+    try { saveArchivedVisible(showArchived) } catch {}
+  }, [showArchived])
+
+  useEffect(() => {
+    try { saveTagFilters(tagFilters) } catch {}
+  }, [tagFilters])
+
   return {
     showFuture,
     setShowFuture,
+    toggleShowFuture,
     showFutureRef,
     showSoon,
     setShowSoon,
+    toggleShowSoon,
     showSoonRef,
     showArchived,
     setShowArchived,
+    toggleShowArchived,
     showArchivedRef,
     statusFilter,
     setStatusFilter,

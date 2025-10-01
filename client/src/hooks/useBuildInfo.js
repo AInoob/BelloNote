@@ -1,32 +1,37 @@
 import { useEffect, useState } from 'react'
 import { getHealth } from '../api.js'
 
+const INITIAL_STATE = { serverBuildTime: null, healthFetchedAt: null }
+
 export function useBuildInfo() {
-  const [serverBuildTime, setServerBuildTime] = useState(null)
-  const [healthFetchedAt, setHealthFetchedAt] = useState(null)
+  const [info, setInfo] = useState(INITIAL_STATE)
 
   useEffect(() => {
     let cancelled = false
 
-    const load = async () => {
+    const applyResult = (buildTime) => {
+      if (cancelled) return
+      setInfo({
+        serverBuildTime: buildTime ?? null,
+        healthFetchedAt: new Date()
+      })
+    }
+
+    const fetchHealth = async () => {
       try {
         const data = await getHealth()
-        if (cancelled) return
-        setServerBuildTime(data?.buildTime || null)
-        setHealthFetchedAt(new Date())
-      } catch (error) {
-        if (cancelled) return
-        setServerBuildTime(null)
-        setHealthFetchedAt(new Date())
+        applyResult(data?.buildTime)
+      } catch {
+        applyResult(null)
       }
     }
 
-    load()
+    fetchHealth()
 
     return () => {
       cancelled = true
     }
   }, [])
 
-  return { serverBuildTime, healthFetchedAt }
+  return info
 }

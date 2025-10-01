@@ -1,30 +1,37 @@
 import { useCallback, useEffect, useState } from 'react'
 
-function readInitialValue(key, defaultValue) {
-  if (typeof window === 'undefined') return defaultValue
+const STORAGE_TRUE = '1'
+const STORAGE_FALSE = '0'
+
+function readFlag(key, fallback) {
+  if (typeof window === 'undefined') return fallback
   try {
     const stored = window.localStorage.getItem(key)
     if (stored === null) {
-      window.localStorage.setItem(key, defaultValue ? '1' : '0')
-      return defaultValue
+      window.localStorage.setItem(key, fallback ? STORAGE_TRUE : STORAGE_FALSE)
+      return fallback
     }
-    return stored === '1'
+    return stored === STORAGE_TRUE
   } catch (error) {
     console.warn('[usePersistentFlag] unable to access localStorage', error)
-    return defaultValue
+    return fallback
+  }
+}
+
+function writeFlag(key, value) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, value ? STORAGE_TRUE : STORAGE_FALSE)
+  } catch (error) {
+    console.warn('[usePersistentFlag] failed to persist flag', error)
   }
 }
 
 export function usePersistentFlag(key, defaultValue = false) {
-  const [value, setValue] = useState(() => readInitialValue(key, defaultValue))
+  const [value, setValue] = useState(() => readFlag(key, defaultValue))
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(key, value ? '1' : '0')
-    } catch (error) {
-      console.warn('[usePersistentFlag] failed to persist flag', error)
-    }
+    writeFlag(key, value)
   }, [key, value])
 
   const toggle = useCallback(() => {

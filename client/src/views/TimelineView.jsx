@@ -4,6 +4,9 @@ import dayjs from 'dayjs'
 import { getDays, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
 import { useOutlineSnapshot } from '../hooks/useOutlineSnapshot.js'
+import { usePersistentFlag } from '../hooks/usePersistentFlag.js'
+import { getOutline } from '../api.js'
+import { sanitizeNodeImages } from '../utils/imageFallback.js'
 
 function buildOutlineFromItems(items, seedIds = [], date = null) {
   // Reconstruct a tree from path arrays so we can render with OutlinerView in read-only mode
@@ -29,7 +32,7 @@ function buildOutlineFromItems(items, seedIds = [], date = null) {
     }
   })
   const roots = Array.from(rootsSet).map(id => byId.get(id)).filter(Boolean)
-  return roots
+  return sanitizeNodeImages(roots)
 }
 
 const DATE_RE = /@\d{4}-\d{2}-\d{2}\b/
@@ -69,11 +72,133 @@ function collectSoonAndFuture(roots) {
 }
 
 
-export default function TimelineView({ focusRequest = null, onFocusHandled = () => {}, onNavigateOutline = null }) {
+function useTimelineData() {
   const [days, setDays] = useState([])
-  const [showFuture, setShowFuture] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.future'); return v === '0' ? false : true } catch { return true } })
-  const [showSoon, setShowSoon] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.soon'); return v === '0' ? false : true } catch { return true } })
-  const [showFilters, setShowFilters] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.filters'); return v === '0' ? false : true } catch { return true } })
+  const refreshTimerRef = useRef(null)
+
+  const refreshData = useCallback(async () => {
+    try {
+      const data = await getDays()
+      setDays(data.days || [])
+      if (typeof window !== 'undefined') {
+        window.__WL_TIMELINE_DAYS = data.days || []
+      }
+    } catch (error) {
+      console.error('[timeline] failed to load days', error)
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshData()
+  }, [refreshData])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    window.__WL_TIMELINE_REFRESH = refreshData
+    return () => {
+      if (window.__WL_TIMELINE_REFRESH === refreshData) {
+        window.__WL_TIMELINE_REFRESH = undefined
+      }
+    }
+  }, [refreshData])
+
+  useEffect(() => {
+    const scheduleRefresh = () => {
+      if (typeof window === 'undefined') return
+      if (refreshTimerRef.current) return
+      refreshTimerRef.current = window.setTimeout(() => {
+        refreshTimerRef.current = null
+        refreshData()
+      }, 150)
+    }
+    const handleOutlineSnapshot = () => scheduleRefresh()
+    const handleReminderAction = () => scheduleRefresh()
+    window.addEventListener('worklog:outline-snapshot', handleOutlineSnapshot)
+    window.addEventListener('worklog:reminder-action', handleReminderAction)
+    return () => {
+      window.removeEventListener('worklog:outline-snapshot', handleOutlineSnapshot)
+      window.removeEventListener('worklog:reminder-action', handleReminderAction)
+    }
+  }, [refreshData])
+
+  useEffect(() => () => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = null
+    }
+  }, [])
+
+  return { days, refreshData }
+}
+
+function useTimelineOutlineExposure(outlineRoots) {
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    window.__WL_TIMELINE_OUTLINE = outlineRoots || []
+    return () => {
+      if (window.__WL_TIMELINE_OUTLINE === outlineRoots) {
+        window.__WL_TIMELINE_OUTLINE = undefined
+      }
+    }
+  }, [outlineRoots])
+}
+
+function useScrollToTodayEffect(days, todaySectionRef, todayScrollDoneRef) {
+  useEffect(() => {
+    if (todayScrollDoneRef.current) return
+    const target = todaySectionRef.current
+    if (!target) return
+    todayScrollDoneRef.current = true
+    requestAnimationFrame(() => {
+      const element = todaySectionRef.current
+      if (!element) return
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [days, todaySectionRef, todayScrollDoneRef])
+}
+
+function useTimelineClickActivation(containerRef, setActiveTaskId) {
+  useEffect(() => {
+    const root = containerRef.current
+    if (!root) return undefined
+    const handleClick = (event) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest('li.li-node') : null
+      if (!target) return
+      const dataId = target.getAttribute('data-id')
+      if (dataId) setActiveTaskId(dataId)
+    }
+    root.addEventListener('click', handleClick)
+    return () => root.removeEventListener('click', handleClick)
+  }, [containerRef, setActiveTaskId])
+}
+
+function useTimelineShortcutNavigation(activeTaskId, lastFocusedTaskIdRef, focusRequestTaskId, onNavigateOutline) {
+  useEffect(() => {
+    const handler = (event) => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (event.shiftKey || event.altKey) return
+      if (event.key !== 's' && event.key !== 'S') return
+      if (typeof window !== 'undefined' && window.__APP_ACTIVE_TAB__ !== 'timeline') return
+      const targetId = activeTaskId || lastFocusedTaskIdRef.current || focusRequestTaskId
+      if (!targetId) return
+      event.preventDefault()
+      event.stopPropagation()
+      onNavigateOutline?.({ taskId: targetId })
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [activeTaskId, focusRequestTaskId, lastFocusedTaskIdRef, onNavigateOutline])
+}
+
+
+export default function TimelineView({ focusRequest = null, onFocusHandled = () => {}, onNavigateOutline = null }) {
+  const { days, refreshData } = useTimelineData()
+  const futureFlag = usePersistentFlag('worklog.timeline.future', true)
+  const soonFlag = usePersistentFlag('worklog.timeline.soon', true)
+  const filtersFlag = usePersistentFlag('worklog.timeline.filters', true)
+  const showFuture = futureFlag.value
+  const showSoon = soonFlag.value
+  const showFilters = filtersFlag.value
   const [activeTaskId, setActiveTaskId] = useState(null)
   const containerRef = useRef(null)
   const flashTimerRef = useRef(null)
@@ -84,19 +209,11 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
   const todaySectionRef = useRef(null)
   const todayScrollDoneRef = useRef(false)
   const todayKeyRef = useRef(dayjs().format('YYYY-MM-DD'))
-  const refreshTimerRef = useRef(null)
-
   const { outlineRoots } = useOutlineSnapshot()
-
-  const refreshData = useCallback(async () => {
-    try {
-      const data = await getDays()
-      setDays(data.days || [])
-      if (typeof window !== 'undefined') window.__WL_TIMELINE_DAYS = data.days || []
-    } catch (err) {
-      console.error('[timeline] failed to load days', err)
-    }
-  }, [])
+  const sanitizedOutlineRoots = useMemo(() => sanitizeNodeImages(outlineRoots), [outlineRoots])
+  useTimelineOutlineExposure(sanitizedOutlineRoots)
+  useScrollToTodayEffect(days, todaySectionRef, todayScrollDoneRef)
+  useTimelineClickActivation(containerRef, setActiveTaskId)
 
   const focusTaskById = useCallback((taskId) => {
     if (!taskId) return false
@@ -131,70 +248,9 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     return true
   }, [])
 
-  useEffect(() => {
-    refreshData()
-  }, [refreshData])
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.__WL_TIMELINE_REFRESH = refreshData
-    }
-    return () => {
-      if (typeof window !== 'undefined' && window.__WL_TIMELINE_REFRESH === refreshData) {
-        window.__WL_TIMELINE_REFRESH = undefined
-      }
-    }
-  }, [refreshData])
-
-  useEffect(() => {
-    const scheduleRefresh = () => {
-      if (refreshTimerRef.current) return
-      refreshTimerRef.current = window.setTimeout(() => {
-        refreshTimerRef.current = null
-        refreshData()
-      }, 150)
-    }
-    const handleOutlineSnapshot = () => { scheduleRefresh() }
-    const handleReminderAction = () => { scheduleRefresh() }
-    window.addEventListener('worklog:outline-snapshot', handleOutlineSnapshot)
-    window.addEventListener('worklog:reminder-action', handleReminderAction)
-    return () => {
-      window.removeEventListener('worklog:outline-snapshot', handleOutlineSnapshot)
-      window.removeEventListener('worklog:reminder-action', handleReminderAction)
-    }
-  }, [refreshData])
-
-  useEffect(() => () => {
-    if (refreshTimerRef.current) {
-      clearTimeout(refreshTimerRef.current)
-      refreshTimerRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.__WL_TIMELINE_OUTLINE = outlineRoots || []
-    return () => {
-      if (typeof window === 'undefined') return
-      if (window.__WL_TIMELINE_OUTLINE === outlineRoots) {
-        window.__WL_TIMELINE_OUTLINE = undefined
-      }
-    }
-  }, [outlineRoots])
-
-  useEffect(() => {
-    if (todayScrollDoneRef.current) return
-    const target = todaySectionRef.current
-    if (!target) return
-    todayScrollDoneRef.current = true
-    requestAnimationFrame(() => {
-      const el = todaySectionRef.current
-      if (!el) return
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    })
-  }, [days])
 
   const focusRequestTaskId = focusRequest?.taskId ? String(focusRequest.taskId) : null
+  useTimelineShortcutNavigation(activeTaskId, lastFocusedTaskIdRef, focusRequestTaskId, onNavigateOutline)
 
   useEffect(() => {
     if (!focusRequestTaskId) return
@@ -232,46 +288,26 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
   }, [])
 
-  useEffect(() => {
-    const root = containerRef.current
-    if (!root) return undefined
-    const handleClick = (event) => {
-      const target = event.target instanceof HTMLElement ? event.target.closest('li.li-node') : null
-      if (!target) return
-      const dataId = target.getAttribute('data-id')
-      if (dataId) setActiveTaskId(dataId)
-    }
-    root.addEventListener('click', handleClick)
-    return () => root.removeEventListener('click', handleClick)
-  }, [])
-
-  useEffect(() => {
-    const handler = (event) => {
-      if (!(event.metaKey || event.ctrlKey)) return
-      if (event.shiftKey || event.altKey) return
-      if (event.key !== 's' && event.key !== 'S') return
-      if (typeof window !== 'undefined' && window.__APP_ACTIVE_TAB__ !== 'timeline') return
-      const targetId = activeTaskId || lastFocusedTaskIdRef.current || focusRequestTaskId
-      if (!targetId) return
-      event.preventDefault()
-      event.stopPropagation()
-      onNavigateOutline?.({ taskId: targetId })
-    }
-    window.addEventListener('keydown', handler, true)
-    return () => window.removeEventListener('keydown', handler, true)
-  }, [activeTaskId, onNavigateOutline, focusRequestTaskId])
-
-  const { soonRoots, futureRoots } = useMemo(() => collectSoonAndFuture(outlineRoots), [outlineRoots])
+  const { soonRoots, futureRoots } = useMemo(
+    () => collectSoonAndFuture(sanitizedOutlineRoots),
+    [sanitizedOutlineRoots]
+  )
 
   const hasTimelineData = (days?.length || 0) > 0 || soonRoots.length > 0 || futureRoots.length > 0
 
   const handleStatusToggle = async (id, nextStatus) => {
     try {
       await updateTask(id, { status: nextStatus })
-      const data = await getDays(); setDays(data.days || [])
-      const o = await getOutline(); setOutlineRoots(o.roots || [])
-    } catch (e) {
-      console.error('[timeline] failed to update status', e)
+      await refreshData()
+      try {
+        const outline = await getOutline()
+        const roots = Array.isArray(outline?.roots) ? outline.roots : []
+        window.dispatchEvent(new CustomEvent('worklog:outline-snapshot', { detail: { outline: roots } }))
+      } catch (error) {
+        console.error('[timeline] failed to refresh outline after status update', error)
+      }
+    } catch (error) {
+      console.error('[timeline] failed to update status', error)
     }
   }
   return (
@@ -280,7 +316,11 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8, display: 'flex', gap: 16, alignItems: 'center' }}>
         <div className="filters-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span className="meta">Filters:</span>
-          <button className={`btn pill ${showFilters ? 'active' : ''}`} type="button" onClick={() => { const next = !showFilters; try { localStorage.setItem('worklog.timeline.filters', next ? '1' : '0') } catch {}; setShowFilters(next) }}>
+          <button
+            className={`btn pill ${showFilters ? 'active' : ''}`}
+            type="button"
+            onClick={filtersFlag.toggle}
+          >
             {showFilters ? 'Shown' : 'Hidden'}
           </button>
         </div>
@@ -288,13 +328,21 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
           <>
             <div className="future-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span className="meta">Future:</span>
-              <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => { const next = !showFuture; try { localStorage.setItem('worklog.timeline.future', next ? '1' : '0') } catch {}; setShowFuture(next) }}>
+              <button
+                className={`btn pill ${showFuture ? 'active' : ''}`}
+                type="button"
+                onClick={futureFlag.toggle}
+              >
                 {showFuture ? 'Shown' : 'Hidden'}
               </button>
             </div>
             <div className="soon-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span className="meta">Soon:</span>
-              <button className={`btn pill ${showSoon ? 'active' : ''}`} type="button" onClick={() => { const next = !showSoon; try { localStorage.setItem('worklog.timeline.soon', next ? '1' : '0') } catch {}; setShowSoon(next) }}>
+              <button
+                className={`btn pill ${showSoon ? 'active' : ''}`}
+                type="button"
+                onClick={soonFlag.toggle}
+              >
                 {showSoon ? 'Shown' : 'Hidden'}
               </button>
             </div>
