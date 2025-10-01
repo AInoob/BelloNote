@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { getHealth } from '../api.js'
 
+/**
+ * Hook to fetch and track server build information
+ * Fetches server health on mount to get build time
+ *
+ * @returns {Object} Server build time and health check timestamp
+ */
 export function useBuildInfo() {
   const [serverBuildTime, setServerBuildTime] = useState(null)
   const [healthFetchedAt, setHealthFetchedAt] = useState(null)

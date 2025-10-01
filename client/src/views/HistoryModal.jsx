@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import OutlinerView from './OutlinerView.jsx'
 import { listHistory, getVersionDoc, diffVersion, restoreVersion } from '../api.js'
+import { formatTime, versionMetaText } from './history/dateUtils.js'
+import { groupHistory } from './history/historyUtils.js'
 
 export default function HistoryModal({ onClose, onRestored }) {
   const [items, setItems] = useState([])
@@ -354,80 +356,3 @@ function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext
     </div>
   )
 }
-
-function groupHistory(rows) {
-  const byDay = new Map()
-  rows.forEach(row => {
-    const date = parseTimestamp(row.created_at)
-    if (!date) return
-    const dayKey = date.toISOString().slice(0, 10)
-    if (!byDay.has(dayKey)) {
-      byDay.set(dayKey, {
-        key: dayKey,
-        label: formatDayLabel(date),
-        items: []
-      })
-    }
-    byDay.get(dayKey).items.push(row)
-  })
-  const groups = Array.from(byDay.values())
-  groups.forEach(group => {
-    group.items.sort((a, b) => {
-      const da = parseTimestamp(a.created_at)
-      const db = parseTimestamp(b.created_at)
-      return (db?.getTime() || 0) - (da?.getTime() || 0)
-    })
-  })
-  groups.sort((a, b) => (a.key > b.key ? -1 : (a.key < b.key ? 1 : 0)))
-  return groups
-}
-
-function parseTimestamp(ts) {
-  try {
-    const date = new Date(ts + 'Z')
-    return Number.isNaN(date.valueOf()) ? null : date
-  } catch {
-    return null
-  }
-}
-
-function formatDayLabel(date) {
-  const today = startOfDay(new Date())
-  const target = startOfDay(date)
-  const diffDays = Math.round((today.getTime() - target.getTime()) / DAY_MS)
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return 'Yesterday'
-  const opts = { weekday: 'short', month: 'short', day: 'numeric' }
-  if (today.getFullYear() !== target.getFullYear()) opts.year = 'numeric'
-  return date.toLocaleDateString(undefined, opts)
-}
-
-function formatTime(ts) {
-  const date = parseTimestamp(ts)
-  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ts
-}
-
-function formatVersionTime(ts) {
-  const date = parseTimestamp(ts)
-  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
-}
-
-function formatSize(bytes) {
-  if (!Number.isFinite(bytes)) return ''
-  if (bytes < 1024) return `${bytes} B`
-  return `${Math.round(bytes / 1024)} KB`
-}
-
-function versionMetaText(it) {
-  const time = formatVersionTime(it.created_at)
-  const size = formatSize(it.size_bytes)
-  return [time, size].filter(Boolean).join(' · ')
-}
-
-function startOfDay(date) {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  return d
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000

@@ -1,79 +1,26 @@
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { getDays, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
 import { useOutlineSnapshot } from '../hooks/useOutlineSnapshot.js'
-
-function buildOutlineFromItems(items, seedIds = [], date = null) {
-  // Reconstruct a tree from path arrays so we can render with OutlinerView in read-only mode
-  const seedSet = new Set(seedIds)
-  const byId = new Map()
-  const rootsSet = new Set()
-  const ensureNode = (seg) => {
-    if (!byId.has(seg.id)) byId.set(seg.id, { id: seg.id, title: seg.title, status: seg.status ?? '', content: seg.content ?? null, children: [], ownWorkedOnDates: [] })
-    return byId.get(seg.id)
-  }
-  items.forEach(it => {
-    const path = Array.isArray(it.path) ? it.path : []
-    if (!path.length) return
-    rootsSet.add(path[0].id)
-    for (let i = 0; i < path.length; i++) {
-      const cur = ensureNode(path[i])
-      // mark the node if it is a seed (directly logged for the day)
-      if (date && seedSet.has(cur.id) && !cur.ownWorkedOnDates.includes(date)) cur.ownWorkedOnDates.push(date)
-      const prev = i > 0 ? ensureNode(path[i - 1]) : null
-      if (prev) {
-        if (!prev.children.find(ch => ch.id === cur.id)) prev.children.push(cur)
-      }
-    }
-  })
-  const roots = Array.from(rootsSet).map(id => byId.get(id)).filter(Boolean)
-  return roots
-}
-
-const DATE_RE = /@\d{4}-\d{2}-\d{2}\b/
-const hasTag = (node, tag) => {
-  const t = (node?.title || '').toLowerCase()
-  const bodyLower = JSON.stringify(node?.content || []).toLowerCase()
-  const needle = `@${tag}`
-  return t.includes(needle) || bodyLower.includes(needle)
-}
-const hasDate = (node) => {
-  const t = node?.title || ''
-  const body = JSON.stringify(node?.content || [])
-  return DATE_RE.test(t) || DATE_RE.test(body)
-}
-
-const cssEscape = (value) => {
-  if (typeof value !== 'string') value = String(value ?? '')
-  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value)
-  return value.replace(/[^a-zA-Z0-9\-_]/g, (match) => `\\${match}`)
-}
-
-function collectSoonAndFuture(roots) {
-  const soonRoots = []
-  const futureRoots = []
-  function walk(node, parentSoon=false, parentFuture=false) {
-    const selfSoon = hasTag(node, 'soon')
-    const selfFuture = hasTag(node, 'future')
-    const effSoon = parentSoon || selfSoon
-    const effFuture = parentFuture || selfFuture
-    const dated = hasDate(node)
-    if (effSoon && !dated) { soonRoots.push(node); return }
-    if (effFuture && !parentSoon && !dated) { futureRoots.push(node); return }
-    for (const ch of (node.children || [])) walk(ch, effSoon, effFuture)
-  }
-  for (const r of (roots || [])) walk(r, false, false)
-  return { soonRoots, futureRoots }
-}
+import { cssEscape } from '../utils/cssEscape.js'
+import { FOCUS_FLASH_DURATION, REFRESH_DEBOUNCE_DELAY } from './timeline/constants.js'
+import { buildOutlineFromItems, collectSoonAndFuture } from './timeline/timelineUtils.js'
+import {
+  loadShowFuture,
+  saveShowFuture,
+  loadShowSoon,
+  saveShowSoon,
+  loadShowFilters,
+  saveShowFilters
+} from './timeline/storageUtils.js'
 
 
 export default function TimelineView({ focusRequest = null, onFocusHandled = () => {}, onNavigateOutline = null }) {
   const [days, setDays] = useState([])
-  const [showFuture, setShowFuture] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.future'); return v === '0' ? false : true } catch { return true } })
-  const [showSoon, setShowSoon] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.soon'); return v === '0' ? false : true } catch { return true } })
-  const [showFilters, setShowFilters] = useState(() => { try { const v = localStorage.getItem('worklog.timeline.filters'); return v === '0' ? false : true } catch { return true } })
+  const [showFuture, setShowFuture] = useState(loadShowFuture)
+  const [showSoon, setShowSoon] = useState(loadShowSoon)
+  const [showFilters, setShowFilters] = useState(loadShowFilters)
   const [activeTaskId, setActiveTaskId] = useState(null)
   const containerRef = useRef(null)
   const flashTimerRef = useRef(null)
@@ -118,7 +65,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     flashTimerRef.current = setTimeout(() => {
       target.classList.remove('timeline-shortcut-focus')
       flashTimerRef.current = null
-    }, 1200)
+    }, FOCUS_FLASH_DURATION)
     if (activeElementRef.current && activeElementRef.current !== target) {
       activeElementRef.current.removeAttribute('data-timeline-active')
     }
@@ -152,7 +99,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       refreshTimerRef.current = window.setTimeout(() => {
         refreshTimerRef.current = null
         refreshData()
-      }, 150)
+      }, REFRESH_DEBOUNCE_DELAY)
     }
     const handleOutlineSnapshot = () => { scheduleRefresh() }
     const handleReminderAction = () => { scheduleRefresh() }
@@ -280,7 +227,15 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8, display: 'flex', gap: 16, alignItems: 'center' }}>
         <div className="filters-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span className="meta">Filters:</span>
-          <button className={`btn pill ${showFilters ? 'active' : ''}`} type="button" onClick={() => { const next = !showFilters; try { localStorage.setItem('worklog.timeline.filters', next ? '1' : '0') } catch {}; setShowFilters(next) }}>
+          <button
+            className={`btn pill ${showFilters ? 'active' : ''}`}
+            type="button"
+            onClick={() => {
+              const next = !showFilters
+              saveShowFilters(next)
+              setShowFilters(next)
+            }}
+          >
             {showFilters ? 'Shown' : 'Hidden'}
           </button>
         </div>
@@ -288,13 +243,29 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
           <>
             <div className="future-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span className="meta">Future:</span>
-              <button className={`btn pill ${showFuture ? 'active' : ''}`} type="button" onClick={() => { const next = !showFuture; try { localStorage.setItem('worklog.timeline.future', next ? '1' : '0') } catch {}; setShowFuture(next) }}>
+              <button
+                className={`btn pill ${showFuture ? 'active' : ''}`}
+                type="button"
+                onClick={() => {
+                  const next = !showFuture
+                  saveShowFuture(next)
+                  setShowFuture(next)
+                }}
+              >
                 {showFuture ? 'Shown' : 'Hidden'}
               </button>
             </div>
             <div className="soon-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span className="meta">Soon:</span>
-              <button className={`btn pill ${showSoon ? 'active' : ''}`} type="button" onClick={() => { const next = !showSoon; try { localStorage.setItem('worklog.timeline.soon', next ? '1' : '0') } catch {}; setShowSoon(next) }}>
+              <button
+                className={`btn pill ${showSoon ? 'active' : ''}`}
+                type="button"
+                onClick={() => {
+                  const next = !showSoon
+                  saveShowSoon(next)
+                  setShowSoon(next)
+                }}
+              >
                 {showSoon ? 'Shown' : 'Hidden'}
               </button>
             </div>

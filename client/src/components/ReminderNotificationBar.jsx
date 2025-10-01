@@ -3,15 +3,27 @@ import dayjs from 'dayjs'
 import { useReminders } from '../context/ReminderContext.jsx'
 import { describeTimeUntil } from '../utils/reminderTokens.js'
 import { formatReminderAbsolute, isReminderDue } from '../utils/reminders.js'
+import { SNOOZE_DURATIONS, DEFAULT_REMINDER_OFFSET_MINUTES } from '../constants/reminders.js'
 
+/**
+ * Build a default moment for custom reminder scheduling
+ * Uses existing reminder time or defaults to 30 minutes from now
+ */
 function buildDefaultMoment(reminder) {
   if (reminder?.remindAt) {
     const parsed = dayjs(reminder.remindAt)
     if (parsed.isValid()) return parsed
   }
-  return dayjs().add(30, 'minute')
+  return dayjs().add(DEFAULT_REMINDER_OFFSET_MINUTES, 'minute')
 }
 
+/**
+ * Notification bar for due reminders
+ * Shows pending reminders with snooze and completion actions
+ *
+ * @param {boolean} visible - Whether the bar should be visible
+ * @param {Function} onNavigateOutline - Handler to navigate to task in outline
+ */
 export function ReminderNotificationBar({ visible, onNavigateOutline }) {
   const { pendingReminders, dismissReminder, completeReminder, scheduleReminder } = useReminders()
   const [customEditingId, setCustomEditingId] = useState(null)
@@ -159,10 +171,15 @@ export function ReminderNotificationBar({ visible, onNavigateOutline }) {
               </div>
               <div className="reminder-actions">
                 <div className="reminder-snooze" aria-label="Reschedule reminder">
-                  <button className="btn small ghost" onClick={() => reschedule(reminder, 10)}>+10m</button>
-                  <button className="btn small ghost" onClick={() => reschedule(reminder, 30)}>+30m</button>
-                  <button className="btn small ghost" onClick={() => reschedule(reminder, 60)}>+1h</button>
-                  <button className="btn small ghost" onClick={() => reschedule(reminder, 120)}>+2h</button>
+                  {SNOOZE_DURATIONS.map(({ minutes, label }) => (
+                    <button
+                      key={minutes}
+                      className="btn small ghost"
+                      onClick={() => reschedule(reminder, minutes)}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
                 <button className="btn small ghost" onClick={() => openCustomPicker(reminder)}>Custom…</button>
                 {customEditingId === key && (

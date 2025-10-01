@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import dayjs from 'dayjs'
 import { getOutline } from '../api.js'
 import { parseReminderFromNodeContent, reminderIsDue, describeTimeUntil } from '../utils/reminderTokens.js'
+import { REMINDER_POLL_INTERVAL_MS } from '../constants/config.js'
 
 const ReminderContext = createContext({
   loading: false,
@@ -79,7 +80,7 @@ export function ReminderProvider({ children }) {
         if (due === reminder.due) return reminder
         return { ...reminder, due }
       }))
-    }, 30_000)
+    }, REMINDER_POLL_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [])
 

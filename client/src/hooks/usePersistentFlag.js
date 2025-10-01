@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 
+/**
+ * Read initial boolean flag value from localStorage
+ * @param {string} key - localStorage key
+ * @param {boolean} defaultValue - Default value if not found
+ * @returns {boolean} The stored value or default
+ */
 function readInitialValue(key, defaultValue) {
   if (typeof window === 'undefined') return defaultValue
   try {
@@ -15,6 +21,14 @@ function readInitialValue(key, defaultValue) {
   }
 }
 
+/**
+ * Hook to manage a boolean flag persisted in localStorage
+ * Automatically syncs changes to localStorage
+ *
+ * @param {string} key - localStorage key for the flag
+ * @param {boolean} defaultValue - Default value if not found
+ * @returns {Object} Flag value, setter, and toggle function
+ */
 export function usePersistentFlag(key, defaultValue = false) {
   const [value, setValue] = useState(() => readInitialValue(key, defaultValue))
 

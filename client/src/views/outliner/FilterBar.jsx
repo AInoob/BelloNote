@@ -1,0 +1,200 @@
+import React from 'react'
+
+/**
+ * Filter bar component for the outliner view
+ * @param {Object} props - Component props
+ * @param {Array} props.availableFilters - Available filter options
+ * @param {Object} props.statusFilter - Current status filter state
+ * @param {Function} props.toggleStatusFilter - Function to toggle status filter
+ * @param {Function} props.applyPresetFilter - Function to apply preset filter
+ * @param {boolean} props.showArchived - Whether archived items are shown
+ * @param {Function} props.setShowArchived - Function to set show archived state
+ * @param {Object} props.showArchivedRef - Ref to show archived state
+ * @param {Function} props.saveArchivedVisible - Function to save archived visible state
+ * @param {boolean} props.showFuture - Whether future items are shown
+ * @param {Function} props.setShowFuture - Function to set show future state
+ * @param {Object} props.showFutureRef - Ref to show future state
+ * @param {Function} props.saveFutureVisible - Function to save future visible state
+ * @param {boolean} props.showSoon - Whether soon items are shown
+ * @param {Function} props.setShowSoon - Function to set show soon state
+ * @param {Object} props.showSoonRef - Ref to show soon state
+ * @param {Function} props.saveSoonVisible - Function to save soon visible state
+ * @param {Object} props.editor - TipTap editor instance
+ * @param {Object} props.applyStatusFilterRef - Ref to apply status filter function
+ * @param {Array} props.includeFilterList - List of include tag filters
+ * @param {Function} props.removeTagFilter - Function to remove tag filter
+ * @param {Object} props.includeInputRef - Ref to include input element
+ * @param {string} props.includeTagInput - Include tag input value
+ * @param {Function} props.handleTagInputChange - Function to handle tag input change
+ * @param {Function} props.handleTagInputKeyDown - Function to handle tag input key down
+ * @param {Function} props.handleTagInputBlur - Function to handle tag input blur
+ * @param {Array} props.excludeFilterList - List of exclude tag filters
+ * @param {Object} props.excludeInputRef - Ref to exclude input element
+ * @param {string} props.excludeTagInput - Exclude tag input value
+ * @param {Function} props.clearTagFilters - Function to clear all tag filters
+ */
+export function FilterBar({
+  availableFilters,
+  statusFilter,
+  toggleStatusFilter,
+  applyPresetFilter,
+  showArchived,
+  setShowArchived,
+  showArchivedRef,
+  saveArchivedVisible,
+  showFuture,
+  setShowFuture,
+  showFutureRef,
+  saveFutureVisible,
+  showSoon,
+  setShowSoon,
+  showSoonRef,
+  saveSoonVisible,
+  editor,
+  applyStatusFilterRef,
+  includeFilterList,
+  removeTagFilter,
+  includeInputRef,
+  includeTagInput,
+  handleTagInputChange,
+  handleTagInputKeyDown,
+  handleTagInputBlur,
+  excludeFilterList,
+  excludeInputRef,
+  excludeTagInput,
+  clearTagFilters
+}) {
+  return (
+    <div className="status-filter-bar">
+      <span className="meta" style={{ marginRight: 8 }}>Show:</span>
+      {availableFilters.map(opt => (
+        <button
+          key={opt.key}
+          className={`btn pill ${statusFilter[opt.key] ? 'active' : ''}`}
+          data-status={opt.key}
+          type="button"
+          onClick={() => toggleStatusFilter(opt.key)}
+        >{opt.label}</button>
+      ))}
+      <div className="filter-presets">
+        <button className="btn ghost" type="button" onClick={() => applyPresetFilter('all')}>All</button>
+        <button className="btn ghost" type="button" onClick={() => applyPresetFilter('active')}>Active</button>
+        <button className="btn ghost" type="button" onClick={() => applyPresetFilter('completed')}>Completed</button>
+      </div>
+      <div className="archive-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="meta">Archived:</span>
+        <button
+          className={`btn pill ${showArchived ? 'active' : ''}`}
+          type="button"
+          onClick={() => {
+            const next = !showArchived
+            try { saveArchivedVisible(next) } catch {}
+            showArchivedRef.current = next
+            setShowArchived(next)
+          }}
+        >{showArchived ? 'Shown' : 'Hidden'}</button>
+      </div>
+      <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="meta">Future:</span>
+        <button
+          className={`btn pill ${showFuture ? 'active' : ''}`}
+          type="button"
+          onClick={() => {
+            const next = !showFuture
+            try { saveFutureVisible(next) } catch {}
+            showFutureRef.current = next
+            setShowFuture(next)
+          }}
+        >{showFuture ? 'Shown' : 'Hidden'}</button>
+      </div>
+      <div className="soon-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="meta">Soon:</span>
+        <button
+          className={`btn pill ${showSoon ? 'active' : ''}`}
+          type="button"
+          onClick={() => {
+            const next = !showSoon
+            try { saveSoonVisible(next) } catch {}
+            showSoonRef.current = next
+            setShowSoon(next)
+            queueMicrotask(() => {
+              try {
+                if (next && editor?.view?.dom) {
+                  const root = editor.view.dom
+                  root.querySelectorAll('li.li-node[data-soon="1"]').forEach(li => {
+                    li.classList.remove('filter-hidden')
+                    li.style.display = ''
+                  })
+                }
+                applyStatusFilterRef.current?.()
+              } catch {}
+            })
+          }}
+        >{showSoon ? 'Shown' : 'Hidden'}</button>
+      </div>
+      <div className="tag-filter-group">
+        <div className="tag-filter include">
+          <span className="meta">With:</span>
+          {includeFilterList.map(tag => (
+            <button
+              key={`tag-include-${tag}`}
+              type="button"
+              className="tag-chip"
+              onClick={() => removeTagFilter('include', tag)}
+              aria-label={`Remove include filter #${tag}`}
+            >
+              #{tag}<span aria-hidden className="tag-chip-remove">×</span>
+            </button>
+          ))}
+          <input
+            ref={includeInputRef}
+            className="tag-input"
+            type="text"
+            value={includeTagInput}
+            placeholder="#tag"
+            onChange={handleTagInputChange('include')}
+            onKeyDown={handleTagInputKeyDown('include')}
+            onBlur={handleTagInputBlur('include')}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </div>
+        <div className="tag-filter exclude">
+          <span className="meta">Without:</span>
+          {excludeFilterList.map(tag => (
+            <button
+              key={`tag-exclude-${tag}`}
+              type="button"
+              className="tag-chip"
+              onClick={() => removeTagFilter('exclude', tag)}
+              aria-label={`Remove exclude filter #${tag}`}
+            >
+              #{tag}<span aria-hidden className="tag-chip-remove">×</span>
+            </button>
+          ))}
+          <input
+            ref={excludeInputRef}
+            className="tag-input"
+            type="text"
+            value={excludeTagInput}
+            placeholder="#tag"
+            onChange={handleTagInputChange('exclude')}
+            onKeyDown={handleTagInputKeyDown('exclude')}
+            onBlur={handleTagInputBlur('exclude')}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </div>
+        {(includeFilterList.length > 0 || excludeFilterList.length > 0) && (
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={clearTagFilters}
+            style={{ marginLeft: 8 }}
+          >Clear</button>
+        )}
+      </div>
+    </div>
+  )
+}
+

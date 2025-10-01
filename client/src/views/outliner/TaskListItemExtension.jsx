@@ -26,29 +26,16 @@ import {
   findListItemDepth,
   runSplitListItemWithSelection
 } from './listCommands.js'
-
-function gatherOwnListItemText(listItemNode) {
-  if (!listItemNode || listItemNode.type?.name !== 'listItem') return ''
-  const parts = []
-  const visit = (pmNode) => {
-    if (!pmNode) return
-    const typeName = pmNode.type?.name
-    if (typeName === 'bulletList' || typeName === 'orderedList') return
-    if (pmNode.isText && pmNode.text) {
-      parts.push(pmNode.text)
-      return
-    }
-    if (typeof pmNode.forEach === 'function') {
-      pmNode.forEach((child) => visit(child))
-    }
-  }
-  listItemNode.forEach((child) => {
-    const typeName = child.type?.name
-    if (typeName === 'bulletList' || typeName === 'orderedList') return
-    visit(child)
-  })
-  return stripReminderDisplayBreaks(parts.join(' '))
-}
+import { gatherOwnListItemText } from './listItemUtils.js'
+import {
+  createReminderActionHandler,
+  handleStatusKeyDown as handleStatusKeyDownUtil,
+  cycleStatus as cycleStatusUtil
+} from './reminderActionHandlers.js'
+import {
+  handleDragStart as handleDragStartUtil,
+  handleDragEnd as handleDragEndUtil
+} from './taskItemDragHandlers.js'
 
 function ListItemView({
   node,
@@ -223,143 +210,67 @@ function ListItemView({
     }
   }, [closeReminderMenu, customDate, ensurePersistentTaskId, reminderControlsEnabled])
 
-  const handleDismissReminder = useCallback(async () => {
-    if (!reminderControlsEnabled) return
-    try {
-      const realId = await ensurePersistentTaskId()
-      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
-        detail: { action: 'dismiss', taskId: String(realId) }
-      }))
-      closeReminderMenu()
-    } catch (err) {
-      setReminderError(err?.message || 'Unable to dismiss reminder')
-    }
-  }, [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled])
+  const handleDismissReminder = useCallback(
+    createReminderActionHandler('dismiss', ensurePersistentTaskId, closeReminderMenu, setReminderError, reminderControlsEnabled),
+    [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled]
+  )
 
-  const handleCompleteReminder = useCallback(async () => {
-    if (!reminderControlsEnabled) return
-    try {
-      const realId = await ensurePersistentTaskId()
-      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
-        detail: { action: 'complete', taskId: String(realId) }
-      }))
-      closeReminderMenu()
-    } catch (err) {
-      setReminderError(err?.message || 'Unable to mark complete')
-    }
-  }, [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled])
+  const handleCompleteReminder = useCallback(
+    createReminderActionHandler('complete', ensurePersistentTaskId, closeReminderMenu, setReminderError, reminderControlsEnabled),
+    [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled]
+  )
 
-  const handleRemoveReminder = useCallback(async () => {
-    if (!reminderControlsEnabled) return
-    try {
-      const realId = await ensurePersistentTaskId()
-      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
-        detail: { action: 'remove', taskId: String(realId) }
-      }))
-      closeReminderMenu()
-    } catch (err) {
-      setReminderError(err?.message || 'Unable to remove reminder')
-    }
-  }, [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled])
+  const handleRemoveReminder = useCallback(
+    createReminderActionHandler('remove', ensurePersistentTaskId, closeReminderMenu, setReminderError, reminderControlsEnabled),
+    [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled]
+  )
 
   const handleStatusKeyDown = useCallback((event) => {
-    if (event.key !== 'Enter') return
-    if (readOnly && !allowStatusToggleInReadOnly) return
-    event.preventDefault()
-    event.stopPropagation()
-    try {
-      const pos = typeof getPos === 'function' ? getPos() : null
-      if (typeof pos !== 'number' || !editor) return
-      const { state, view } = editor
-      const resolved = state.doc.resolve(pos)
-      const listItemDepth = findListItemDepth(resolved)
-      if (listItemDepth === -1) return
-      const listItemPos = resolved.before(listItemDepth)
-      const listItemNode = state.doc.nodeAt(listItemPos)
-      if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) return
-      const paragraphNode = listItemNode.child(0)
-      if (!paragraphNode || paragraphNode.type.name !== 'paragraph') return
-      const parentDepth = listItemDepth > 0 ? listItemDepth - 1 : null
-      const parentPos = parentDepth !== null ? resolved.before(parentDepth) : null
-      const originalIndex = resolved.index(listItemDepth)
-      const originalAttrs = { ...(listItemNode.attrs || {}) }
-      editor.commands.focus()
-      const paragraphStart = pos + 1
-      const paragraphEnd = paragraphStart + paragraphNode.nodeSize - 1
-      const tr = state.tr.setSelection(TextSelection.create(state.doc, paragraphEnd))
-      view.dispatch(tr)
-      const didSplit = runSplitListItemWithSelection(editor, { splitAtStart: false })
-      if (didSplit) {
-        applySplitStatusAdjustments(editor, {
-          parentPos,
-          originalIndex,
-          newIndex: originalIndex + 1,
-          originalAttrs
-        })
-      }
-    } catch {}
+    handleStatusKeyDownUtil(
+      event,
+      readOnly,
+      allowStatusToggleInReadOnly,
+      getPos,
+      editor,
+      findListItemDepth,
+      runSplitListItemWithSelection,
+      applySplitStatusAdjustments
+    )
   }, [allowStatusToggleInReadOnly, editor, getPos, readOnly])
 
   const cycle = (event) => {
-    if (readOnly && !allowStatusToggleInReadOnly) return
-    const li = rowRef.current?.closest('li.li-node')
-    const liveStatus = li?.getAttribute('data-status')
-    const currentStatus = typeof liveStatus === 'string' ? liveStatus : node?.attrs?.status ?? STATUS_EMPTY
-    const currentIndex = STATUS_ORDER.indexOf(currentStatus)
-    const idx = currentIndex >= 0 ? currentIndex : 0
-    const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
-    updateAttributes({ status: next })
-    if (readOnly && allowStatusToggleInReadOnly && typeof onStatusToggle === 'function') {
-      const realId = id || fallbackIdRef.current
-      if (realId) onStatusToggle(String(realId), next)
-    }
-    if (event?.currentTarget?.blur) {
-      try { event.currentTarget.blur() } catch {}
-    }
-    editor?.commands?.focus?.()
+    cycleStatusUtil(
+      event,
+      readOnly,
+      allowStatusToggleInReadOnly,
+      rowRef,
+      node,
+      STATUS_ORDER,
+      STATUS_EMPTY,
+      updateAttributes,
+      onStatusToggle,
+      id,
+      fallbackIdRef,
+      editor
+    )
   }
 
   const handleDragStart = (event) => {
-    if (readOnly) return
-    try {
-      justDraggedRef.current = true
-      let currentId = id ? String(id) : fallbackIdRef.current
-      if (!currentId) {
-        currentId = 'new-' + Math.random().toString(36).slice(2, 8)
-        updateAttributes({ dataId: currentId })
-      }
-      fallbackIdRef.current = currentId
-      const pos = getPos()
-      const view = editor.view
-      const tr = view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos))
-      view.dispatch(tr)
-      if (event.dataTransfer) {
-        event.dataTransfer.setData('text/plain', ' ')
-        event.dataTransfer.effectAllowed = 'move'
-      }
-      view.dragging = { slice: view.state.selection.content(), move: true }
-      if (event.currentTarget instanceof HTMLElement) {
-        const wrapper = event.currentTarget.closest('li.li-node')
-        if (wrapper) wrapper.setAttribute('data-id', currentId)
-      }
-      if (draggingRef) {
-        draggingRef.current = {
-          id: currentId,
-          element: event.currentTarget instanceof HTMLElement
-            ? event.currentTarget.closest('li.li-node')
-            : null
-        }
-      }
-    } catch (e) {
-      console.error('[drag] failed to select node', e)
-    }
+    handleDragStartUtil(
+      event,
+      readOnly,
+      id,
+      fallbackIdRef,
+      updateAttributes,
+      getPos,
+      editor,
+      draggingRef,
+      justDraggedRef
+    )
   }
 
   const handleDragEnd = () => {
-    if (readOnly) return
-    if (draggingRef) draggingRef.current = null
-    if (editor?.view) editor.view.dragging = null
-    setTimeout(() => { justDraggedRef.current = false }, 0)
+    handleDragEndUtil(readOnly, draggingRef, editor, justDraggedRef)
   }
 
   const handleToggleClick = () => {

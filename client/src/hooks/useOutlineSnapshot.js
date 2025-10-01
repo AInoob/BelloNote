@@ -4,6 +4,13 @@ import { buildOutlineIndex } from '../utils/outline.js'
 
 const SNAPSHOT_EVENT = 'worklog:outline-snapshot'
 
+/**
+ * Hook to manage outline snapshot state
+ * Loads initial outline and listens for snapshot updates
+ * Maintains both the outline tree and a flat index map
+ *
+ * @returns {Object} Outline roots array and indexed map
+ */
 export function useOutlineSnapshot() {
   const [outlineRoots, setOutlineRoots] = useState(() => [])
   const [outlineMap, setOutlineMap] = useState(() => new Map())
