@@ -12,12 +12,15 @@ import { useReminders } from './context/ReminderContext.jsx'
 import { useBuildInfo } from './hooks/useBuildInfo.js'
 import { usePersistentFlag } from './hooks/usePersistentFlag.js'
 import { useFocusRouter } from './hooks/useFocusRouter.js'
+import { CLIENT_BUILD_TIME, TAB_IDS } from './constants/config.js'
 
-const CLIENT_BUILD_TIME = typeof __APP_BUILD_TIME__ !== 'undefined' ? __APP_BUILD_TIME__ : null
-
+/**
+ * Get the initial tab to display
+ * @returns {string} The initial tab ID
+ */
 function getInitialTab() {
-  if (typeof window === 'undefined') return 'outline'
-  return 'outline'
+  if (typeof window === 'undefined') return TAB_IDS.OUTLINE
+  return TAB_IDS.OUTLINE
 }
 
 export default function App() {
@@ -112,7 +115,7 @@ export default function App() {
         healthFetchedAt={healthFetchedAt}
       />
       <main>
-        <TabPanel active={tab === 'outline'}>
+        <TabPanel active={tab === TAB_IDS.OUTLINE}>
           <OutlinerView
             onSaveStateChange={setSaveState}
             showDebug={showDebug}
@@ -121,14 +124,14 @@ export default function App() {
             onRequestTimelineFocus={requestTimelineFocus}
           />
         </TabPanel>
-        <TabPanel active={tab === 'timeline'}>
+        <TabPanel active={tab === TAB_IDS.TIMELINE}>
           <TimelineView
             focusRequest={timelineFocusRequest}
             onFocusHandled={handleTimelineFocusHandled}
             onNavigateOutline={requestOutlineFocus}
           />
         </TabPanel>
-        <TabPanel active={tab === 'reminders'}>
+        <TabPanel active={tab === TAB_IDS.REMINDERS}>
           <RemindersView />
         </TabPanel>
       </main>

@@ -1,19 +1,41 @@
 import React from 'react'
 
+/**
+ * Modal for creating a checkpoint with an optional note
+ *
+ * @param {string} note - Current note text
+ * @param {Function} onChange - Handler for note changes
+ * @param {Object} status - Status object with state and message
+ * @param {Function} onSubmit - Handler for form submission
+ * @param {Function} onClose - Handler to close the modal
+ * @param {Function} onViewHistory - Handler to open history panel
+ */
 export function CheckpointModal({ note, onChange, status, onSubmit, onClose, onViewHistory }) {
+  const handleOverlayClick = (event) => {
+    if (event.target === event.currentTarget) {
+      onClose()
+    }
+  }
+
+  const handleFormClick = (event) => {
+    event.stopPropagation()
+  }
+
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay" onClick={handleOverlayClick}>
       <form
         className="modal"
         style={{ maxWidth: 420 }}
-        onClick={(event) => event.stopPropagation()}
+        onClick={handleFormClick}
         onSubmit={onSubmit}
       >
         <h2 style={{ marginTop: 0 }}>Save checkpoint</h2>
         <p className="meta" style={{ marginTop: -4, marginBottom: 16 }}>
           Adds a named snapshot you can restore from the History panel.
         </p>
-        <label className="meta" style={{ display: 'block', marginBottom: 6 }}>Optional note</label>
+        <label className="meta" style={{ display: 'block', marginBottom: 6 }}>
+          Optional note
+        </label>
         <textarea
           value={note}
           onChange={(event) => onChange(event.target.value)}

@@ -1,0 +1,149 @@
+/**
+ * Create a reminder action handler
+ * @param {string} action - Action type ('schedule', 'dismiss', 'complete', 'remove')
+ * @param {Function} ensurePersistentTaskId - Function to ensure task has persistent ID
+ * @param {Function} closeReminderMenu - Function to close reminder menu
+ * @param {Function} setReminderError - Function to set reminder error
+ * @param {boolean} reminderControlsEnabled - Whether reminder controls are enabled
+ * @param {Object} options - Additional options
+ * @param {string} options.customDate - Custom date for schedule action
+ * @returns {Function} Handler function
+ */
+export function createReminderActionHandler(
+  action,
+  ensurePersistentTaskId,
+  closeReminderMenu,
+  setReminderError,
+  reminderControlsEnabled,
+  options = {}
+) {
+  return async () => {
+    if (!reminderControlsEnabled) return
+    try {
+      const realId = await ensurePersistentTaskId()
+      const detail = { action, taskId: String(realId) }
+      
+      if (action === 'schedule' && options.customDate) {
+        detail.remindAt = options.customDate
+      }
+      
+      window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail }))
+      closeReminderMenu()
+    } catch (err) {
+      const errorMessages = {
+        schedule: 'Failed to schedule reminder',
+        dismiss: 'Unable to dismiss reminder',
+        complete: 'Unable to mark complete',
+        remove: 'Unable to remove reminder'
+      }
+      setReminderError(err?.message || errorMessages[action] || 'Action failed')
+    }
+  }
+}
+
+/**
+ * Handle status key down event (Enter key to create new task)
+ * @param {Event} event - Keyboard event
+ * @param {boolean} readOnly - Whether editor is read-only
+ * @param {boolean} allowStatusToggleInReadOnly - Whether status toggle is allowed in read-only mode
+ * @param {Function} getPos - Function to get node position
+ * @param {Object} editor - TipTap editor instance
+ * @param {Function} findListItemDepth - Function to find list item depth
+ * @param {Function} runSplitListItemWithSelection - Function to split list item
+ * @param {Function} applySplitStatusAdjustments - Function to apply split status adjustments
+ */
+export function handleStatusKeyDown(
+  event,
+  readOnly,
+  allowStatusToggleInReadOnly,
+  getPos,
+  editor,
+  findListItemDepth,
+  runSplitListItemWithSelection,
+  applySplitStatusAdjustments
+) {
+  if (event.key !== 'Enter') return
+  if (readOnly && !allowStatusToggleInReadOnly) return
+  event.preventDefault()
+  event.stopPropagation()
+  try {
+    const pos = typeof getPos === 'function' ? getPos() : null
+    if (typeof pos !== 'number' || !editor) return
+    const { state, view } = editor
+    const resolved = state.doc.resolve(pos)
+    const listItemDepth = findListItemDepth(resolved)
+    if (listItemDepth === -1) return
+    const listItemPos = resolved.before(listItemDepth)
+    const listItemNode = state.doc.nodeAt(listItemPos)
+    if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) return
+    const paragraphNode = listItemNode.child(0)
+    if (!paragraphNode || paragraphNode.type.name !== 'paragraph') return
+    const parentDepth = listItemDepth > 0 ? listItemDepth - 1 : null
+    const parentPos = parentDepth !== null ? resolved.before(parentDepth) : null
+    const originalIndex = resolved.index(listItemDepth)
+    const originalAttrs = { ...(listItemNode.attrs || {}) }
+    editor.commands.focus()
+    const paragraphStart = pos + 1
+    const paragraphEnd = paragraphStart + paragraphNode.nodeSize - 1
+    const { TextSelection } = require('prosemirror-state')
+    const tr = state.tr.setSelection(TextSelection.create(state.doc, paragraphEnd))
+    view.dispatch(tr)
+    const didSplit = runSplitListItemWithSelection(editor, { splitAtStart: false })
+    if (didSplit) {
+      applySplitStatusAdjustments(editor, {
+        parentPos,
+        originalIndex,
+        newIndex: originalIndex + 1,
+        originalAttrs
+      })
+    }
+  } catch {}
+}
+
+/**
+ * Cycle through status values
+ * @param {Event} event - Click event
+ * @param {boolean} readOnly - Whether editor is read-only
+ * @param {boolean} allowStatusToggleInReadOnly - Whether status toggle is allowed in read-only mode
+ * @param {Object} rowRef - Ref to row element
+ * @param {Object} node - ProseMirror node
+ * @param {Array} STATUS_ORDER - Array of status values in order
+ * @param {string} STATUS_EMPTY - Empty status value
+ * @param {Function} updateAttributes - Function to update node attributes
+ * @param {Function} onStatusToggle - Callback for status toggle
+ * @param {string} id - Task ID
+ * @param {Object} fallbackIdRef - Ref to fallback ID
+ * @param {Object} editor - TipTap editor instance
+ */
+export function cycleStatus(
+  event,
+  readOnly,
+  allowStatusToggleInReadOnly,
+  rowRef,
+  node,
+  STATUS_ORDER,
+  STATUS_EMPTY,
+  updateAttributes,
+  onStatusToggle,
+  id,
+  fallbackIdRef,
+  editor
+) {
+  if (readOnly && !allowStatusToggleInReadOnly) return
+  const li = rowRef.current?.closest('li.li-node')
+  const liveStatus = li?.getAttribute('data-status')
+  const currentStatus = typeof liveStatus === 'string' ? liveStatus : node?.attrs?.status ?? STATUS_EMPTY
+  const currentIndex = STATUS_ORDER.indexOf(currentStatus)
+  const idx = currentIndex >= 0 ? currentIndex : 0
+  const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
+  updateAttributes({ status: next })
+  if (readOnly && allowStatusToggleInReadOnly && typeof onStatusToggle === 'function') {
+    const realId = id || fallbackIdRef.current
+    if (realId) onStatusToggle(String(realId), next)
+  }
+  if (event?.currentTarget?.blur) {
+    try { event.currentTarget.blur() } catch {}
+  }
+  editor?.commands?.focus?.()
+}
+
