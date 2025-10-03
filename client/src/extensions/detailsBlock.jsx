@@ -2,8 +2,6 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer, NodeViewWrapper, EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
-import { lowlight } from 'lowlight/lib/core.js'
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { getTask, updateTask, uploadImage, absoluteUrl } from '../api.js'
 import { ImageWithMeta } from './imageWithMeta.js'
@@ -23,24 +21,64 @@ function nearestListItemId(editor, getPos) {
 
 const DetailsView = (props) => {
   const { node, updateAttributes, editor, getPos } = props
-  const open = !!node.attrs.open
+  const isOpen = !!node?.attrs?.open
   const [taskId, setTaskId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [extensions, setExtensions] = useState(null)
   const convertingImagesRef = useRef(false)
   const pendingImagesRef = useRef(new Set())
+  const taskIdRef = useRef(null)
 
   useEffect(() => { setTaskId(nearestListItemId(editor, getPos)) }, [])
+  useEffect(() => { taskIdRef.current = taskId }, [taskId])
 
-  const detailsEditor = useEditor({
-    extensions: [StarterKit, ImageWithMeta.configure({ inline:false, allowBase64:true }), CodeBlockLowlight.configure({ lowlight })],
-    content: '<p></p>',
-    onUpdate: async ({ editor: ed }) => {
-      if (!taskId || String(taskId).startsWith('new-')) return
-      setSaving(true)
-      await updateTask(taskId, { content: ed.getHTML() })
-      setSaving(false)
-    }
-  })
+  useEffect(() => {
+    if (!isOpen || extensions) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [{ default: CodeBlockLowlight }, { lowlight }] = await Promise.all([
+          import('@tiptap/extension-code-block-lowlight'),
+          import('lowlight/lib/core.js')
+        ])
+        if (cancelled) return
+        setExtensions([
+          StarterKit,
+          ImageWithMeta.configure({ inline: false, allowBase64: true }),
+          CodeBlockLowlight.configure({ lowlight })
+        ])
+      } catch (err) {
+        console.error('[details] failed to load editor extensions', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isOpen, extensions])
+
+  useEffect(() => {
+    if (!isOpen) setSaving(false)
+  }, [isOpen])
+
+  const detailsEditor = useEditor(
+    isOpen && extensions
+      ? {
+          extensions,
+          content: '<p></p>',
+          onUpdate: async ({ editor: ed }) => {
+            const currentTaskId = taskIdRef.current
+            if (!currentTaskId || String(currentTaskId).startsWith('new-')) return
+            setSaving(true)
+            try {
+              await updateTask(currentTaskId, { content: ed.getHTML() })
+            } catch (err) {
+              console.error('[details] failed to save content', err)
+            } finally {
+              setSaving(false)
+            }
+          }
+        }
+      : null,
+    [extensions, isOpen]
+  )
 
   const ensureUploadedImages = useCallback(async () => {
     if (!detailsEditor || convertingImagesRef.current) return
@@ -90,43 +128,70 @@ const DetailsView = (props) => {
   }, [detailsEditor, ensureUploadedImages])
 
   useEffect(() => {
+    if (!isOpen || !detailsEditor) return undefined
+    if (!taskId || String(taskId).startsWith('new-')) return undefined
     let cancelled = false
-    async function load() {
-      if (!open || !taskId || String(taskId).startsWith('new-')) return
-      const t = await getTask(taskId)
-      if (!cancelled) detailsEditor?.commands.setContent(t.content || '<p></p>')
-    }
-    load()
+    ;(async () => {
+      try {
+        const task = await getTask(taskId)
+        if (!cancelled) detailsEditor.commands.setContent(task.content || '<p></p>')
+      } catch (err) {
+        console.error('[details] failed to load content', err)
+      }
+    })()
     return () => { cancelled = true }
-  }, [open, taskId])
+  }, [isOpen, taskId, detailsEditor])
 
   return (
     <NodeViewWrapper className="details-block">
-      <button className="details-pill" onClick={() => updateAttributes({ open: !open })}>
-        {open ? 'Hide details' : 'Details'}
+      <button className="details-pill" onClick={() => updateAttributes({ open: !isOpen })}>
+        {isOpen ? 'Hide details' : 'Details'}
       </button>
-      {open && (
+      {isOpen && (
         <div className="details-panel">
-          <div className="save-indicator" style={{ marginBottom: 6 }}>{saving ? 'Saving…' : 'Auto-saved'}</div>
-          <EditorContent editor={detailsEditor} className="tiptap" />
-          <div style={{ display:'flex', gap:8, marginTop:6 }}>
-            <button className="btn" onClick={async () => {
-              const input = document.createElement('input')
-              input.type = 'file'
-              input.accept = 'image/*'
-              input.onchange = async () => {
-                const file = input.files[0]
-                if (!file) return
-                const result = await uploadImage(file)
-                const attrs = { src: absoluteUrl(result.url) }
-                if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
-                if (result?.id) attrs['data-file-id'] = result.id
-                detailsEditor.chain().focus().setImage(attrs).run()
-              }
-              input.click()
-            }}>Upload image</button>
-            <button className="btn" onClick={() => detailsEditor.chain().focus().toggleCodeBlock().run()}>Code block</button>
-          </div>
+          {!detailsEditor && (
+            <div className="save-indicator" style={{ marginBottom: 6 }}>Loading…</div>
+          )}
+          {detailsEditor && (
+            <>
+              <div className="save-indicator" style={{ marginBottom: 6 }}>{saving ? 'Saving…' : 'Auto-saved'}</div>
+              <EditorContent editor={detailsEditor} className="tiptap" />
+              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <button
+                  className="btn"
+                  disabled={!detailsEditor}
+                  onClick={async () => {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = 'image/*'
+                    input.onchange = async () => {
+                      const file = input.files[0]
+                      if (!file) return
+                      try {
+                        const result = await uploadImage(file)
+                        const attrs = { src: absoluteUrl(result.url) }
+                        if (result?.relativeUrl) attrs['data-file-path'] = result.relativeUrl
+                        if (result?.id) attrs['data-file-id'] = result.id
+                        detailsEditor.chain().focus().setImage(attrs).run()
+                      } catch (err) {
+                        console.error('[details] failed to upload image', err)
+                      }
+                    }
+                    input.click()
+                  }}
+                >
+                  Upload image
+                </button>
+                <button
+                  className="btn"
+                  disabled={!detailsEditor}
+                  onClick={() => detailsEditor.chain().focus().toggleCodeBlock().run()}
+                >
+                  Code block
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </NodeViewWrapper>
