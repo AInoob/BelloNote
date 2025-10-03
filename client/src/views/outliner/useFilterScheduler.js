@@ -15,6 +15,12 @@ export function useFilterScheduler(
   lastFilterRunAtRef,
   filterRunCounterRef
 ) {
+  const runFilter = useCallback(() => {
+    lastFilterRunAtRef.current = now()
+    filterRunCounterRef.current = filterRunCounterRef.current + 1
+    applyStatusFilter()
+  }, [applyStatusFilter, lastFilterRunAtRef, filterRunCounterRef])
+
   const cancelScheduledFilter = useCallback(() => {
     const handle = filterScheduleRef.current
     if (!handle) return
@@ -30,35 +36,24 @@ export function useFilterScheduler(
 
   const scheduleApplyStatusFilter = useCallback((reason = 'unknown') => {
     const scheduledAt = now()
-    const runFilter = () => {
-      filterScheduleRef.current = null
-      const runId = filterRunCounterRef.current = filterRunCounterRef.current + 1
-      const start = now()
-      try {
-        applyStatusFilter()
-      } finally {
-        const end = now()
-        lastFilterRunAtRef.current = end
-      }
-    }
-
     cancelScheduledFilter()
 
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
       const rafId = window.requestAnimationFrame(() => {
-        runFilter()
+        filterScheduleRef.current = null
+        Promise.resolve().then(runFilter)
       })
       filterScheduleRef.current = { type: 'raf', id: rafId, reason, scheduledAt }
     } else {
       const timeoutId = setTimeout(() => {
+        filterScheduleRef.current = null
         runFilter()
-      }, 16)
+      }, 24)
       filterScheduleRef.current = { type: 'timeout', id: timeoutId, reason, scheduledAt }
     }
-  }, [applyStatusFilter, cancelScheduledFilter, filterScheduleRef, lastFilterRunAtRef, filterRunCounterRef])
+  }, [cancelScheduledFilter, filterScheduleRef, runFilter])
 
   useEffect(() => () => { cancelScheduledFilter() }, [cancelScheduledFilter])
 
   return { scheduleApplyStatusFilter, cancelScheduledFilter }
 }
-

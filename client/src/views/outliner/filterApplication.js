@@ -2,6 +2,7 @@ import { cssEscape } from '../../utils/cssEscape.js'
 import { extractTagsFromText } from './tagUtils.js'
 
 const DEFAULT_TAG_FILTER = { include: [], exclude: [] }
+const LAST_VISIBILITY = new WeakMap()
 
 /**
  * Apply status, archive, and tag filters to the editor DOM
@@ -16,7 +17,8 @@ export function applyStatusFilter(
   statusFilterRef,
   showArchivedRef,
   tagFiltersRef,
-  focusRootRef
+  focusRootRef,
+  searchQueryRef
 ) {
   if (!editor) return
   const root = editor.view.dom
@@ -87,7 +89,13 @@ export function applyStatusFilter(
     li.removeAttribute('data-focus-role')
     li.style.display = ''
     const row = li.querySelector(':scope > .li-row')
-    if (row) row.style.display = ''
+    if (row) {
+      const prevVisibility = LAST_VISIBILITY.get(li)
+      if (prevVisibility !== 'visible') {
+        row.style.display = ''
+        LAST_VISIBILITY.set(li, 'visible')
+      }
+    }
 
     const body = li.querySelector(':scope > .li-row .li-content')
     const attrBody = li.getAttribute('data-body-text')
@@ -208,7 +216,11 @@ export function applyStatusFilter(
         li.classList.add('focus-hidden')
         li.classList.remove(parentClass)
         li.classList.remove(hiddenClass)
-        li.style.display = 'none'
+        const prevVisibility = LAST_VISIBILITY.get(li)
+        if (prevVisibility !== 'hidden') {
+          li.style.display = 'none'
+          LAST_VISIBILITY.set(li, 'hidden')
+        }
         continue
       }
     } else {
@@ -220,10 +232,18 @@ export function applyStatusFilter(
       : (hideByStatus || hideByArchive || hideByTags)
     if (shouldHide) {
       li.classList.add(hiddenClass)
-      li.style.display = 'none'
+      const prevVisibility = LAST_VISIBILITY.get(li)
+      if (prevVisibility !== 'hidden') {
+        li.style.display = 'none'
+        LAST_VISIBILITY.set(li, 'hidden')
+      }
     } else {
       li.classList.remove(hiddenClass)
-      li.style.display = ''
+      const prevVisibility = LAST_VISIBILITY.get(li)
+      if (prevVisibility !== 'visible') {
+        li.style.display = ''
+        LAST_VISIBILITY.set(li, 'visible')
+      }
     }
   }
 

@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
@@ -146,6 +146,7 @@ export default function OutlinerView({
   useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
   const draggingRef = useRef(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const deferredSearchQuery = useDeferredValue(searchQuery)
   const searchQueryRef = useRef('')
   const convertingImagesRef = useRef(false)
   const suppressSelectionRestoreRef = useRef(false)
@@ -454,9 +455,10 @@ export default function OutlinerView({
       statusFilterRef,
       showArchivedRef,
       tagFiltersRef,
-      focusRootRef
+      focusRootRef,
+      { current: deferredSearchQuery }
     )
-  }, [editor, statusFilter, showArchived, tagFilters])
+  }, [editor, statusFilter, showArchived, tagFilters, deferredSearchQuery])
 
   const { scheduleApplyStatusFilter } = useFilterScheduler(
     applyStatusFilter,
