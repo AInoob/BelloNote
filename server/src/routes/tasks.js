@@ -7,7 +7,7 @@ import { computeTaskTags, parseTagsField } from '../util/tags.js'
 const router = Router()
 
 router.get('/:id', (req, res) => {
-  const id = Number(req.params.id)
+  const id = String(req.params.id)
   const row = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id)
   if (!row) return res.status(404).json({ error: 'Not found' })
   if (row.content) {
@@ -35,7 +35,7 @@ router.get('/:id', (req, res) => {
 })
 
 router.patch('/:id', (req, res) => {
-  const id = Number(req.params.id)
+  const id = String(req.params.id)
   const cur = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id)
   if (!cur) return res.status(404).json({ error: 'Not found' })
   const title = 'title' in req.body ? req.body.title : cur.title

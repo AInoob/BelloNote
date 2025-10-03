@@ -1,4 +1,5 @@
 
+import { randomUUID } from 'crypto'
 import { Router } from 'express'
 import { db } from '../lib/db.js'
 import { buildProjectTree } from '../util/tree.js'
@@ -60,11 +61,11 @@ router.post('/outline', (req, res) => {
     console.log('[outline] save log failed', e.message)
   }
 
-  const existing = db.prepare(`SELECT id FROM tasks WHERE project_id = ?`).all(projectId).map(r => r.id)
+  const existing = db.prepare(`SELECT id FROM tasks WHERE project_id = ?`).all(projectId).map(r => String(r.id))
   const seen = new Set()
   const newIdMap = {}
 
-  const insertTask = db.prepare(`INSERT INTO tasks (project_id, parent_id, title, status, content, tags, position) VALUES (@project_id, @parent_id, @title, @status, @content, @tags, @position)`)
+  const insertTask = db.prepare(`INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position) VALUES (@id, @project_id, @parent_id, @title, @status, @content, @tags, @position)`)
   const updateTask = db.prepare(`UPDATE tasks SET parent_id=@parent_id, title=@title, status=@status, content=@content, tags=@tags, position=@position, updated_at=datetime('now') WHERE id=@id`)
   const listLogs = db.prepare(`SELECT date FROM work_logs WHERE task_id = ?`)
   const addLog = db.prepare(`INSERT OR IGNORE INTO work_logs (task_id, date) VALUES (?, ?)`)
@@ -72,7 +73,8 @@ router.post('/outline', (req, res) => {
 
   function upsertNode(node, parent_id = null, position = 0) {
     let realId = null
-    const id = node.id
+    const rawId = node.id
+    const id = rawId == null ? null : String(rawId)
     const rawBody = parseMaybeJson(node.body ?? node.content)
     const sanitizedBody = sanitizeRichText(rawBody, projectId, { title: node.title })
     const contentJson = stringifyNodes(sanitizedBody)
@@ -87,12 +89,12 @@ router.post('/outline', (req, res) => {
     const statusValue = normalizedStatus === 'todo' || normalizedStatus === 'in-progress' || normalizedStatus === 'done' || normalizedStatus === ''
       ? normalizedStatus
       : ''
-    if (!id || String(id).startsWith('new-')) {
-      const info = insertTask.run({ project_id: projectId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, tags: tagsJson, position })
-      realId = info.lastInsertRowid
+    if (!id || id.startsWith('new-')) {
+      realId = randomUUID()
+      insertTask.run({ id: realId, project_id: projectId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, tags: tagsJson, position })
       if (id) newIdMap[id] = realId
     } else {
-      realId = Number(id)
+      realId = id
       updateTask.run({ id: realId, parent_id, title: node.title || 'Untitled', status: statusValue, content: contentJson, tags: tagsJson, position })
     }
     seen.add(realId)

@@ -38,10 +38,18 @@ export function buildProjectTree(tasks, workLogsByTaskId) {
     node.workedOnDates = Array.from(node.aggWorkedOn).sort().reverse()
     delete node.ownWorkedOn
     delete node.aggWorkedOn
-    node.children.sort((a,b) => (a.position ?? 0) - (b.position ?? 0) || (Number(a.id) - Number(b.id)))
+    node.children.sort((a, b) => {
+      const posDiff = (a.position ?? 0) - (b.position ?? 0)
+      if (posDiff !== 0) return posDiff
+      return String(a.id).localeCompare(String(b.id))
+    })
     node.children.forEach(finalize)
   }
-  roots.sort((a,b) => (a.position ?? 0) - (b.position ?? 0) || (Number(a.id) - Number(b.id)))
+  roots.sort((a, b) => {
+    const posDiff = (a.position ?? 0) - (b.position ?? 0)
+    if (posDiff !== 0) return posDiff
+    return String(a.id).localeCompare(String(b.id))
+  })
   roots.forEach(finalize)
   return roots
 }

@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS tasks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT PRIMARY KEY,
   project_id INTEGER NOT NULL,
-  parent_id INTEGER,
+  parent_id TEXT,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo',
   content TEXT DEFAULT '',
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE TABLE IF NOT EXISTS work_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id INTEGER NOT NULL,
+  task_id TEXT NOT NULL,
   date TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(task_id, date),
