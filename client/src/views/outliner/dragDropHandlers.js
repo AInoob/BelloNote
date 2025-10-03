@@ -41,8 +41,14 @@ export function handleDrop(
   const dragEl = drag.element
   const pointerY = event.clientY
   const dragList = dragEl ? dragEl.closest('ul') : null
-  const candidates = Array.from(dom.querySelectorAll('li.li-node'))
-    .filter(el => el !== dragEl && (!dragList || el.closest('ul') === dragList)) // only same-level siblings
+  const nodeList = dom.querySelectorAll('li.li-node')
+  const candidates = []
+  for (let i = 0; i < nodeList.length; i++) {
+    const el = nodeList[i]
+    if (el === dragEl) continue
+    if (dragList && el.closest('ul') !== dragList) continue
+    candidates.push(el)
+  }
   let chosen = null
   let dropAfter = false
   // Compute depth of an li by counting ancestor lis
@@ -51,9 +57,14 @@ export function handleDrop(
     while (cur) { if (cur.matches && cur.matches('li.li-node')) depth += 1; cur = cur.parentElement }
     return depth
   }
-  const infos = candidates.map(el => ({ el, rect: el.getBoundingClientRect(), depth: getDepth(el) }))
-    .filter(info => info.rect.height > 0)
-    .sort((a, b) => a.rect.top - b.rect.top)
+  const infos = []
+  for (let i = 0; i < candidates.length; i++) {
+    const el = candidates[i]
+    const rect = el.getBoundingClientRect()
+    if (!rect || rect.height <= 0) continue
+    infos.push({ el, rect, depth: getDepth(el) })
+  }
+  infos.sort((a, b) => a.rect.top - b.rect.top)
   const inside = infos.filter(info => pointerY >= info.rect.top && pointerY <= info.rect.bottom)
   if (inside.length) {
     // Prefer deepest element under the pointer
@@ -98,4 +109,3 @@ export function handleDrop(
   queueSave(300)
   applyStatusFilter()
 }
-

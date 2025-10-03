@@ -4,6 +4,52 @@
 
 import { DATE_RE } from './constants.js'
 
+function contentTextIncludes(nodes, predicate) {
+  if (!nodes) return false
+  const stack = []
+  if (Array.isArray(nodes)) {
+    for (let i = 0; i < nodes.length; i++) stack.push(nodes[i])
+  } else {
+    stack.push(nodes)
+  }
+  while (stack.length) {
+    const current = stack.pop()
+    if (current == null) continue
+    if (typeof current === 'string') {
+      if (predicate(current)) return true
+      continue
+    }
+    if (Array.isArray(current)) {
+      for (let i = 0; i < current.length; i++) stack.push(current[i])
+      continue
+    }
+    if (typeof current === 'object') {
+      if (typeof current.text === 'string' && predicate(current.text)) return true
+      const content = current.content
+      if (Array.isArray(content)) {
+        for (let i = 0; i < content.length; i++) stack.push(content[i])
+      }
+    }
+  }
+  return false
+}
+
+function analyzeNodeMarkers(node) {
+  if (!node) return { hasDate: false }
+  const markers = { hasDate: false }
+  const title = typeof node.title === 'string' ? node.title : ''
+  if (title) {
+    const titleLower = title.toLowerCase()
+    if (DATE_RE.test(title)) markers.hasDate = true
+  }
+  if (markers.hasDate) return markers
+  contentTextIncludes(node.content, text => {
+    if (!markers.hasDate && DATE_RE.test(text)) markers.hasDate = true
+    return markers.hasDate
+  })
+  return markers
+}
+
 /**
  * Build an outline tree structure from flat items with path arrays
  * This reconstructs the hierarchy so we can render with OutlinerView in read-only mode
@@ -14,48 +60,61 @@ import { DATE_RE } from './constants.js'
  * @returns {Array} Array of root nodes with nested children
  */
 export function buildOutlineFromItems(items, seedIds = [], date = null) {
-  const seedSet = new Set(seedIds)
+  const seedSet = seedIds?.length ? new Set(seedIds) : null
   const byId = new Map()
   const rootsSet = new Set()
-  
+
   const ensureNode = (seg) => {
-    if (!byId.has(seg.id)) {
-      byId.set(seg.id, {
-        id: seg.id,
-        title: seg.title,
-        status: seg.status ?? '',
-        content: seg.content ?? null,
-        children: [],
-        ownWorkedOnDates: []
-      })
+    if (!seg) return null
+    const existing = byId.get(seg.id)
+    if (existing) return existing
+    const created = {
+      id: seg.id,
+      title: seg.title,
+      status: seg.status ?? '',
+      content: seg.content ?? null,
+      children: [],
+      childIds: new Set(),
+      ownWorkedOnDates: [],
+      ownWorkedOnDatesSet: new Set()
     }
-    return byId.get(seg.id)
+    byId.set(seg.id, created)
+    return created
   }
-  
-  items.forEach(it => {
-    const path = Array.isArray(it.path) ? it.path : []
-    if (!path.length) return
-    
-    rootsSet.add(path[0].id)
-    
-    for (let i = 0; i < path.length; i++) {
-      const cur = ensureNode(path[i])
-      
-      // Mark the node if it is a seed (directly logged for the day)
-      if (date && seedSet.has(cur.id) && !cur.ownWorkedOnDates.includes(date)) {
-        cur.ownWorkedOnDates.push(date)
-      }
-      
-      const prev = i > 0 ? ensureNode(path[i - 1]) : null
-      if (prev) {
-        if (!prev.children.find(ch => ch.id === cur.id)) {
-          prev.children.push(cur)
+
+  if (Array.isArray(items)) {
+    for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
+      const it = items[itemIdx]
+      const path = Array.isArray(it?.path) ? it.path : []
+      if (!path.length) continue
+
+      rootsSet.add(path[0].id)
+
+      for (let i = 0; i < path.length; i++) {
+        const cur = ensureNode(path[i])
+        if (!cur) continue
+
+        if (seedSet && date && seedSet.has(cur.id) && !cur.ownWorkedOnDatesSet.has(date)) {
+          cur.ownWorkedOnDatesSet.add(date)
+          cur.ownWorkedOnDates.push(date)
+        }
+
+        if (i > 0) {
+          const prev = ensureNode(path[i - 1])
+          if (prev && !prev.childIds.has(cur.id)) {
+            prev.childIds.add(cur.id)
+            prev.children.push(cur)
+          }
         }
       }
     }
-  })
+  }
   
   const roots = Array.from(rootsSet).map(id => byId.get(id)).filter(Boolean)
+  for (const node of byId.values()) {
+    if (node.childIds) delete node.childIds
+    if (node.ownWorkedOnDatesSet) delete node.ownWorkedOnDatesSet
+  }
   return roots
 }
 
@@ -67,10 +126,10 @@ export function buildOutlineFromItems(items, seedIds = [], date = null) {
  * @returns {boolean} True if the tag is found
  */
 export function hasTag(node, tag) {
-  const t = (node?.title || '').toLowerCase()
-  const bodyLower = JSON.stringify(node?.content || []).toLowerCase()
-  const needle = `@${tag}`
-  return t.includes(needle) || bodyLower.includes(needle)
+  const needle = `@${tag}`.toLowerCase()
+  const title = typeof node?.title === 'string' ? node.title.toLowerCase() : ''
+  if (title.includes(needle)) return true
+  return contentTextIncludes(node?.content, text => text.toLowerCase().includes(needle))
 }
 
 /**
@@ -80,51 +139,5 @@ export function hasTag(node, tag) {
  * @returns {boolean} True if a date token is found
  */
 export function hasDate(node) {
-  const t = node?.title || ''
-  const body = JSON.stringify(node?.content || [])
-  return DATE_RE.test(t) || DATE_RE.test(body)
+  return analyzeNodeMarkers(node).hasDate
 }
-
-/**
- * Collect tasks tagged with @soon or @future from the outline roots
- * Tasks are categorized based on tag inheritance and date presence
- * 
- * @param {Array} roots - Array of root nodes
- * @returns {Object} Object with soonRoots and futureRoots arrays
- */
-export function collectSoonAndFuture(roots) {
-  const soonRoots = []
-  const futureRoots = []
-  
-  function walk(node, parentSoon = false, parentFuture = false) {
-    const selfSoon = hasTag(node, 'soon')
-    const selfFuture = hasTag(node, 'future')
-    const effSoon = parentSoon || selfSoon
-    const effFuture = parentFuture || selfFuture
-    const dated = hasDate(node)
-    
-    // Soon items without dates go to Soon section
-    if (effSoon && !dated) {
-      soonRoots.push(node)
-      return
-    }
-    
-    // Future items (not under Soon) without dates go to Future section
-    if (effFuture && !parentSoon && !dated) {
-      futureRoots.push(node)
-      return
-    }
-    
-    // Recurse into children
-    for (const ch of (node.children || [])) {
-      walk(ch, effSoon, effFuture)
-    }
-  }
-  
-  for (const r of (roots || [])) {
-    walk(r, false, false)
-  }
-  
-  return { soonRoots, futureRoots }
-}
-

@@ -11,6 +11,9 @@ const PROJECT_ROOT = path.join(__dirname, '..', '..')
 const SERVER_ROOT = path.join(PROJECT_ROOT, 'server')
 const CLIENT_ROOT = path.join(PROJECT_ROOT, 'client')
 const TEMP_ROOT = path.join(PROJECT_ROOT, 'tests', 'temp')
+const BASE_CLIENT_DIST = path.join(CLIENT_ROOT, 'dist')
+const WORKER_ROOT_PREFIX = '.playwright-data'
+const PLACEHOLDER_PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Yp8N40AAAAASUVORK5CYII=', 'base64')
 const NPM_CMD = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 const reservedPorts = new Set()
@@ -24,7 +27,7 @@ function sanitizeSegment(segment) {
     .replace(/^-+|-+$/g, '')
 }
 
-function buildDataDir(testInfo) {
+function buildDataDir(testInfo, baseDir = TEMP_ROOT) {
   const parts = [
     ...testInfo.titlePath,
     `w${testInfo.workerIndex}`,
@@ -32,7 +35,12 @@ function buildDataDir(testInfo) {
     `e${testInfo.repeatEachIndex}`
   ]
   const slug = parts.map(sanitizeSegment).filter(Boolean).join('-') || `test-${Date.now()}`
-  return path.join(TEMP_ROOT, slug)
+  return path.join(baseDir, slug)
+}
+
+function buildWorkerRoot(workerInfo) {
+  const suffix = `${workerInfo.workerIndex}-${process.pid}-${Date.now().toString(36)}`
+  return path.join(TEMP_ROOT, `${WORKER_ROOT_PREFIX}-${suffix}`)
 }
 
 function attachLoggers(proc, label) {
@@ -103,6 +111,77 @@ function releasePort(port) {
   setTimeout(() => reservedPorts.delete(port), 2000)
 }
 
+async function resetServerState(apiUrl) {
+  if (!apiUrl) throw new Error('resetServerState requires apiUrl')
+  const response = await fetch(`${apiUrl}/api/test/reset`, {
+    method: 'POST',
+    headers: { 'x-playwright-test': '1' }
+  })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`Failed to reset server state (${response.status}): ${body}`)
+  }
+}
+
+function copyDirectory(source, destination) {
+  fs.mkdirSync(destination, { recursive: true })
+  const entries = fs.readdirSync(source, { withFileTypes: true })
+  for (const entry of entries) {
+    const srcPath = path.join(source, entry.name)
+    const destPath = path.join(destination, entry.name)
+    if (entry.isDirectory()) copyDirectory(srcPath, destPath)
+    else fs.copyFileSync(srcPath, destPath)
+  }
+}
+
+function injectRuntimeConfig(distDir, apiUrl) {
+  const indexPath = path.join(distDir, 'index.html')
+  if (!fs.existsSync(indexPath)) throw new Error(`index.html missing in ${distDir}`)
+  const original = fs.readFileSync(indexPath, 'utf8')
+  const configScript = `<script>window.__BELLO_RUNTIME_CONFIG__ = ${JSON.stringify({ apiUrl })};</script>`
+  const cleaned = original.replace(/\s*<script>window.__BELLO_RUNTIME_CONFIG__.*?<\/script>/s, '')
+  if (cleaned.includes('</head>')) {
+    const updated = cleaned.replace('</head>', `  ${configScript}\n</head>`)
+    fs.writeFileSync(indexPath, updated)
+  } else {
+    fs.writeFileSync(indexPath, `${configScript}\n${cleaned}`)
+  }
+}
+
+let clientBuildPromise = null
+
+async function ensureClientBuild() {
+  if (fs.existsSync(BASE_CLIENT_DIST)) return
+  if (!clientBuildPromise) {
+    clientBuildPromise = (async () => {
+      let buildLogs = null
+      try {
+        const buildProc = spawn(NPM_CMD, ['run', 'build'], {
+          cwd: CLIENT_ROOT,
+          env: process.env,
+          stdio: 'pipe'
+        })
+        await waitForSpawn(buildProc, 'client build (shared)')
+        buildLogs = attachLoggers(buildProc, 'client-build-shared')
+        const exitCode = await new Promise((res, rej) => {
+          buildProc.once('error', rej)
+          buildProc.once('exit', res)
+        })
+        if (exitCode !== 0) {
+          const info = buildLogs.getLogs ? `\n${buildLogs.getLogs()}` : ''
+          throw new Error(`client build failed (code ${exitCode})${info}`)
+        }
+      } finally {
+        buildLogs?.dispose?.()
+      }
+    })().catch((err) => {
+      clientBuildPromise = null
+      throw err
+    })
+  }
+  await clientBuildPromise
+}
+
 async function allocatePort({ rangeStart, rangeEnd, preferred }) {
   return findAvailablePort(rangeStart, rangeEnd)
 }
@@ -171,10 +250,13 @@ const test = playwrightBase.extend({
       await context.close()
     }
   },
-  app: async ({}, use, testInfo) => {
+  appServer: [async ({}, use, workerInfo) => {
     fs.mkdirSync(TEMP_ROOT, { recursive: true })
-    const dataDir = buildDataDir(testInfo)
-    fs.rmSync(dataDir, { recursive: true, force: true })
+    const workerRoot = buildWorkerRoot(workerInfo)
+    fs.rmSync(workerRoot, { recursive: true, force: true })
+    fs.mkdirSync(workerRoot, { recursive: true })
+
+    const dataDir = path.join(workerRoot, 'server-data')
     fs.mkdirSync(dataDir, { recursive: true })
 
     let serverPort
@@ -202,19 +284,19 @@ const test = playwrightBase.extend({
 
       serverProc = spawn(NPM_CMD, ['start'], {
         cwd: SERVER_ROOT,
-        env: { ...process.env, PORT: String(serverPort), DATA_DIR: dataDir },
+        env: { ...process.env, PORT: String(serverPort), DATA_DIR: dataDir, NODE_ENV: 'test' },
         stdio: 'pipe'
       })
       await waitForSpawn(serverProc, 'server')
       serverLogs = attachLoggers(serverProc, 'server')
       await waitForReady({ url: `${apiUrl}/api/health`, label: 'server', process: serverProc, getLogs: serverLogs.getLogs })
 
-      distDir = path.join(dataDir, 'client-dist')
+      distDir = path.join(workerRoot, 'client-dist')
       await buildClientBundle({ apiUrl, distDir })
 
       clientProc = spawn(NPM_CMD, ['run', 'preview', '--', '--host=127.0.0.1', `--port=${clientPort}`, `--outDir=${distDir}`], {
         cwd: CLIENT_ROOT,
-        env: { ...process.env, VITE_API_URL: apiUrl },
+        env: { ...process.env, VITE_API_URL: apiUrl, NODE_ENV: 'test' },
         stdio: 'pipe'
       })
       await waitForSpawn(clientProc, 'client')
@@ -227,26 +309,21 @@ const test = playwrightBase.extend({
         verify: async () => !(await checkPort(clientPort))
       })
 
-      const appContext = {
+      await resetServerState(apiUrl)
+
+      const sharedContext = {
         apiUrl,
         clientUrl,
-        dataDir,
         clientPort,
         serverPort,
-        async resetOutline(outline = []) {
-          const response = await fetch(`${apiUrl}/api/outline`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-playwright-test': '1' },
-            body: JSON.stringify({ outline })
-          })
-          if (!response.ok) {
-            const body = await response.text()
-            throw new Error(`Failed to reset outline (${response.status}): ${body}`)
-          }
+        workerRoot,
+        dataDir,
+        async resetState() {
+          await resetServerState(apiUrl)
         }
       }
 
-      await use(appContext)
+      await use(sharedContext)
     } finally {
       await stopProcess(clientProc, 'client')
       await stopProcess(serverProc, 'server')
@@ -256,6 +333,40 @@ const test = playwrightBase.extend({
       if (serverPort) releasePort(serverPort)
       if (distDir) fs.rmSync(distDir, { recursive: true, force: true })
       if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true })
+      if (workerRoot) fs.rmSync(workerRoot, { recursive: true, force: true })
+    }
+  }, { scope: 'worker' }],
+  app: async ({ appServer }, use, testInfo) => {
+    const testDataDir = buildDataDir(testInfo, appServer.workerRoot)
+    fs.rmSync(testDataDir, { recursive: true, force: true })
+    fs.mkdirSync(testDataDir, { recursive: true })
+
+    await appServer.resetState()
+
+    const apiUrl = appServer.apiUrl
+    const appContext = {
+      apiUrl,
+      clientUrl: appServer.clientUrl,
+      dataDir: testDataDir,
+      clientPort: appServer.clientPort,
+      serverPort: appServer.serverPort,
+      async resetOutline(outline = []) {
+        const response = await fetch(`${apiUrl}/api/outline`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-playwright-test': '1' },
+          body: JSON.stringify({ outline })
+        })
+        if (!response.ok) {
+          const body = await response.text()
+          throw new Error(`Failed to reset outline (${response.status}): ${body}`)
+        }
+      }
+    }
+
+    try {
+      await use(appContext)
+    } finally {
+      fs.rmSync(testDataDir, { recursive: true, force: true })
     }
   },
   page: async ({ context, app }, use) => {
@@ -281,6 +392,10 @@ const test = playwrightBase.extend({
       await route.continue({ headers })
     }
 
+    const placeholderHandler = async (route) => {
+      await route.fulfill({ status: 200, headers: { 'content-type': 'image/png' }, body: PLACEHOLDER_PIXEL })
+    }
+
     const originalGoto = page.goto.bind(page)
     page.goto = async (url, options) => {
       if (typeof url === 'string' && url.startsWith('/')) {
@@ -293,12 +408,14 @@ const test = playwrightBase.extend({
     page.on('console', consoleListener)
     page.on('pageerror', pageErrorListener)
     await page.route('**/api/**', routeHandler)
+    await page.route('https://via.placeholder.com/**', placeholderHandler)
 
     try {
       await use(page)
     } finally {
       page.goto = originalGoto
       await page.unroute('**/api/**', routeHandler)
+      await page.unroute('https://via.placeholder.com/**', placeholderHandler)
       page.off('console', consoleListener)
       page.off('pageerror', pageErrorListener)
 
@@ -332,30 +449,10 @@ async function buildClientBundle({ apiUrl, distDir }) {
   if (!apiUrl) throw new Error('buildClientBundle requires apiUrl')
   if (!distDir) throw new Error('buildClientBundle requires distDir')
 
+  await ensureClientBuild()
   fs.rmSync(distDir, { recursive: true, force: true })
-  fs.mkdirSync(distDir, { recursive: true })
-
-  const buildProc = spawn(NPM_CMD, ['run', 'build', '--', `--outDir=${distDir}`], {
-    cwd: CLIENT_ROOT,
-    env: { ...process.env, VITE_API_URL: apiUrl },
-    stdio: 'pipe'
-  })
-
-  await waitForSpawn(buildProc, 'client build')
-
-  const buildLogs = attachLoggers(buildProc, 'client-build')
-  try {
-    const exitCode = await new Promise((resolve, reject) => {
-      buildProc.once('error', reject)
-      buildProc.once('exit', resolve)
-    })
-    if (exitCode !== 0) {
-      const info = buildLogs.getLogs ? `\n${buildLogs.getLogs()}` : ''
-      throw new Error(`client build failed (code ${exitCode})${info}`)
-    }
-  } finally {
-    buildLogs.dispose?.()
-  }
+  copyDirectory(BASE_CLIENT_DIST, distDir)
+  injectRuntimeConfig(distDir, apiUrl)
 }
 
 async function readOutlineState(page) {

@@ -1,9 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import OutlinerView from './views/OutlinerView.jsx'
-import TimelineView from './views/TimelineView.jsx'
-import RemindersView from './views/RemindersView.jsx'
-import HistoryModal from './views/HistoryModal.jsx'
-import { createCheckpoint } from './api.js'
 import { ReminderNotificationBar } from './components/ReminderNotificationBar.jsx'
 import { CheckpointModal } from './components/CheckpointModal.jsx'
 import { TopBar } from './components/TopBar.jsx'
@@ -12,37 +8,37 @@ import { useReminders } from './context/ReminderContext.jsx'
 import { useBuildInfo } from './hooks/useBuildInfo.js'
 import { usePersistentFlag } from './hooks/usePersistentFlag.js'
 import { useFocusRouter } from './hooks/useFocusRouter.js'
+import { useActiveTab } from './hooks/useActiveTab.js'
+import { useHistoryPanel } from './hooks/useHistoryPanel.js'
+import { useCheckpointDialog } from './hooks/useCheckpointDialog.js'
 import { CLIENT_BUILD_TIME, TAB_IDS } from './constants/config.js'
 
-/**
- * Get the initial tab to display
- * @returns {string} The initial tab ID
- */
-function getInitialTab() {
-  if (typeof window === 'undefined') return TAB_IDS.OUTLINE
-  return TAB_IDS.OUTLINE
-}
+// Lazy-load secondary views
+const TimelineView = lazy(() => import('./views/TimelineView.jsx'))
+const RemindersView = lazy(() => import('./views/RemindersView.jsx'))
+const HistoryModal = lazy(() => import('./views/HistoryModal.jsx'))
 
 export default function App() {
-  const [tab, setTab] = useState(getInitialTab)
   const [saveState, setSaveState] = useState({ dirty: false, saving: false })
-  const [showHistory, setShowHistory] = useState(false)
-  const [checkpointOpen, setCheckpointOpen] = useState(false)
   const [checkpointNote, setCheckpointNote] = useState('')
   const [checkpointStatus, setCheckpointStatus] = useState({ state: 'idle', message: '' })
+
+  const { activeTab, setActiveTab } = useActiveTab(TAB_IDS.OUTLINE)
+  const { isHistoryOpen, openHistory, closeHistory } = useHistoryPanel()
+  const {
+    checkpointOpen,
+    checkpointBusy,
+    checkpointError,
+    openCheckpoint: openCheckpointDialog,
+    closeCheckpoint: closeCheckpointDialog,
+    createCheckpoint: createCheckpointAction
+  } = useCheckpointDialog()
+
   const { value: showDebug, toggle: toggleDebug } = usePersistentFlag('WL_DEBUG', true)
   const { serverBuildTime, healthFetchedAt } = useBuildInfo()
 
   const { pendingReminders } = useReminders()
   const hasPendingReminders = pendingReminders.length > 0
-
-  const showHistoryPanel = useCallback(() => {
-    setShowHistory(true)
-  }, [setShowHistory])
-
-  const closeHistoryPanel = useCallback(() => {
-    setShowHistory(false)
-  }, [setShowHistory])
 
   const {
     timelineFocusRequest,
@@ -51,24 +47,24 @@ export default function App() {
     requestOutlineFocus,
     handleTimelineFocusHandled,
     handleOutlineFocusHandled
-  } = useFocusRouter(setTab)
+  } = useFocusRouter(setActiveTab)
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      window.__APP_ACTIVE_TAB__ = tab
-      window.__APP_SET_TAB__ = setTab
+      window.__APP_ACTIVE_TAB__ = activeTab
+      window.__APP_SET_TAB__ = setActiveTab
     }
-  }, [tab])
+  }, [activeTab, setActiveTab])
 
   const openCheckpoint = useCallback(() => {
     setCheckpointNote('')
     setCheckpointStatus({ state: 'idle', message: '' })
-    setCheckpointOpen(true)
-  }, [])
+    openCheckpointDialog()
+  }, [openCheckpointDialog])
 
   const closeCheckpoint = useCallback(() => {
-    setCheckpointOpen(false)
-  }, [])
+    closeCheckpointDialog()
+  }, [closeCheckpointDialog])
 
   const submitCheckpoint = useCallback(async (event) => {
     event.preventDefault()
@@ -76,7 +72,7 @@ export default function App() {
     setCheckpointStatus({ state: 'saving', message: '' })
 
     try {
-      await createCheckpoint(checkpointNote.trim())
+      await createCheckpointAction(checkpointNote.trim())
       setCheckpointStatus({ state: 'success', message: 'Checkpoint saved!' })
     } catch (err) {
       setCheckpointStatus({
@@ -84,12 +80,12 @@ export default function App() {
         message: err?.message || 'Failed to save checkpoint'
       })
     }
-  }, [checkpointNote, checkpointStatus.state])
+  }, [checkpointNote, checkpointStatus.state, createCheckpointAction])
 
   const handleViewHistory = useCallback(() => {
-    setCheckpointOpen(false)
-    showHistoryPanel()
-  }, [showHistoryPanel])
+    closeCheckpointDialog()
+    openHistory()
+  }, [closeCheckpointDialog, openHistory])
 
   const handleToggleDebug = useCallback(() => {
     toggleDebug()
@@ -103,10 +99,10 @@ export default function App() {
   return (
     <>
       <TopBar
-        activeTab={tab}
-        onSelectTab={setTab}
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
         onOpenCheckpoint={openCheckpoint}
-        onShowHistory={showHistoryPanel}
+        onShowHistory={openHistory}
         onToggleDebug={handleToggleDebug}
         showDebug={showDebug}
         statusText={statusText}
@@ -115,7 +111,7 @@ export default function App() {
         healthFetchedAt={healthFetchedAt}
       />
       <main>
-        <TabPanel active={tab === TAB_IDS.OUTLINE}>
+        <TabPanel active={activeTab === TAB_IDS.OUTLINE}>
           <OutlinerView
             onSaveStateChange={setSaveState}
             showDebug={showDebug}
@@ -124,26 +120,32 @@ export default function App() {
             onRequestTimelineFocus={requestTimelineFocus}
           />
         </TabPanel>
-        <TabPanel active={tab === TAB_IDS.TIMELINE}>
-          <TimelineView
-            focusRequest={timelineFocusRequest}
-            onFocusHandled={handleTimelineFocusHandled}
-            onNavigateOutline={requestOutlineFocus}
-          />
+        <TabPanel active={activeTab === TAB_IDS.TIMELINE}>
+          <Suspense fallback={<div className="loading">Loading…</div>}>
+            <TimelineView
+              focusRequest={timelineFocusRequest}
+              onFocusHandled={handleTimelineFocusHandled}
+              onNavigateOutline={requestOutlineFocus}
+            />
+          </Suspense>
         </TabPanel>
-        <TabPanel active={tab === TAB_IDS.REMINDERS}>
-          <RemindersView />
+        <TabPanel active={activeTab === TAB_IDS.REMINDERS}>
+          <Suspense fallback={<div className="loading">Loading…</div>}>
+            <RemindersView />
+          </Suspense>
         </TabPanel>
       </main>
       <ReminderNotificationBar
         visible={hasPendingReminders}
         onNavigateOutline={requestOutlineFocus}
       />
-      {showHistory && (
-        <HistoryModal
-          onClose={closeHistoryPanel}
-          onRestored={() => window.location.reload()}
-        />
+      {isHistoryOpen && (
+        <Suspense fallback={<div className="loading">Loading…</div>}>
+          <HistoryModal
+            onClose={closeHistory}
+            onRestored={() => window.location.reload()}
+          />
+        </Suspense>
       )}
       {checkpointOpen && (
         <CheckpointModal

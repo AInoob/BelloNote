@@ -47,7 +47,17 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
 
   const parentDepth = listItemDepth > 0 ? listItemDepth - 1 : null
   const parentPos = parentDepth !== null ? $from.before(parentDepth) : null
+  const listParent = parentDepth !== null ? $from.node(parentDepth) : null
   const originalAttrs = { ...(listItemNode.attrs || {}) }
+  let originalIndex = $from.index(listItemDepth)
+  if (listParent) {
+    for (let idx = 0; idx < listParent.childCount; idx += 1) {
+      if (listParent.child(idx) === listItemNode) {
+        originalIndex = idx
+        break
+      }
+    }
+  }
 
   const paragraphNode = listItemNode.child(0)
   if (!paragraphNode || paragraphNode.type.name !== 'paragraph') {
@@ -66,8 +76,6 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
     status: STATUS_EMPTY,
     collapsed: false,
     archivedSelf: false,
-    futureSelf: false,
-    soonSelf: false,
     tags: []
   }
 
@@ -224,7 +232,6 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
     const endSelection = TextSelection.create(view.state.doc, paragraphEndPos)
     view.dispatch(view.state.tr.setSelection(endSelection))
   }
-  const originalIndex = $from.index(listItemDepth)
   const splitMeta = {
     parentPos,
     originalIndex,
@@ -344,4 +351,3 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
   }
   return false
 }
-

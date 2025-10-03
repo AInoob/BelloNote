@@ -5,23 +5,34 @@ import axios from 'axios'
 import { API_ROOT, PLAYWRIGHT_TEST_HOSTS } from '../constants/config.js'
 
 /**
+ * Detect if the client is running in a Playwright test environment
+ * @param {Set<string>} hostsSet - Set of known test hosts
+ * @returns {boolean} True if running in Playwright test environment
+ */
+function isPlaywrightClient(hostsSet) {
+  try {
+    const { hostname, port } = window.location
+    const portNum = Number(port || 0)
+    const hostMatch = hostsSet?.has?.(hostname) || /\bplaywright\b/i.test(hostname)
+    const portMatch = Number.isFinite(portNum) && portNum >= 6000 && portNum <= 7999
+    const envMatch = (import.meta?.env?.VITE_E2E === '1')
+    return hostMatch || portMatch || envMatch
+  } catch {
+    return false
+  }
+}
+
+/**
  * Create default headers for API requests
  * Includes Playwright test detection header
  */
 function createDefaultHeaders() {
   const headers = {}
-  
-  try {
-    if (typeof window !== 'undefined') {
-      const host = window.location?.host
-      if (host && PLAYWRIGHT_TEST_HOSTS.has(host)) {
-        headers['x-playwright-test'] = '1'
-      }
-    }
-  } catch (error) {
-    // Silently fail if window is not available
+
+  if (isPlaywrightClient(PLAYWRIGHT_TEST_HOSTS)) {
+    headers['x-playwright-test'] = '1'
   }
-  
+
   return headers
 }
 

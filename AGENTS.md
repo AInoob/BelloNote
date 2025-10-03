@@ -1,11 +1,11 @@
 # Agents
 
 ## Codex Automation
-- Verified the Daily Worklog Outliner client (`client/`) runs on Vite + React with rich-text editing (TipTap) and timeline/history views.
-- Confirmed the Express + SQLite API in `server/` mounts routes for outline data, daily snapshots, uploads, history, and static file access.
-- Noted `start-all.sh` still orchestrates npm install (prefers `npm ci`) and launches both services via `concurrently` with shared `VITE_API_URL=/`.
+- Captured the Daily Worklog feature set: TipTap outline with custom task nodes, slash commands, inline reminders, autosave snapshots, reminders/timeline tabs, and history + checkpoint flows (see `FEATURES.md`).
+- Verified the Vite + React client in `client/` and Express + SQLite API in `server/` ship routes for outline CRUD, day rollups, history/versioning, uploads, files, and health checks.
+- Noted `start-all.sh` still drives dependency install (`npm ci` where possible) and launches both services via `concurrently` with shared `VITE_API_URL=/`.
 - Ensured runtime folders (`server/data/`, `server/src/uploads/`) remain guarded by `.gitignore` placeholders.
-- Regression verification relies on the Playwright end-to-end suite (`npm run test:e2e`); unit tests are optional.
+- Regression verification relies on the Playwright e2e suite (`npm run test:e2e`); unit tests are optional.
 
 ## Environment Notes
 - `client/` and `server/` already have `node_modules/` present; reinstall as needed to refresh dependencies.

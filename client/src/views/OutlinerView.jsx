@@ -72,10 +72,6 @@ import {
   saveStatusFilter,
   loadArchivedVisible,
   saveArchivedVisible,
-  loadFutureVisible,
-  saveFutureVisible,
-  loadSoonVisible,
-  saveSoonVisible,
   loadTagFilters,
   saveTagFilters
 } from './outliner/filterUtils.js'
@@ -108,17 +104,12 @@ export default function OutlinerView({
   const [saving, setSaving] = useState(false)
   const [debugLines, setDebugLines] = useState([])
   const slashHandlersRef = useRef({ handleKeyDown: () => false, openAt: () => {} })
-  const [showFuture, setShowFuture] = useState(() => loadFutureVisible())
-  const [showSoon, setShowSoon] = useState(() => loadSoonVisible())
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
   const [showArchived, setShowArchived] = useState(() => loadArchivedVisible())
   const [tagFilters, setTagFilters] = useState(() => loadTagFilters())
   const [includeTagInput, setIncludeTagInput] = useState('')
   const [excludeTagInput, setExcludeTagInput] = useState('')
-  const applyStatusFilterRef = useRef(null)
-  const showFutureRef = useRef(showFuture)
-  const showSoonRef = useRef(showSoon)
   const showArchivedRef = useRef(showArchived)
   const statusFilterRef = useRef(statusFilter)
   const tagFiltersRef = useRef(tagFilters)
@@ -150,14 +141,9 @@ export default function OutlinerView({
 
   // Persist filters in localStorage
   useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
-  useEffect(() => { saveSoonVisible(showSoon) }, [showSoon])
-
   useEffect(() => { saveArchivedVisible(showArchived) }, [showArchived])
-  useEffect(() => { saveFutureVisible(showFuture) }, [showFuture])
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
-  useEffect(() => { showSoonRef.current = showSoon }, [showSoon])
   useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
-  useEffect(() => { showFutureRef.current = showFuture }, [showFuture])
   const draggingRef = useRef(null)
   const [searchQuery, setSearchQuery] = useState('')
   const searchQueryRef = useRef('')
@@ -189,11 +175,13 @@ export default function OutlinerView({
   const dirtyRef = useRef(false)
   const savingRef = useRef(false)
 
-  const pushDebug = (msg, extra={}) => {
-    const line = `${new Date().toLocaleTimeString()} ${msg} ${Object.keys(extra).length? JSON.stringify(extra): ''}`
-    setDebugLines(s => [...s.slice(-200), line])
+  const pushDebug = useCallback((msg, extra = {}) => {
+    if (showDebug) {
+      const line = `${new Date().toLocaleTimeString()} ${msg} ${Object.keys(extra).length ? JSON.stringify(extra) : ''}`
+      setDebugLines((existing) => [...existing.slice(-200), line])
+    }
     LOG(msg, extra)
-  }
+  }, [showDebug])
 
   const CodeBlockWithCopy = useMemo(
     () => CodeBlockLowlight.extend({
@@ -465,12 +453,10 @@ export default function OutlinerView({
       editor,
       statusFilterRef,
       showArchivedRef,
-      showFutureRef,
-      showSoonRef,
       tagFiltersRef,
       focusRootRef
     )
-  }, [editor, statusFilter, showArchived, showFuture, showSoon])
+  }, [editor, statusFilter, showArchived, tagFilters])
 
   const { scheduleApplyStatusFilter } = useFilterScheduler(
     applyStatusFilter,
@@ -544,7 +530,6 @@ export default function OutlinerView({
   useEffect(() => {
     applyStatusFilter()
   }, [applyStatusFilter])
-  useEffect(() => { applyStatusFilterRef.current = applyStatusFilter }, [applyStatusFilter])
   // Observe DOM changes to ensure filters apply when NodeViews finish mounting (first load, etc.)
   useDomMutationObserver(editor, scheduleApplyStatusFilter, filterScheduleRef, lastFilterRunAtRef)
 
@@ -704,16 +689,6 @@ export default function OutlinerView({
             setShowArchived={setShowArchived}
             showArchivedRef={showArchivedRef}
             saveArchivedVisible={saveArchivedVisible}
-            showFuture={showFuture}
-            setShowFuture={setShowFuture}
-            showFutureRef={showFutureRef}
-            saveFutureVisible={saveFutureVisible}
-            showSoon={showSoon}
-            setShowSoon={setShowSoon}
-            showSoonRef={showSoonRef}
-            saveSoonVisible={saveSoonVisible}
-            editor={editor}
-            applyStatusFilterRef={applyStatusFilterRef}
             includeFilterList={includeFilterList}
             removeTagFilter={removeTagFilter}
             includeInputRef={includeInputRef}

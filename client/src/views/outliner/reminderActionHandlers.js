@@ -9,6 +9,7 @@
  * @param {string} options.customDate - Custom date for schedule action
  * @returns {Function} Handler function
  */
+import { TextSelection } from 'prosemirror-state'
 export function createReminderActionHandler(
   action,
   ensurePersistentTaskId,
@@ -100,6 +101,43 @@ export function handleStatusKeyDown(
   } catch {}
 }
 
+function restoreCaretToListItem(editor, getPos, findListItemDepth) {
+  if (!editor || typeof getPos !== 'function' || typeof findListItemDepth !== 'function') return
+  const targetPos = getPos()
+  if (typeof targetPos !== 'number') return
+  const run = () => {
+    try {
+      const { state, view } = editor
+      if (!view) return
+      const node = state.doc.nodeAt(targetPos)
+      if (!node || node.type.name !== 'listItem') return
+      const selectionInside = state.selection.from >= targetPos && state.selection.to <= (targetPos + node.nodeSize)
+      if (!selectionInside) return
+      const innerPos = Math.max(0, Math.min(targetPos + 1, state.doc.content.size))
+      const resolved = state.doc.resolve(innerPos)
+      const depth = findListItemDepth(resolved)
+      if (depth === -1) return
+      const listItemPos = resolved.before(depth)
+      const listItemNode = state.doc.nodeAt(listItemPos)
+      if (!listItemNode || listItemNode.childCount === 0) return
+      const paragraph = listItemNode.child(0)
+      if (!paragraph || paragraph.type.name !== 'paragraph') return
+      const paragraphStart = listItemPos + 1
+      const caretPos = paragraphStart + paragraph.content.size
+      if (state.selection.from === caretPos && state.selection.to === caretPos) return
+      const tr = state.tr.setSelection(TextSelection.create(state.doc, caretPos)).scrollIntoView()
+      view.dispatch(tr)
+    } catch (error) {
+      if (typeof console !== 'undefined') console.warn('[status-toggle] caret restore failed', error)
+    }
+  }
+  run()
+  if (typeof window !== 'undefined') {
+    window.requestAnimationFrame(run)
+    window.setTimeout(run, 0)
+  }
+}
+
 /**
  * Cycle through status values
  * @param {Event} event - Click event
@@ -127,7 +165,9 @@ export function cycleStatus(
   onStatusToggle,
   id,
   fallbackIdRef,
-  editor
+  editor,
+  getPos,
+  findListItemDepth
 ) {
   if (readOnly && !allowStatusToggleInReadOnly) return
   const li = rowRef.current?.closest('li.li-node')
@@ -145,5 +185,5 @@ export function cycleStatus(
     try { event.currentTarget.blur() } catch {}
   }
   editor?.commands?.focus?.()
+  if (!readOnly) restoreCaretToListItem(editor, getPos, findListItemDepth)
 }
-

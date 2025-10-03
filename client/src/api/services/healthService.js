@@ -4,8 +4,8 @@
 import { apiClient } from '../client.js'
 
 /**
- * Get server health status
- * @returns {Promise<Object>} The health status data
+ * Fetch server health status and build information
+ * @returns {Promise<import('../../types.js').HealthStatus>} Health status with build time and version
  */
 export async function getHealth() {
   const { data } = await apiClient.get('/health')

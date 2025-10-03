@@ -1,26 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { getDays, updateTask } from '../api.js'
 import OutlinerView from './OutlinerView.jsx'
 import { useOutlineSnapshot } from '../hooks/useOutlineSnapshot.js'
 import { cssEscape } from '../utils/cssEscape.js'
 import { FOCUS_FLASH_DURATION, REFRESH_DEBOUNCE_DELAY } from './timeline/constants.js'
-import { buildOutlineFromItems, collectSoonAndFuture } from './timeline/timelineUtils.js'
-import {
-  loadShowFuture,
-  saveShowFuture,
-  loadShowSoon,
-  saveShowSoon,
-  loadShowFilters,
-  saveShowFilters
-} from './timeline/storageUtils.js'
+import { buildOutlineFromItems } from './timeline/timelineUtils.js'
 
 
 export default function TimelineView({ focusRequest = null, onFocusHandled = () => {}, onNavigateOutline = null }) {
   const [days, setDays] = useState([])
-  const [showFuture, setShowFuture] = useState(loadShowFuture)
-  const [showSoon, setShowSoon] = useState(loadShowSoon)
-  const [showFilters, setShowFilters] = useState(loadShowFilters)
   const [activeTaskId, setActiveTaskId] = useState(null)
   const containerRef = useRef(null)
   const flashTimerRef = useRef(null)
@@ -208,9 +197,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     return () => window.removeEventListener('keydown', handler, true)
   }, [activeTaskId, onNavigateOutline, focusRequestTaskId])
 
-  const { soonRoots, futureRoots } = useMemo(() => collectSoonAndFuture(outlineRoots), [outlineRoots])
-
-  const hasTimelineData = (days?.length || 0) > 0 || soonRoots.length > 0 || futureRoots.length > 0
+  const hasTimelineData = (days?.length || 0) > 0
 
   const handleStatusToggle = async (id, nextStatus) => {
     try {
@@ -224,93 +211,9 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
   return (
     <div className="timeline" ref={containerRef}>
       {/* Filter bar for timeline-specific toggles */}
-      <div className="status-filter-bar" data-timeline-filter="1" style={{ marginBottom: 8, display: 'flex', gap: 16, alignItems: 'center' }}>
-        <div className="filters-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span className="meta">Filters:</span>
-          <button
-            className={`btn pill ${showFilters ? 'active' : ''}`}
-            type="button"
-            onClick={() => {
-              const next = !showFilters
-              saveShowFilters(next)
-              setShowFilters(next)
-            }}
-          >
-            {showFilters ? 'Shown' : 'Hidden'}
-          </button>
-        </div>
-        {showFilters && (
-          <>
-            <div className="future-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span className="meta">Future:</span>
-              <button
-                className={`btn pill ${showFuture ? 'active' : ''}`}
-                type="button"
-                onClick={() => {
-                  const next = !showFuture
-                  saveShowFuture(next)
-                  setShowFuture(next)
-                }}
-              >
-                {showFuture ? 'Shown' : 'Hidden'}
-              </button>
-            </div>
-            <div className="soon-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span className="meta">Soon:</span>
-              <button
-                className={`btn pill ${showSoon ? 'active' : ''}`}
-                type="button"
-                onClick={() => {
-                  const next = !showSoon
-                  saveShowSoon(next)
-                  setShowSoon(next)
-                }}
-              >
-                {showSoon ? 'Shown' : 'Hidden'}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
 
       {!hasTimelineData && (
         <div className="save-indicator" style={{ marginBottom: 16 }}>No work logs yet.</div>
-      )}
-
-      {/* Future bucket (should appear before Soon) */}
-      {hasTimelineData && showFuture && futureRoots.length > 0 && (
-        <section key="future">
-          <h3>Future</h3>
-          <div className="history-inline-preview">
-            <OutlinerView
-              readOnly={true}
-              forceExpand={true}
-              initialOutline={{ roots: futureRoots }}
-              broadcastSnapshots={false}
-              allowStatusToggleInReadOnly={true}
-              reminderActionsEnabled={true}
-              onStatusToggle={handleStatusToggle}
-            />
-          </div>
-        </section>
-      )}
-
-      {/* Soon bucket */}
-      {hasTimelineData && showSoon && soonRoots.length > 0 && (
-        <section key="soon">
-          <h3>Soon</h3>
-          <div className="history-inline-preview">
-            <OutlinerView
-              readOnly={true}
-              forceExpand={true}
-              initialOutline={{ roots: soonRoots }}
-              broadcastSnapshots={false}
-              allowStatusToggleInReadOnly={true}
-              reminderActionsEnabled={true}
-              onStatusToggle={handleStatusToggle}
-            />
-          </div>
-        </section>
       )}
 
       {/* Dated days */}

@@ -11,7 +11,7 @@ const nestedOutlineDoc = {
       content: [
         {
           type: 'listItem',
-          attrs: { dataId: 'seed-parent', status: '', collapsed: false, archivedSelf: false, futureSelf: false, soonSelf: false },
+          attrs: { dataId: 'seed-parent', status: '', collapsed: false, archivedSelf: false },
           content: [
             { type: 'paragraph', content: [{ type: 'text', text: 'Parent Task' }] },
             {
@@ -19,7 +19,7 @@ const nestedOutlineDoc = {
               content: [
                 {
                   type: 'listItem',
-                  attrs: { dataId: 'seed-child-a', status: '', collapsed: false, archivedSelf: false, futureSelf: false, soonSelf: false },
+                  attrs: { dataId: 'seed-child-a', status: '', collapsed: false, archivedSelf: false },
                   content: [
                     { type: 'paragraph', content: [{ type: 'text', text: 'Child A' }] },
                     {
@@ -27,7 +27,7 @@ const nestedOutlineDoc = {
                       content: [
                         {
                           type: 'listItem',
-                          attrs: { dataId: 'seed-grandchild', status: '', collapsed: false, archivedSelf: false, futureSelf: false, soonSelf: false },
+                          attrs: { dataId: 'seed-grandchild', status: '', collapsed: false, archivedSelf: false },
                           content: [
                             { type: 'paragraph', content: [{ type: 'text', text: 'Grandchild' }] }
                           ]
@@ -38,7 +38,7 @@ const nestedOutlineDoc = {
                 },
                 {
                   type: 'listItem',
-                  attrs: { dataId: 'seed-child-b', status: '', collapsed: false, archivedSelf: false, futureSelf: false, soonSelf: false },
+                  attrs: { dataId: 'seed-child-b', status: '', collapsed: false, archivedSelf: false },
                   content: [
                     { type: 'paragraph', content: [{ type: 'text', text: 'Child B' }] }
                   ]
@@ -49,7 +49,7 @@ const nestedOutlineDoc = {
         },
         {
           type: 'listItem',
-          attrs: { dataId: 'seed-sibling', status: '', collapsed: false, archivedSelf: false, futureSelf: false, soonSelf: false },
+          attrs: { dataId: 'seed-sibling', status: '', collapsed: false, archivedSelf: false },
           content: [
             { type: 'paragraph', content: [{ type: 'text', text: 'Sibling Task' }] }
           ]

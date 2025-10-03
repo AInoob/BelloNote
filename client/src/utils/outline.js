@@ -1,12 +1,29 @@
+const cloneRichContent = typeof structuredClone === 'function'
+  ? (value) => {
+      try {
+        return structuredClone(value)
+      } catch {
+        return JSON.parse(JSON.stringify(value))
+      }
+    }
+  : (value) => JSON.parse(JSON.stringify(value))
+
 export function cloneOutlineNodes(nodes) {
-  if (!Array.isArray(nodes)) return []
-  return nodes.map((node) => ({
-    ...node,
-    content: Array.isArray(node.content)
-      ? JSON.parse(JSON.stringify(node.content))
-      : node.content,
-    children: cloneOutlineNodes(node.children)
-  }))
+  if (!Array.isArray(nodes) || !nodes.length) return []
+  const result = new Array(nodes.length)
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]
+    if (!node || typeof node !== 'object') {
+      result[i] = node
+      continue
+    }
+    result[i] = {
+      ...node,
+      content: Array.isArray(node.content) ? cloneRichContent(node.content) : node.content,
+      children: cloneOutlineNodes(node.children)
+    }
+  }
+  return result
 }
 
 export function buildOutlineIndex(roots = []) {

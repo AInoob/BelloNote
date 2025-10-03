@@ -5,8 +5,6 @@
 import {
   FILTER_STATUS_KEY,
   FILTER_ARCHIVED_KEY,
-  FILTER_FUTURE_KEY,
-  FILTER_SOON_KEY,
   FILTER_TAG_INCLUDE_KEY,
   FILTER_TAG_EXCLUDE_KEY
 } from './constants.js'
@@ -75,52 +73,6 @@ export const saveArchivedVisible = (v) => {
 }
 
 /**
- * Load future visibility from localStorage
- * @returns {boolean} Whether future items should be visible
- */
-export const loadFutureVisible = () => { 
-  try { 
-    const v = localStorage.getItem(FILTER_FUTURE_KEY)
-    return v === '0' ? false : true 
-  } catch { 
-    return true 
-  } 
-}
-
-/**
- * Save future visibility to localStorage
- * @param {boolean} v - Whether future items should be visible
- */
-export const saveFutureVisible = (v) => { 
-  try { 
-    localStorage.setItem(FILTER_FUTURE_KEY, v ? '1' : '0') 
-  } catch {} 
-}
-
-/**
- * Load soon visibility from localStorage
- * @returns {boolean} Whether soon items should be visible
- */
-export const loadSoonVisible = () => { 
-  try { 
-    const v = localStorage.getItem(FILTER_SOON_KEY)
-    return v === '0' ? false : true 
-  } catch { 
-    return true 
-  } 
-}
-
-/**
- * Save soon visibility to localStorage
- * @param {boolean} v - Whether soon items should be visible
- */
-export const saveSoonVisible = (v) => { 
-  try { 
-    localStorage.setItem(FILTER_SOON_KEY, v ? '1' : '0') 
-  } catch {} 
-}
-
-/**
  * Default tag filter - no tags filtered
  */
 export const DEFAULT_TAG_FILTER = { include: [], exclude: [] }
@@ -173,4 +125,3 @@ export const saveTagFilters = (filters) => {
     localStorage.setItem(FILTER_TAG_EXCLUDE_KEY, JSON.stringify(exclude))
   } catch {}
 }
-

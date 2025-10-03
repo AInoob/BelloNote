@@ -7,9 +7,14 @@ import { REMINDER_TOKEN_REGEX } from '../../utils/reminderTokens.js'
  * @returns {any} A deep clone of the outline
  */
 export function cloneOutline(outline) {
-  return typeof structuredClone === 'function'
-    ? structuredClone(outline)
-    : JSON.parse(JSON.stringify(outline))
+  if (typeof structuredClone === 'function') {
+    try {
+      return structuredClone(outline)
+    } catch {
+      /* fall through to JSON fallback */
+    }
+  }
+  return JSON.parse(JSON.stringify(outline))
 }
 
 /**
@@ -88,10 +93,12 @@ export function insertNodeRelative(nodes, targetId, newNode, after) {
  */
 export function extractTitle(paragraphNode) {
   let text = ''
-  if (paragraphNode?.content) {
-    paragraphNode.content.forEach(n => {
-      if (n.type === 'text') text += n.text
-    })
+  const content = paragraphNode?.content
+  if (Array.isArray(content)) {
+    for (let i = 0; i < content.length; i++) {
+      const child = content[i]
+      if (child?.type === 'text') text += child.text
+    }
   }
   const cleaned = text
     .replace(REMINDER_TOKEN_REGEX, '')
@@ -108,15 +115,29 @@ export function extractTitle(paragraphNode) {
  */
 export function extractDates(listItemNode) {
   const dates = new Set()
-  ;(listItemNode.content || []).forEach(n => {
-    if (n.type === 'paragraph' && n.content) {
-      let t = ''
-      n.content.forEach(m => {
-        if (m.type === 'text') t += m.text
-      })
-      ;(t.match(DATE_RE) || []).forEach(s => dates.add(s.slice(1)))
-    }
-  })
-  return Array.from(dates)
-}
 
+  const collectFromText = (text) => {
+    if (!text || !text.includes('@')) return
+    DATE_RE.lastIndex = 0
+    let match
+    while ((match = DATE_RE.exec(text))) {
+      dates.add(match[0].slice(1))
+    }
+    DATE_RE.lastIndex = 0
+  }
+
+  const content = listItemNode?.content
+  if (Array.isArray(content)) {
+    for (let i = 0; i < content.length; i++) {
+      const node = content[i]
+      if (!node || node.type !== 'paragraph' || !Array.isArray(node.content)) continue
+      const paraContent = node.content
+      for (let j = 0; j < paraContent.length; j++) {
+        const child = paraContent[j]
+        if (child?.type === 'text') collectFromText(child.text)
+      }
+    }
+  }
+
+  return dates.size ? Array.from(dates) : []
+}

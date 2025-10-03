@@ -3,7 +3,13 @@
  */
 
 // API Configuration
-export const API_URL_RAW = (import.meta.env.VITE_API_URL ?? '').trim()
+const runtimeApiUrl = typeof window !== 'undefined' 
+  && window.__BELLO_RUNTIME_CONFIG__ 
+  && typeof window.__BELLO_RUNTIME_CONFIG__.apiUrl === 'string'
+  ? window.__BELLO_RUNTIME_CONFIG__.apiUrl
+  : null
+
+export const API_URL_RAW = (runtimeApiUrl ?? import.meta.env.VITE_API_URL ?? '').trim()
 export const API_ROOT = (API_URL_RAW === '/' || API_URL_RAW === '') 
   ? '' 
   : API_URL_RAW.replace(/\/$/, '')
@@ -36,4 +42,3 @@ export const DEFAULT_HISTORY_OFFSET = 0
 
 // Reminder polling interval (30 seconds)
 export const REMINDER_POLL_INTERVAL_MS = 30_000
-

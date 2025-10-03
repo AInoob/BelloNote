@@ -3,16 +3,12 @@ import {
   DEFAULT_STATUS_FILTER,
   DEFAULT_TAG_FILTER,
   loadArchivedVisible,
-  loadFutureVisible,
-  loadSoonVisible,
   loadStatusFilter,
   loadTagFilters
 } from './filterPreferences.js'
 import { parseTagInput } from './tagUtils.js'
 
 export function useOutlineFilters() {
-  const [showFuture, setShowFuture] = useState(() => loadFutureVisible())
-  const [showSoon, setShowSoon] = useState(() => loadSoonVisible())
   const [showArchived, setShowArchived] = useState(() => loadArchivedVisible())
   const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
   const [tagFilters, setTagFilters] = useState(() => loadTagFilters())
@@ -20,14 +16,10 @@ export function useOutlineFilters() {
   const [excludeTagInput, setExcludeTagInput] = useState('')
 
   const statusFilterRef = useRef(statusFilter)
-  const showFutureRef = useRef(showFuture)
-  const showSoonRef = useRef(showSoon)
   const showArchivedRef = useRef(showArchived)
   const tagFiltersRef = useRef(tagFilters)
 
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
-  useEffect(() => { showFutureRef.current = showFuture }, [showFuture])
-  useEffect(() => { showSoonRef.current = showSoon }, [showSoon])
   useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
   useEffect(() => { tagFiltersRef.current = tagFilters }, [tagFilters])
 
@@ -137,12 +129,6 @@ export function useOutlineFilters() {
   }, [addTagFilter])
 
   return {
-    showFuture,
-    setShowFuture,
-    showFutureRef,
-    showSoon,
-    setShowSoon,
-    showSoonRef,
     showArchived,
     setShowArchived,
     showArchivedRef,

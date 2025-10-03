@@ -5,10 +5,10 @@ import { apiClient } from '../client.js'
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_OFFSET } from '../../constants/config.js'
 
 /**
- * List history entries
+ * Fetch paginated list of history entries
  * @param {number} [limit=50] - Maximum number of entries to return
  * @param {number} [offset=0] - Offset for pagination
- * @returns {Promise<Array>} Array of history items
+ * @returns {Promise<Array<import('../../types.js').HistoryItem>>} Array of history items
  */
 export async function listHistory(limit = DEFAULT_HISTORY_LIMIT, offset = DEFAULT_HISTORY_OFFSET) {
   const { data } = await apiClient.get(`/history?limit=${limit}&offset=${offset}`)
@@ -16,9 +16,9 @@ export async function listHistory(limit = DEFAULT_HISTORY_LIMIT, offset = DEFAUL
 }
 
 /**
- * Get a specific version document
+ * Fetch a specific version document by ID
  * @param {string} id - The version ID
- * @returns {Promise<Object>} The version document
+ * @returns {Promise<import('../../types.js').VersionDocument>} The version document with content
  */
 export async function getVersionDoc(id) {
   const { data } = await apiClient.get(`/history/${id}`)
@@ -26,10 +26,10 @@ export async function getVersionDoc(id) {
 }
 
 /**
- * Get diff between versions
- * @param {string} id - The version ID
- * @param {string} [against='current'] - Version to compare against
- * @returns {Promise<Object>} The diff data
+ * Get diff between two versions
+ * @param {string} id - The version ID to compare
+ * @param {string} [against='current'] - Version to compare against (default: current)
+ * @returns {Promise<import('../../types.js').VersionDiff>} The diff data with changes
  */
 export async function diffVersion(id, against = 'current') {
   const { data } = await apiClient.get(`/history/${id}/diff?against=${against}`)
@@ -37,9 +37,9 @@ export async function diffVersion(id, against = 'current') {
 }
 
 /**
- * Restore a specific version
+ * Restore the outline to a specific version
  * @param {string} id - The version ID to restore
- * @returns {Promise<Object>} The restore result
+ * @returns {Promise<{success: boolean}>} The restore result
  */
 export async function restoreVersion(id) {
   const { data } = await apiClient.post(`/history/${id}/restore`)
@@ -47,9 +47,9 @@ export async function restoreVersion(id) {
 }
 
 /**
- * Create a checkpoint with an optional note
- * @param {string} [note=''] - Optional note for the checkpoint
- * @returns {Promise<Object>} The checkpoint result
+ * Create a manual checkpoint with an optional note
+ * @param {string} [note=''] - Optional note describing the checkpoint
+ * @returns {Promise<import('../../types.js').HistoryCheckpoint>} The created checkpoint
  */
 export async function createCheckpoint(note = '') {
   const { data } = await apiClient.post('/history/checkpoint', { note })

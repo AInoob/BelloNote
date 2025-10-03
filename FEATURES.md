@@ -1,56 +1,47 @@
 # Features
 
 ## Outline Editor
-- Rich TipTap-based editor renders the daily worklog as an outline of nested tasks with inline rich text, checkmarks, and drag handles.
-- Supports unlimited nesting via Tab/Shift+Tab, with consistent indentation spacing and caret behavior for inserting siblings above or below the current item.
-- Keyboard-driven creation maintains task defaults: new siblings/children start with an empty status even when the previous row is completed.
-- Status chip cycles through `todo → in-progress → done → none`, persisted per task and reflected in `data-status` attributes.
-- Command palette (`/`) inserts structured content: code blocks, inline dates (today picker or custom), `@archived / @future / @soon` markers, image uploads, generic `#tag` tokens, details blocks, and reminders.
-- Inline slash-tagging automatically normalizes tags, updates `data-tags-self`, and persists to the API for include/exclude filtering.
-- Image uploads store files on the server and inject normalized image nodes directly into the outline.
-- Copy / paste round-trips preserve the entire outline structure, attachments, and formatting; copy-only exports the highlighted selection.
-- Drag-and-drop reorders root items and children, with server persistence to keep ordering consistent across reloads.
-- Automatic scroll-state restore returns editors to the previous viewport and caret location after reload.
+- Nested worklog editor powered by TipTap with a custom task list item that tracks status, collapse state, tags, inline reminder metadata, and preserves child structure during drag and drop.
+- Rich formatting extensions include code blocks with a copy-friendly node view, inline highlights, links without auto-opening, collapsible details blocks, and image uploads that normalize URLs and open a lightbox-style preview on click.
+- Slash menu (`/`) offers quick inserts for today’s work-date stamp, custom date picker, archive tag, ad-hoc `#tag`, code block, image upload, and details block commands with type-to-filter search.
+- Inline reminder controls live on each task row, providing quick snooze presets, custom date/time scheduling, dismiss/complete/remove actions, and automatic persistence once a server-backed task id exists.
+- Clipboard handlers export selection data as plain text, HTML, and a structured JSON slice; paste handlers restore outline slices or apply smart link formatting when URLs are pasted over selected text.
 
-## Focus, Filters, and Views
-- Cmd/Ctrl+click enters Focus Mode for the selected node, isolating its subtree, updating the URL (`?focus=<id>`), displaying an exit banner, and preserving collapse state per focus root.
-- Status filter bar exposes pill toggles for individual statuses plus Archived/Future/Soon sections; selections persist via `localStorage` across reloads and view switches.
-- `@archived` marks tasks as archived, dims their rows, and can be globally hidden without affecting unarchived parents; hiding archived children keeps parents visible.
-- `@future` propagates to descendants and can be hidden or shown with a dedicated filter toggle; `@soon` badges highlight upcoming work and integrate with Soon/Soon toggle tests.
-- Hashtag filters (`#tag`) offer separate include/exclude chips, persist across reloads, and immediately hide/show rows by updating `data-tag-include` / `data-tag-exclude`.
-- Outline navigation bar switches between Outline, Timeline, Reminders, Checkpoint, and History panels without losing active filters.
+## Filters, Search, and Focus
+- Status filter bar exposes per-status toggles, All/Active/Completed presets, and an archived visibility switch, all persisted in localStorage.
+- Include/exclude tag filters capture normalized `#tag` entries with removable chips and a single-click clear control, synced to persisted state.
+- Search box highlights matches in the current outline while offering a one-click clear; highlight updates reactively as the document changes.
+- Focus mode (Cmd/Ctrl+click or programmatic requests) isolates a task subtree, syncs `?focus=<id>` in the URL, shows an exit banner, and remembers collapse sets per focus root.
+- Focus router coordinates navigation between Outline and Timeline tabs, forwarding focus requests and clearing them once handled.
+
+## Reminders
+- Reminder tokens embedded in outline content are parsed into structured reminder objects, tracked by the `ReminderProvider`, and refreshed on autosave events or a 30-second timer.
+- Due reminders surface in a bottom notification bar with snooze presets, custom datetime picker, and inline Mark complete / Dismiss actions that dispatch reminder events and deep-link back to the outline.
+- Reminders tab groups tasks by status (due, scheduled, completed) with filter pills, builds read-only outline previews from the latest snapshot, and keeps reminder counts visible on each pill.
+- Task-level reminder menus reuse the same scheduling logic, ensuring tasks are saved before emitting reminder actions and clearing validation errors once updates succeed.
 
 ## Timeline & Daily Rollups
-- Timeline view groups work by calendar day using task dates/work logs, expanding dated parents to show undated subtasks inline.
-- Tasks with active reminders appear on the reminder date so upcoming commitments surface alongside past activity.
-- Day sections adapt height to the amount of content and preserve `@date` tokens in parent labels for context.
-- Soon/Future toggles within Timeline mirror outline filters, allowing Future sections to be hidden, and support persistence across reloads.
-- Timeline renders rich content (code blocks, images, nested lists) inside each day's inline preview.
-- Dedicated timeline tests ensure filter bar visibility, status-pill dimming, and zero inner scroll (height adjusts automatically).
+- Timeline view consumes `/api/day` to group tasks by calendar date, merging work log activity with reminder schedules and auto-scrolling to today on first load.
+- Each day renders a read-only `OutlinerView` snapshot with forced expansion, allowing status toggles in place for quick updates that patch `/api/tasks/:id` and refresh both timeline data and the outline snapshot cache.
+- Outline snapshots broadcast via `worklog:outline-snapshot` (on autosave) and `worklog:reminder-action` events trigger debounced timeline refreshes for near-real-time feedback.
+- Keyboard shortcut (Cmd/Ctrl+S while on the Timeline tab) jumps the user back to the Outline tab with the active task focused.
 
-## Reminders System
-- Each outline row exposes a reminder toggle with quick presets (e.g., 30 minutes) and a custom datetime picker.
-- Reminder pills surface state (`Reminds`, `Due`, or completion) directly in the outline, updating aria labels for accessibility.
-- Reminders navigation reveals a consolidated tab listing scheduled reminders with inline removal controls.
-- Due reminders trigger a banner with actionable buttons (Mark complete, Custom schedule, Dismiss) that update both reminder records and task status.
-- Server-side reminders API handles creation, updates, dismissal, completion, and state persistence backed by SQLite.
+## History & Checkpoints
+- Manual checkpoints open a modal for optional notes, call `/api/history/checkpoint`, and surface a success affordance that deep-links into the History modal.
+- Autosave pipeline records outline versions with diff summaries; History modal groups versions by day, shows cause/notes, and streams diff counts plus up to 20 sample titles per change type.
+- Inline preview reuses the editor in read-only mode, while a full-screen snapshot viewer supports Older/Newer navigation, restore, and close controls layered above the main modal.
+- Restoring any version issues `/api/history/:id/restore`, replaces the current outline, records a new “restore” version, and triggers the supplied `onRestored` callback to refresh the app state.
 
-## History, Checkpoints, and Snapshots
-- Manual checkpoints capture the entire outline (`Checkpoint` button), storing versions with optional notes via the history API.
-- History view lists saved versions, supports selection to preview, and offers Restore actions guarded by confirmation modals layered above snapshot overlays.
-- Restoring a version posts back to the server, creating a new version entry while replacing the current outline.
-- Daily `/day` snapshots expose work-log history by date, returning paths from root to each task for timeline consumption.
+## Autosave, Persistence, and UX Polish
+- Autosave queues write operations, assigns temporary ids when needed, applies server-issued id mappings across the document, migrates saved collapse state, and emits `worklog:outline-snapshot` events for listeners.
+- Scroll position, text selection, active tab, status filter, archived toggle, tag filters, and debug flag all persist in localStorage-backed utilities.
+- Image clicks open an overlay preview, while a toggleable debug pane streams timestamped diagnostics when enabled from the Top Bar.
+- Top Bar reports save state (“Saved”, “Saving…”, “Unsaved changes”), exposes Checkpoint/History toggles, and displays client and server build timestamps once `useBuildInfo` completes.
 
-## Data & Persistence Layer
-- Express + SQLite backend exposes routes for outline CRUD, reminders, daily snapshots, history/versioning, task utilities, file storage, and static file access.
-- Autosave normalizes task IDs, performs optimistic mapping, and stores full ProseMirror node JSON while sanitizing rich text.
-- File uploads are stored in `server/src/uploads/` with metadata entries to support secure retrieval via `files` routes.
-- Project separation enables a dedicated "Playwright E2E" workspace during tests using `DATA_DIR` swapping.
-- Local storage keys (`worklog.filter.*`, `worklog.lastScroll`, collapse caches) retain user preferences between sessions.
-
-## Collaboration-Friendly UX Details
-- Status colors stay scoped to the owning row, preventing parent state from bleeding into descendants.
-- Copy operations set multiple MIME types (`text/plain`, `text/html`, custom JSON) to ease cross-application pasting.
-- Keyboard shortcuts advertise focus mode by toggling a helper class that flips cursor styles while modifiers are held.
-- Reminder pills realign alongside text as content grows, ensuring consistent inline layout.
-- History/Timeline/Reminders panes maintain Outlook-style navigation without interfering with outline editing state.
+## Server & Data Model
+- Express server on port 4000 exposes JSON routes for outline CRUD, individual task updates, day rollups, history/versioning, image uploads, health checks, static file serving, and Playwright test utilities.
+- Outline endpoint sanitizes incoming rich text, strips unsafe data URIs, recomputes tag sets, writes work log dates, and prunes orphaned tasks inside a transaction before recording a new version.
+- Timeline (`/api/day`) builds per-date bundles by joining work logs with reminder-bearing tasks, assembling ancestor paths so the Timeline view can regenerate nested structures client-side.
+- Versioning layer stores hashed outline snapshots, performs structural diffs for metadata, and replays entire outlines (tasks, work logs, tags) on restore.
+- File service stores uploads on disk with SHA-based deduplication, records metadata in SQLite, and serves them through `/files/:id/:name` with optional download disposition.
+- Project resolution supports a default workspace plus an isolated “Playwright E2E” project when the test header or data directory conventions are detected.

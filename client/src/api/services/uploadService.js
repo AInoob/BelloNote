@@ -5,10 +5,10 @@ import { apiClient, absoluteUrl } from '../client.js'
 import { API_ROOT } from '../../constants/config.js'
 
 /**
- * Upload an image file
- * @param {File} file - The file to upload
+ * Upload an image file to the server
+ * @param {File} file - The image file to upload
  * @param {string} [filename] - Optional filename override
- * @returns {Promise<Object>} Upload result with URLs and metadata
+ * @returns {Promise<import('../../types.js').UploadResult & {id: string, mimeType: string, relativeUrl: string}>} Upload result with URLs and metadata
  */
 export async function uploadImage(file, filename) {
   const form = new FormData()

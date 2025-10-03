@@ -4,8 +4,8 @@
 import { apiClient } from '../client.js'
 
 /**
- * Get all days with their tasks
- * @returns {Promise<Object>} The days data
+ * Fetch all timeline days with their associated tasks and events
+ * @returns {Promise<import('../../types.js').TimelineData>} Timeline data with days array
  */
 export async function getDays() {
   const { data } = await apiClient.get('/day')

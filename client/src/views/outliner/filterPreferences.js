@@ -1,7 +1,5 @@
 import {
   FILTER_ARCHIVED_KEY,
-  FILTER_FUTURE_KEY,
-  FILTER_SOON_KEY,
   FILTER_STATUS_KEY,
   FILTER_TAG_EXCLUDE_KEY,
   FILTER_TAG_INCLUDE_KEY,
@@ -52,36 +50,6 @@ export function loadArchivedVisible() {
 export function saveArchivedVisible(value) {
   try {
     localStorage.setItem(FILTER_ARCHIVED_KEY, value ? '1' : '0')
-  } catch {}
-}
-
-export function loadFutureVisible() {
-  try {
-    const value = localStorage.getItem(FILTER_FUTURE_KEY)
-    return value === '0' ? false : true
-  } catch {
-    return true
-  }
-}
-
-export function saveFutureVisible(value) {
-  try {
-    localStorage.setItem(FILTER_FUTURE_KEY, value ? '1' : '0')
-  } catch {}
-}
-
-export function loadSoonVisible() {
-  try {
-    const value = localStorage.getItem(FILTER_SOON_KEY)
-    return value === '0' ? false : true
-  } catch {
-    return true
-  }
-}
-
-export function saveSoonVisible(value) {
-  try {
-    localStorage.setItem(FILTER_SOON_KEY, value ? '1' : '0')
   } catch {}
 }
 

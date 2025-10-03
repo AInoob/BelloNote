@@ -11,16 +11,6 @@ import React from 'react'
  * @param {Function} props.setShowArchived - Function to set show archived state
  * @param {Object} props.showArchivedRef - Ref to show archived state
  * @param {Function} props.saveArchivedVisible - Function to save archived visible state
- * @param {boolean} props.showFuture - Whether future items are shown
- * @param {Function} props.setShowFuture - Function to set show future state
- * @param {Object} props.showFutureRef - Ref to show future state
- * @param {Function} props.saveFutureVisible - Function to save future visible state
- * @param {boolean} props.showSoon - Whether soon items are shown
- * @param {Function} props.setShowSoon - Function to set show soon state
- * @param {Object} props.showSoonRef - Ref to show soon state
- * @param {Function} props.saveSoonVisible - Function to save soon visible state
- * @param {Object} props.editor - TipTap editor instance
- * @param {Object} props.applyStatusFilterRef - Ref to apply status filter function
  * @param {Array} props.includeFilterList - List of include tag filters
  * @param {Function} props.removeTagFilter - Function to remove tag filter
  * @param {Object} props.includeInputRef - Ref to include input element
@@ -42,16 +32,6 @@ export function FilterBar({
   setShowArchived,
   showArchivedRef,
   saveArchivedVisible,
-  showFuture,
-  setShowFuture,
-  showFutureRef,
-  saveFutureVisible,
-  showSoon,
-  setShowSoon,
-  showSoonRef,
-  saveSoonVisible,
-  editor,
-  applyStatusFilterRef,
   includeFilterList,
   removeTagFilter,
   includeInputRef,
@@ -93,44 +73,6 @@ export function FilterBar({
             setShowArchived(next)
           }}
         >{showArchived ? 'Shown' : 'Hidden'}</button>
-      </div>
-      <div className="future-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span className="meta">Future:</span>
-        <button
-          className={`btn pill ${showFuture ? 'active' : ''}`}
-          type="button"
-          onClick={() => {
-            const next = !showFuture
-            try { saveFutureVisible(next) } catch {}
-            showFutureRef.current = next
-            setShowFuture(next)
-          }}
-        >{showFuture ? 'Shown' : 'Hidden'}</button>
-      </div>
-      <div className="soon-toggle" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span className="meta">Soon:</span>
-        <button
-          className={`btn pill ${showSoon ? 'active' : ''}`}
-          type="button"
-          onClick={() => {
-            const next = !showSoon
-            try { saveSoonVisible(next) } catch {}
-            showSoonRef.current = next
-            setShowSoon(next)
-            queueMicrotask(() => {
-              try {
-                if (next && editor?.view?.dom) {
-                  const root = editor.view.dom
-                  root.querySelectorAll('li.li-node[data-soon="1"]').forEach(li => {
-                    li.classList.remove('filter-hidden')
-                    li.style.display = ''
-                  })
-                }
-                applyStatusFilterRef.current?.()
-              } catch {}
-            })
-          }}
-        >{showSoon ? 'Shown' : 'Hidden'}</button>
       </div>
       <div className="tag-filter-group">
         <div className="tag-filter include">
@@ -197,4 +139,3 @@ export function FilterBar({
     </div>
   )
 }
-

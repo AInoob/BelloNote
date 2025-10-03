@@ -240,8 +240,6 @@ export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
   }, [cleanDanglingSlash, closeSlash, consumeSlashMarker, editor, pushDebug])
 
   const insertArchived = useCallback(() => insertTagged('archived'), [insertTagged])
-  const insertFuture = useCallback(() => insertTagged('future'), [insertTagged])
-  const insertSoon = useCallback(() => insertTagged('soon'), [insertTagged])
 
   const insertTagFromSlash = useCallback((tagInfo) => {
     if (!tagInfo) return
@@ -335,12 +333,10 @@ export function useSlashCommands({ editor, isReadOnly, pushDebug }) {
     { id: 'today', label: 'Date worked on (today)', hint: 'Insert @YYYY-MM-DD for today', keywords: ['today', 'date', 'now'], run: insertToday },
     { id: 'date', label: 'Date worked on (pick)', hint: 'Prompt for a specific date', keywords: ['date', 'pick', 'calendar'], run: insertPick },
     { id: 'archived', label: 'Archive (tag)', hint: 'Insert @archived tag to mark item (and its subtasks) archived', keywords: ['archive', 'archived', 'hide'], run: insertArchived },
-    { id: 'future', label: 'Future (tag)', hint: 'Insert @future tag to mark item not planned soon (and its subtasks)', keywords: ['future', 'later', 'snooze'], run: insertFuture },
-    { id: 'soon', label: 'Soon (tag)', hint: 'Insert @soon tag to mark item coming sooner than future (and its subtasks)', keywords: ['soon', 'next', 'upcoming'], run: insertSoon },
     { id: 'code', label: 'Code block', hint: 'Insert a multiline code block', keywords: ['code', 'snippet', '```'], run: insertCode },
     { id: 'image', label: 'Upload image', hint: 'Upload and insert an image', keywords: ['image', 'photo', 'upload'], run: insertImage },
     { id: 'details', label: 'Details (inline)', hint: 'Collapsible details block', keywords: ['details', 'summary', 'toggle'], run: insertDetails }
-  ]), [insertArchived, insertCode, insertDetails, insertFuture, insertImage, insertPick, insertSoon, insertToday])
+  ]), [insertArchived, insertCode, insertDetails, insertImage, insertPick, insertToday])
 
   const parsedTagQuery = useMemo(() => {
     const trimmed = slashQuery.trim()

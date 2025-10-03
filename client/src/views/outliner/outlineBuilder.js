@@ -3,6 +3,48 @@ import { parseBodyContent, defaultBody } from './outlineParser.js'
 import { loadCollapsedSetForRoot } from './collapsedState.js'
 
 /**
+ * Inspect a body node tree for archived tag markers without expensive stringification.
+ * @param {Array} nodes - Body content nodes
+ * @returns {{ archived: boolean }} Token presence flags
+ */
+function detectBodyTokens(nodes) {
+  const flags = { archived: false }
+  if (!nodes?.length) return flags
+  const stack = []
+  for (let i = 0; i < nodes.length; i++) stack.push(nodes[i])
+  while (stack.length && !flags.archived) {
+    const current = stack.pop()
+    if (current == null) continue
+    if (typeof current === 'string') {
+      if (!current.includes('@archived')) continue
+      const lower = current.toLowerCase()
+      if (lower.includes('@archived')) {
+        flags.archived = true
+        break
+      }
+      continue
+    }
+    if (Array.isArray(current)) {
+      for (let i = 0; i < current.length; i++) stack.push(current[i])
+      continue
+    }
+    if (typeof current === 'object') {
+      if (typeof current.text === 'string' && current.text.includes('@archived')) {
+        if (current.text.toLowerCase().includes('@archived')) {
+          flags.archived = true
+          break
+        }
+      }
+      const content = current.content
+      if (Array.isArray(content)) {
+        for (let i = 0; i < content.length; i++) stack.push(content[i])
+      }
+    }
+  }
+  return flags
+}
+
+/**
  * Build a ProseMirror list structure from outline nodes
  * @param {Array} nodes - Array of outline nodes
  * @param {boolean} forceExpand - Whether to force expand all nodes
@@ -30,18 +72,19 @@ export function buildList(nodes, forceExpand, normalizeImageSrc) {
       const body = parseBodyContent(rawBody, normalizeImageSrc)
       const hasExtras = body.some(node => node.type !== 'paragraph' || (node.content || []).some(ch => ch.type !== 'text'))
       const bodyContent = body.length ? body : defaultBody(titleText, ownDates, hasExtras)
-      const children = [...bodyContent]
-      if (n.children?.length) children.push(buildList(n.children, forceExpand, normalizeImageSrc))
+      let children = bodyContent
+      if (n.children?.length) {
+        children = bodyContent.length ? bodyContent.slice() : []
+        children.push(buildList(n.children, forceExpand, normalizeImageSrc))
+      }
       const idStr = String(n.id)
       const titleLower = (titleText || '').toLowerCase()
-      const bodyLower = JSON.stringify(bodyContent || []).toLowerCase()
-      const archivedSelf = titleLower.includes('@archived') || bodyLower.includes('@archived')
-      const futureSelf = titleLower.includes('@future') || bodyLower.includes('@future')
-      const soonSelf = titleLower.includes('@soon') || bodyLower.includes('@soon')
+      const bodyFlags = detectBodyTokens(bodyContent)
+      const archivedSelf = titleLower.includes('@archived') || bodyFlags.archived
       const tags = Array.isArray(n.tags) ? n.tags.map(tag => String(tag || '').toLowerCase()) : []
       return {
         type: 'listItem',
-        attrs: { dataId: n.id, status: n.status ?? STATUS_EMPTY, collapsed: collapsedSet.has(idStr), archivedSelf, futureSelf, soonSelf, tags },
+        attrs: { dataId: n.id, status: n.status ?? STATUS_EMPTY, collapsed: collapsedSet.has(idStr), archivedSelf, tags },
         content: children
       }
     })
@@ -60,32 +103,38 @@ export function buildList(nodes, forceExpand, normalizeImageSrc) {
 export function parseOutline(editor, extractTitle, extractDates, normalizeBodyNodes, pushDebug) {
   const doc = editor.getJSON()
   const results = []
+  const normalize = typeof normalizeBodyNodes === 'function' ? normalizeBodyNodes : null
   
   function walk(node, collector) {
     if (!node?.content) return
-    const lists = node.type === 'bulletList' ? [node] : (node.content || []).filter(c => c.type === 'bulletList')
-    for (const bl of lists) {
-      for (const li of (bl.content || [])) {
+    const candidates = node.type === 'bulletList' ? [node] : node.content || []
+    for (let listIdx = 0; listIdx < candidates.length; listIdx++) {
+      const bl = candidates[listIdx]
+      if (!bl || bl.type !== 'bulletList' || !Array.isArray(bl.content)) continue
+      const listItems = bl.content
+      for (let itemIdx = 0; itemIdx < listItems.length; itemIdx++) {
+        const li = listItems[itemIdx]
         if (li.type !== 'listItem') continue
         const bodyNodes = []
         let subList = null
-        ;(li.content || []).forEach(n => {
-          if (n.type === 'bulletList' && !subList) subList = n
-          else bodyNodes.push(n)
-        })
-        const para = bodyNodes.find(n => n.type === 'paragraph')
+        let para = null
+        const liContent = li.content || []
+        for (let idx = 0; idx < liContent.length; idx++) {
+          const n = liContent[idx]
+          if (n.type === 'bulletList') {
+            if (!subList) subList = n
+            continue
+          }
+          bodyNodes.push(n)
+          if (!para && n.type === 'paragraph') para = n
+        }
         const title = extractTitle(para)
         const dates = extractDates(li)
         const id = li.attrs?.dataId || null
         const status = li.attrs?.status ?? STATUS_EMPTY
         const item = { id, title, status, dates, ownWorkedOnDates: dates, children: [] }
         if (bodyNodes.length) {
-          try {
-            const cloned = JSON.parse(JSON.stringify(bodyNodes))
-            item.body = normalizeBodyNodes(cloned)
-          } catch {
-            item.body = normalizeBodyNodes(bodyNodes)
-          }
+          item.body = normalize ? normalize(bodyNodes) : bodyNodes
           item.content = item.body
           pushDebug('parse: captured body', { id, body: item.body })
         }
@@ -94,8 +143,6 @@ export function parseOutline(editor, extractTitle, extractDates, normalizeBodyNo
       }
     }
   }
-  
   walk(doc, results)
   return results
 }
-

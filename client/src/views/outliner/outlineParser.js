@@ -1,6 +1,3 @@
-import { STATUS_EMPTY } from './constants.js'
-import { extractTitle, extractDates } from './listItemUtils.js'
-
 /**
  * Normalize body nodes recursively
  * Note: This function is used with normalizeImageSrc callback
@@ -9,9 +6,11 @@ import { extractTitle, extractDates } from './listItemUtils.js'
  * @returns {Array} Normalized nodes
  */
 export function normalizeBodyNodes(nodes, normalizeImageSrc) {
+  if (!Array.isArray(nodes) || !nodes.length) return Array.isArray(nodes) ? nodes : []
+  if (!normalizeImageSrc) return nodes
   return nodes.map(node => {
     const copy = { ...node }
-    if (copy.type === 'image' && normalizeImageSrc) {
+    if (copy.type === 'image') {
       copy.attrs = { ...copy.attrs, src: normalizeImageSrc(copy.attrs?.src) }
     }
     if (copy.content) copy.content = normalizeBodyNodes(copy.content, normalizeImageSrc)
@@ -27,9 +26,15 @@ export function normalizeBodyNodes(nodes, normalizeImageSrc) {
  */
 export function parseBodyContent(raw, normalizeImageSrc) {
   if (!raw) return []
+  if (Array.isArray(raw)) {
+    return normalizeImageSrc ? normalizeBodyNodes(raw, normalizeImageSrc) : raw
+  }
+  if (typeof raw !== 'string') return []
   try {
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-    return Array.isArray(parsed) ? normalizeBodyNodes(parsed, normalizeImageSrc) : []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? (normalizeImageSrc ? normalizeBodyNodes(parsed, normalizeImageSrc) : parsed)
+      : []
   } catch {
     return []
   }
@@ -52,4 +57,3 @@ export function defaultBody(titleText, dateTokens, hasExtras) {
   }
   return [{ type: 'paragraph', content: textContent }]
 }
-

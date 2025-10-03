@@ -4,21 +4,17 @@ import { extractTagsFromText } from './tagUtils.js'
 const DEFAULT_TAG_FILTER = { include: [], exclude: [] }
 
 /**
- * Apply status, archive, future, soon, and tag filters to the editor DOM
+ * Apply status, archive, and tag filters to the editor DOM
  * @param {Object} editor - TipTap editor instance
  * @param {Object} statusFilterRef - Ref to status filter state
  * @param {Object} showArchivedRef - Ref to show archived state
- * @param {Object} showFutureRef - Ref to show future state
- * @param {Object} showSoonRef - Ref to show soon state
- * @param {Object} tagFiltersRef - Ref to tag filters state
+* @param {Object} tagFiltersRef - Ref to tag filters state
  * @param {Object} focusRootRef - Ref to focus root ID
  */
 export function applyStatusFilter(
   editor,
   statusFilterRef,
   showArchivedRef,
-  showFutureRef,
-  showSoonRef,
   tagFiltersRef,
   focusRootRef
 ) {
@@ -26,9 +22,7 @@ export function applyStatusFilter(
   const root = editor.view.dom
   const hiddenClass = 'filter-hidden'
   const parentClass = 'filter-parent'
-  const liNodes = Array.from(root.querySelectorAll('li.li-node'))
-  const showFutureCurrent = showFutureRef.current
-  const showSoonCurrent = showSoonRef.current
+  const liNodes = root.querySelectorAll('li.li-node')
   const showArchivedCurrent = showArchivedRef.current
   const statusFilterCurrent = statusFilterRef.current || {}
   const tagFiltersCurrent = tagFiltersRef.current || DEFAULT_TAG_FILTER
@@ -83,7 +77,12 @@ export function applyStatusFilter(
     return parts.join(' ').replace(/\s+/g, ' ').trim()
   }
 
-  liNodes.forEach(li => {
+  const hasIncludeFilters = includeSet.size > 0
+  const hasExcludeFilters = excludeSet.size > 0
+  const evaluateTags = hasIncludeFilters || hasExcludeFilters
+
+  for (let i = 0; i < liNodes.length; i++) {
+    const li = liNodes[i]
     li.classList.remove(hiddenClass, parentClass, 'focus-root', 'focus-descendant', 'focus-ancestor', 'focus-hidden')
     li.removeAttribute('data-focus-role')
     li.style.display = ''
@@ -93,25 +92,47 @@ export function applyStatusFilter(
     const body = li.querySelector(':scope > .li-row .li-content')
     const attrBody = li.getAttribute('data-body-text')
     const bodyTextRaw = attrBody && attrBody.trim() ? attrBody : readDirectBodyText(body)
-    const bodyText = bodyTextRaw.toLowerCase()
-    const tagsFound = extractTagsFromText(bodyTextRaw)
-    const canonicalTags = tagsFound.map(t => t.canonical)
-    li.dataset.tagsSelf = canonicalTags.join(',')
+    const hasAtSymbols = bodyTextRaw.includes('@')
+    let bodyTextLower = null
+    const getLowerBody = () => {
+      if (bodyTextLower !== null) return bodyTextLower
+      bodyTextLower = bodyTextRaw.toLowerCase()
+      return bodyTextLower
+    }
 
-    const selfArchived = /@archived\b/.test(bodyText)
-    const selfFuture = /@future\b/.test(bodyText)
-    const selfSoon = /@soon\b/.test(bodyText)
+    let canonicalTags = []
+    const shouldExtractTags = evaluateTags || bodyTextRaw.includes('#')
+    if (shouldExtractTags) {
+      const tagsFound = extractTagsFromText(bodyTextRaw)
+      canonicalTags = new Array(tagsFound.length)
+      for (let j = 0; j < tagsFound.length; j++) canonicalTags[j] = tagsFound[j].canonical
+      li.dataset.tagsSelf = canonicalTags.join(',')
+    } else {
+      li.dataset.tagsSelf = ''
+    }
+
+    let selfArchived = false
+    if (hasAtSymbols && bodyTextRaw.includes('@archived')) {
+      const lower = getLowerBody()
+      selfArchived = /@archived\b/.test(lower)
+    }
 
     li.dataset.archivedSelf = selfArchived ? '1' : '0'
-    li.dataset.futureSelf = selfFuture ? '1' : '0'
-    li.dataset.soonSelf = selfSoon ? '1' : '0'
 
     const parentLi = li.parentElement?.closest?.('li.li-node') || null
     parentMap.set(li, parentLi)
 
     const ownTagSet = new Set(canonicalTags)
-    const includeSelf = includeRequired ? canonicalTags.some(tag => includeSet.has(tag)) : false
-    const excludeSelf = canonicalTags.some(tag => excludeSet.has(tag))
+    let includeSelf = false
+    let excludeSelf = false
+    if (evaluateTags) {
+      for (let j = 0; j < canonicalTags.length; j++) {
+        const tag = canonicalTags[j]
+        if (!includeSelf && includeSet.has(tag)) includeSelf = true
+        if (!excludeSelf && excludeSet.has(tag)) excludeSelf = true
+        if (includeSelf && excludeSelf) break
+      }
+    }
     infoMap.set(li, {
       tags: ownTagSet,
       includeSelf,
@@ -120,53 +141,47 @@ export function applyStatusFilter(
       excludeSelf,
       excludeAncestor: false
     })
-  })
+  }
 
-  const liReverse = [...liNodes].reverse()
-  liReverse.forEach(li => {
+  for (let i = liNodes.length - 1; i >= 0; i--) {
+    const li = liNodes[i]
     const parent = parentMap.get(li)
-    if (!parent) return
+    if (!parent) continue
     const info = infoMap.get(li)
     const parentInfo = infoMap.get(parent)
-    if (!info || !parentInfo) return
+    if (!info || !parentInfo) continue
     if (info.includeSelf || info.includeDescendant) parentInfo.includeDescendant = true
-  })
+  }
 
-  liNodes.forEach(li => {
+  for (let i = 0; i < liNodes.length; i++) {
+    const li = liNodes[i]
     const parent = parentMap.get(li)
-    if (!parent) return
+    if (!parent) continue
     const info = infoMap.get(li)
     const parentInfo = infoMap.get(parent)
-    if (!info || !parentInfo) return
+    if (!info || !parentInfo) continue
     if (parentInfo.includeSelf || parentInfo.includeAncestor) info.includeAncestor = true
     if (parentInfo.excludeSelf || parentInfo.excludeAncestor) info.excludeAncestor = true
-  })
+  }
 
-  liNodes.forEach(li => {
+  for (let i = 0; i < liNodes.length; i++) {
+    const li = liNodes[i]
     const info = infoMap.get(li) || { tags: new Set(), includeSelf: false, includeDescendant: false, includeAncestor: false, excludeSelf: false, excludeAncestor: false }
     let archived = li.dataset.archivedSelf === '1'
-    let future = li.dataset.futureSelf === '1'
-    let soon = li.dataset.soonSelf === '1'
     let parent = li.parentElement
-    while (!(archived && future && soon) && parent) {
-      if (parent.matches && parent.matches('li.li-node')) {
-        if (!archived && parent.dataset.archived === '1') archived = true
-        if (!future && parent.dataset.future === '1') future = true
-        if (!soon && parent.dataset.soon === '1') soon = true
-        if (archived && future && soon) break
+    while (!archived && parent) {
+      if (parent.matches && parent.matches('li.li-node') && parent.dataset.archived === '1') {
+        archived = true
+        break
       }
       parent = parent.parentElement
     }
     li.dataset.archived = archived ? '1' : '0'
-    li.dataset.future = future ? '1' : '0'
-    li.dataset.soon = soon ? '1' : '0'
 
     const statusAttr = li.getAttribute('data-status') || ''
     const filterKey = statusAttr === '' ? 'none' : statusAttr
     const hideByStatus = statusFilterCurrent[filterKey] === false
     const hideByArchive = !showArchivedCurrent && archived
-    const hideByFuture = !showFutureCurrent && future
-    const hideBySoon = !showSoonCurrent && soon
     const includeVisible = includeRequired ? (info.includeSelf || info.includeDescendant || info.includeAncestor) : true
     const hideByInclude = includeRequired && !includeVisible
     const hideByExclude = info.excludeSelf || info.excludeAncestor
@@ -194,7 +209,7 @@ export function applyStatusFilter(
         li.classList.remove(parentClass)
         li.classList.remove(hiddenClass)
         li.style.display = 'none'
-        return
+        continue
       }
     } else {
       li.removeAttribute('data-focus-role')
@@ -202,7 +217,7 @@ export function applyStatusFilter(
 
     const shouldHide = (isFocusActive && (isRoot || isDescendant || isAncestor))
       ? false
-      : (hideByStatus || hideByArchive || hideByFuture || hideBySoon || hideByTags)
+      : (hideByStatus || hideByArchive || hideByTags)
     if (shouldHide) {
       li.classList.add(hiddenClass)
       li.style.display = 'none'
@@ -210,7 +225,7 @@ export function applyStatusFilter(
       li.classList.remove(hiddenClass)
       li.style.display = ''
     }
-  })
+  }
 
   const depthMap = new Map()
   const getDepth = (el) => {
@@ -225,15 +240,16 @@ export function applyStatusFilter(
     return depth
   }
 
-  const sorted = [...liNodes].sort((a, b) => getDepth(b) - getDepth(a))
-  sorted.forEach(li => {
-    if (focusElement) return
-    if (!li.classList.contains(hiddenClass)) return
-    const descendantVisible = li.querySelector('li.li-node:not(.filter-hidden)')
-    if (descendantVisible) {
-      li.classList.remove(hiddenClass)
-      li.classList.add(parentClass)
+  if (!focusElement && liNodes.length) {
+    const sorted = Array.from(liNodes).sort((a, b) => getDepth(b) - getDepth(a))
+    for (let i = 0; i < sorted.length; i++) {
+      const li = sorted[i]
+      if (!li.classList.contains(hiddenClass)) continue
+      const descendantVisible = li.querySelector('li.li-node:not(.filter-hidden)')
+      if (descendantVisible) {
+        li.classList.remove(hiddenClass)
+        li.classList.add(parentClass)
+      }
     }
-  })
+  }
 }
-

@@ -251,7 +251,9 @@ function ListItemView({
       onStatusToggle,
       id,
       fallbackIdRef,
-      editor
+      editor,
+      getPos,
+      findListItemDepth
     )
   }
 
@@ -414,10 +416,6 @@ function ListItemView({
       data-id={id ? String(id) : fallbackIdRef.current}
       data-archived-self={node.attrs.archivedSelf ? '1' : '0'}
       data-archived={node.attrs.archivedSelf ? '1' : '0'}
-      data-future-self={node.attrs.futureSelf ? '1' : '0'}
-      data-soon-self={node.attrs.soonSelf ? '1' : '0'}
-      data-future={node.attrs.futureSelf ? '1' : '0'}
-      data-soon={node.attrs.soonSelf ? '1' : '0'}
       data-tags-self={tags.join(',')}
       data-body-text={ownBodyTextAttr}
       draggable={!readOnly}
@@ -551,8 +549,6 @@ export function createTaskListItemExtension({
         status: { default: STATUS_EMPTY },
         collapsed: { default: false },
         archivedSelf: { default: false },
-        futureSelf: { default: false },
-        soonSelf: { default: false },
         tags: { default: [] }
       }
     },
