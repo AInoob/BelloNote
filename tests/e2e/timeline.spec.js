@@ -137,3 +137,42 @@ test('timeline includes tasks scheduled via reminders on the due date', async ({
   const reminderRow = todayItems.filter({ hasText: 'Reminder Task' }).first()
   await expect(reminderRow.locator('.li-reminder-area .reminder-toggle')).toBeVisible()
 })
+
+function daysAgoStr(days) {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  return fmt(d)
+}
+
+test('timeline lazy mounts offscreen day editors until scrolled into view', async ({ page, request }) => {
+  await resetOutline(request)
+
+  const TOTAL_DAYS = 18
+  const outline = []
+  for (let i = 0; i < TOTAL_DAYS; i += 1) {
+    const date = daysAgoStr(i)
+    outline.push({
+      title: `Lazy timeline parent ${i}`,
+      status: 'todo',
+      dates: [date],
+      children: [{ title: `Lazy timeline child ${i}` }]
+    })
+  }
+  await seedOutline(request, outline)
+
+  await openTimeline(page)
+
+  const farIndex = TOTAL_DAYS - 1
+  const farDate = daysAgoStr(farIndex)
+  const farSection = sectionByDate(page, farDate)
+  await expect(farSection).toHaveCount(1)
+
+  const preview = farSection.locator('.history-inline-preview')
+  const proseMirror = preview.locator('.ProseMirror')
+  await expect(proseMirror, 'expected far timeline section to remain unmounted while offscreen').toHaveCount(0)
+
+  await farSection.scrollIntoViewIfNeeded()
+
+  await expect(proseMirror, 'expected timeline section to mount once scrolled into view').toHaveCount(1)
+  await expect(preview).toContainText(`Lazy timeline child ${farIndex}`)
+})

@@ -6,6 +6,7 @@ import { useOutlineSnapshot } from '../hooks/useOutlineSnapshot.js'
 import { cssEscape } from '../utils/cssEscape.js'
 import { FOCUS_FLASH_DURATION, REFRESH_DEBOUNCE_DELAY } from './timeline/constants.js'
 import { buildOutlineFromItems } from './timeline/timelineUtils.js'
+import LazyMount from '../components/LazyMount.jsx'
 
 
 export default function TimelineView({ focusRequest = null, onFocusHandled = () => {}, onNavigateOutline = null }) {
@@ -223,16 +224,18 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
         return (
           <section key={day.date} ref={isToday ? todaySectionRef : undefined} data-timeline-date={day.date}>
             <h3>{day.date}</h3>
-            <div className="history-inline-preview">
-              <OutlinerView
-                readOnly={true}
-                forceExpand={true}
-                initialOutline={{ roots }}
-                broadcastSnapshots={false}
-                allowStatusToggleInReadOnly={true}
-                reminderActionsEnabled={true}
-                onStatusToggle={handleStatusToggle}
-              />
+            <div className="history-inline-preview" style={{ minHeight: 48 }}>
+              <LazyMount rootMargin="600px" once={true}>
+                <OutlinerView
+                  readOnly
+                  forceExpand
+                  initialOutline={{ roots }}
+                  broadcastSnapshots={false}
+                  allowStatusToggleInReadOnly
+                  reminderActionsEnabled
+                  onStatusToggle={handleStatusToggle}
+                />
+              </LazyMount>
             </div>
           </section>
         )
