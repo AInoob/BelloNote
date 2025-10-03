@@ -156,15 +156,22 @@ export default function OutlinerView({
   const includeFilterList = Array.isArray(tagFilters?.include) ? tagFilters.include : []
   const excludeFilterList = Array.isArray(tagFilters?.exclude) ? tagFilters.exclude : []
 
+  const onStatusToggleStable = useCallback((...args) => {
+    if (typeof onStatusToggle === 'function') {
+      return onStatusToggle(...args)
+    }
+    return undefined
+  }, [onStatusToggle])
+
   const taskListItemExtension = useMemo(
     () => createTaskListItemExtension({
       readOnly: isReadOnly,
       draggingState: draggingRef,
       allowStatusToggleInReadOnly,
-      onStatusToggle,
+      onStatusToggle: onStatusToggleStable,
       reminderActionsEnabled
     }),
-    [isReadOnly, draggingRef, allowStatusToggleInReadOnly, onStatusToggle, reminderActionsEnabled]
+    [isReadOnly, draggingRef, allowStatusToggleInReadOnly, onStatusToggleStable, reminderActionsEnabled]
   )
 
   useEffect(() => {
