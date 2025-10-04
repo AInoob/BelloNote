@@ -3,6 +3,7 @@ const path = require('path')
 const fs = require('fs')
 const net = require('net')
 const { spawn } = require('child_process')
+const { Client } = require('pg')
 const { test: playwrightBase, expect } = require('@playwright/test')
 
 const CLIENT_PORT_RANGE = { start: 6000, end: 6999 }
@@ -15,6 +16,71 @@ const BASE_CLIENT_DIST = path.join(CLIENT_ROOT, 'dist')
 const WORKER_ROOT_PREFIX = '.playwright-data'
 const PLACEHOLDER_PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Yp8N40AAAAASUVORK5CYII=', 'base64')
 const NPM_CMD = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+
+const TEST_DATABASES = ['bello_note_test_1', 'bello_note_test_2', 'bello_note_test_3', 'bello_note_test_4']
+const PG_SSL = (process.env.PGSSLMODE || '').toLowerCase() === 'require' ? { rejectUnauthorized: false } : undefined
+const BASE_PG_CONFIG = {
+  host: process.env.PGHOST || '127.0.0.1',
+  port: Number(process.env.PGPORT || '5432'),
+  user: process.env.PGUSER || 'postgres',
+  password: process.env.PGPASSWORD || undefined,
+  ssl: PG_SSL
+}
+const ADMIN_DATABASE = process.env.PGADMIN_DATABASE || process.env.PGDATABASE_ADMIN || 'postgres'
+
+function assertSafeIdentifier(value, label = 'identifier') {
+  if (!/^[A-Za-z0-9_]+$/.test(String(value || ''))) {
+    throw new Error(`${label} contains unsupported characters: ${value}`)
+  }
+}
+
+function pickDatabaseForWorker(workerIndex) {
+  return TEST_DATABASES[workerIndex % TEST_DATABASES.length]
+}
+
+async function recreateDatabase(dbName) {
+  assertSafeIdentifier(dbName, 'database name')
+  const adminClient = new Client({ ...BASE_PG_CONFIG, database: ADMIN_DATABASE })
+  await adminClient.connect()
+  try {
+    const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName])
+    if (exists.rowCount === 0) {
+      await adminClient.query(`CREATE DATABASE "${dbName}" WITH ENCODING 'UTF8' TEMPLATE template0`)
+    }
+  } finally {
+    await adminClient.end()
+  }
+
+  const dbClient = new Client({ ...BASE_PG_CONFIG, database: dbName })
+  await dbClient.connect()
+  try {
+    try {
+      await dbClient.query('DROP SCHEMA public CASCADE')
+    } catch (err) {
+      if (err.code !== '3F000') throw err
+    }
+    await dbClient.query('CREATE SCHEMA public')
+    await dbClient.query('GRANT ALL ON SCHEMA public TO CURRENT_USER')
+    await dbClient.query('GRANT ALL ON SCHEMA public TO public')
+  } finally {
+    await dbClient.end()
+  }
+}
+
+function buildServerEnv({ serverPort, databaseName }) {
+  const env = {
+    ...process.env,
+    PORT: String(serverPort),
+    NODE_ENV: 'test',
+    PGDATABASE: databaseName
+  }
+  if (BASE_PG_CONFIG.host) env.PGHOST = BASE_PG_CONFIG.host
+  if (BASE_PG_CONFIG.port) env.PGPORT = String(BASE_PG_CONFIG.port)
+  if (BASE_PG_CONFIG.user) env.PGUSER = BASE_PG_CONFIG.user
+  if (BASE_PG_CONFIG.password) env.PGPASSWORD = BASE_PG_CONFIG.password
+  if (process.env.PGSSLMODE) env.PGSSLMODE = process.env.PGSSLMODE
+  return env
+}
 
 const reservedPorts = new Set()
 const UNSAFE_PORTS = new Set([6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697])
@@ -266,6 +332,7 @@ const test = playwrightBase.extend({
     let serverLogs
     let clientLogs
     let distDir
+    let databaseName
 
     try {
       serverPort = await allocatePort({
@@ -279,12 +346,17 @@ const test = playwrightBase.extend({
         preferred: null
       })
 
+      databaseName = pickDatabaseForWorker(workerInfo.workerIndex)
+      await recreateDatabase(databaseName)
+
       const apiUrl = `http://127.0.0.1:${serverPort}`
       const clientUrl = `http://127.0.0.1:${clientPort}`
 
+      const serverEnv = buildServerEnv({ serverPort, databaseName })
+
       serverProc = spawn(NPM_CMD, ['start'], {
         cwd: SERVER_ROOT,
-        env: { ...process.env, PORT: String(serverPort), DATA_DIR: dataDir, NODE_ENV: 'test' },
+        env: serverEnv,
         stdio: 'pipe'
       })
       await waitForSpawn(serverProc, 'server')
@@ -318,6 +390,7 @@ const test = playwrightBase.extend({
         serverPort,
         workerRoot,
         dataDir,
+        databaseName,
         async resetState() {
           await resetServerState(apiUrl)
         }

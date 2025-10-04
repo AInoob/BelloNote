@@ -36,10 +36,6 @@ const EXTENSION_MAP = {
   'video/webm': 'webm'
 }
 
-const selectByHash = db.prepare(`SELECT id, project_id, stored_name, original_name, mime_type, size_bytes, hash, created_at FROM files WHERE hash = ?`)
-const selectById = db.prepare(`SELECT id, project_id, stored_name, original_name, mime_type, size_bytes, hash, created_at FROM files WHERE id = ?`)
-const insertFile = db.prepare(`INSERT INTO files (project_id, stored_name, original_name, mime_type, size_bytes, hash) VALUES (?, ?, ?, ?, ?, ?)`)
-
 export function ensureUploadDir() {
   try {
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
@@ -70,15 +66,26 @@ function generateStoredName(extension) {
 
 const getFilePath = (storedName) => path.join(uploadDir, storedName)
 
-function buildRecord(row) {
-  if (!row) return null
-  return { ...row, url: buildPublicUrl(row) }
-}
-
 export function buildPublicUrl(fileRow) {
   if (!fileRow) return null
   const name = encodeURIComponent(fileRow.stored_name)
   return `/files/${fileRow.id}/${name}`
+}
+
+function normalizeSize(value) {
+  if (value == null) return value
+  const num = Number(value)
+  return Number.isNaN(num) ? value : num
+}
+
+function buildRecord(row) {
+  if (!row) return null
+  const normalized = {
+    ...row,
+    size_bytes: normalizeSize(row.size_bytes)
+  }
+  normalized.url = buildPublicUrl(normalized)
+  return normalized
 }
 
 function writeBufferToDisk(buffer, storedName) {
@@ -88,11 +95,41 @@ function writeBufferToDisk(buffer, storedName) {
   return filePath
 }
 
+async function selectFileByHash(hash) {
+  const row = await db.get(
+    `SELECT id, project_id, stored_name, original_name, mime_type, size_bytes, hash, created_at
+       FROM files
+      WHERE hash = $1`,
+    [hash]
+  )
+  return buildRecord(row)
+}
+
+async function selectFileById(id) {
+  const row = await db.get(
+    `SELECT id, project_id, stored_name, original_name, mime_type, size_bytes, hash, created_at
+       FROM files
+      WHERE id = $1`,
+    [id]
+  )
+  return buildRecord(row)
+}
+
+async function insertFileRow({ projectId, storedName, originalName, mimeType, size, hash }) {
+  const row = await db.get(
+    `INSERT INTO files (project_id, stored_name, original_name, mime_type, size_bytes, hash)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, project_id, stored_name, original_name, mime_type, size_bytes, hash, created_at`,
+    [projectId, storedName, originalName, mimeType || 'application/octet-stream', size, hash]
+  )
+  return buildRecord(row)
+}
+
 function ensureExistingFile(row, buffer) {
   const filePath = getFilePath(row.stored_name)
   try {
     const stat = fs.statSync(filePath)
-    if (stat.size === row.size_bytes) return row
+    if (normalizeSize(stat.size) === normalizeSize(row.size_bytes)) return row
   } catch {
     // fall through and rewrite missing/corrupt file
   }
@@ -105,25 +142,31 @@ function sanitizeOriginalName(name) {
   return path.basename(name).replace(/[^a-zA-Z0-9._\-]/g, '_')
 }
 
-export function storeBufferAsFile({ buffer, projectId, mimeType, originalName }) {
+export async function storeBufferAsFile({ buffer, projectId, mimeType, originalName }) {
   if (!buffer || !Buffer.isBuffer(buffer)) throw new Error('buffer required')
   const size = buffer.length
   const hash = crypto.createHash('sha256').update(buffer).digest('hex')
-  const existing = selectByHash.get(hash)
+  const existing = await selectFileByHash(hash)
   if (existing) {
     ensureExistingFile(existing, buffer)
-    return buildRecord(existing)
+    return existing
   }
   const sanitizedOriginal = sanitizeOriginalName(originalName)
   const extension = extensionFromMime(mimeType, sanitizedOriginal)
   const storedName = generateStoredName(extension)
   writeBufferToDisk(buffer, storedName)
-  const info = insertFile.run(projectId, storedName, sanitizedOriginal, mimeType || 'application/octet-stream', size, hash)
-  const row = selectById.get(info.lastInsertRowid)
-  return buildRecord(row)
+  const row = await insertFileRow({
+    projectId,
+    storedName,
+    originalName: sanitizedOriginal,
+    mimeType,
+    size,
+    hash
+  })
+  return row
 }
 
-export function storeDataUri(dataUri, { projectId, originalName } = {}) {
+export async function storeDataUri(dataUri, { projectId, originalName } = {}) {
   if (!DATA_URI_RE.test(dataUri || '')) return null
   const match = DATA_URI_RE.exec(dataUri)
   if (!match) return null
@@ -138,17 +181,18 @@ export function storeDataUri(dataUri, { projectId, originalName } = {}) {
   }
 }
 
-export function storeDiskFile(filePath, { projectId, originalName, mimeType } = {}) {
+export async function storeDiskFile(filePath, { projectId, originalName, mimeType } = {}) {
   const abs = path.resolve(filePath)
   const buffer = fs.readFileSync(abs)
-  const record = storeBufferAsFile({ buffer, projectId, mimeType, originalName })
-  try { fs.unlinkSync(abs) } catch {}
+  const record = await storeBufferAsFile({ buffer, projectId, mimeType, originalName })
+  try {
+    fs.unlinkSync(abs)
+  } catch {}
   return record
 }
 
-export function getFileById(id) {
-  const row = selectById.get(id)
-  return buildRecord(row)
+export async function getFileById(id) {
+  return selectFileById(id)
 }
 
 export function getDiskPathForFile(row) {
@@ -159,3 +203,4 @@ export function getDiskPathForFile(row) {
 export function isDataUri(value) {
   return DATA_URI_RE.test(String(value || ''))
 }
+

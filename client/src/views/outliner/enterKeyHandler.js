@@ -4,7 +4,8 @@ import { STATUS_EMPTY } from './constants.js'
 import {
   applySplitStatusAdjustments,
   runSplitListItemWithSelection,
-  promoteSplitSiblingToChild
+  promoteSplitSiblingToChild,
+  positionOfListChild
 } from './listCommands.js'
 
 /**
@@ -69,6 +70,17 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
   const isAtStart = inParagraph && offset === 0
   const isAtEnd = inParagraph && offset === paragraphNode.content.size
   const isChild = listItemDepth > 2
+  if (typeof window !== 'undefined') {
+    window.__ENTER_DEBUG = {
+      listItemDepth,
+      parentPos,
+      originalIndex,
+      newIndex: originalIndex + 1,
+      isChild,
+      isAtStart,
+      isAtEnd
+    }
+  }
   pushDebug('enter: state', { isChild, isAtStart, isAtEnd, offset, paraSize: paragraphNode.content.size, collapsed: !!listItemNode.attrs?.collapsed })
 
   const defaultAttrs = {
@@ -127,6 +139,88 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
         if (typeof console !== 'undefined') console.warn('[split-adjust] empty sibling selection restore failed', error)
       }
     }
+    if (!selectionAdjusted && typeof parentPos === 'number') {
+      try {
+        const latest = view.state
+        const parentNode = latest.doc.nodeAt(parentPos)
+        const newItemPos = parentNode ? positionOfListChild(parentNode, parentPos, splitMeta.newIndex) : null
+        if (typeof newItemPos === 'number') {
+          const newNode = latest.doc.nodeAt(newItemPos)
+          if (newNode) {
+            const para = newNode.childCount > 0 ? newNode.child(0) : null
+            const caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + newNode.nodeSize - 1
+            if (typeof console !== 'undefined') console.log('[split-adjust] top-level caret', { newItemPos, caretPos, newIndex: splitMeta.newIndex })
+            const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+            if (!chainResult) {
+              const tr = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
+              view.dispatch(tr)
+            }
+            finalCaretPos = caretPos
+            selectionAdjusted = true
+            pendingEmptyCaretRef.current = true
+          }
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[split-adjust] top-level caret resolve failed', error)
+      }
+    }
+    if (!selectionAdjusted && typeof parentPos === 'number') {
+      try {
+        const latest = view.state
+        const parentNode = latest.doc.nodeAt(parentPos)
+        const newItemPos = parentNode ? positionOfListChild(parentNode, parentPos, splitMeta.newIndex) : null
+        if (typeof newItemPos === 'number') {
+          const newNode = latest.doc.nodeAt(newItemPos)
+          if (newNode) {
+            const para = newNode.childCount > 0 ? newNode.child(0) : null
+            const caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + newNode.nodeSize - 1
+            const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+            if (!chainResult) {
+              const tr = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
+              view.dispatch(tr)
+            }
+            finalCaretPos = caretPos
+            selectionAdjusted = true
+            pendingEmptyCaretRef.current = true
+          }
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[split-adjust] top-level caret resolve failed', error)
+      }
+    }
+
+    const enforceEmptyCaret = () => {
+      try {
+        if (typeof parentPos !== 'number') return
+        const latest = view.state
+        const parentNode = latest.doc.nodeAt(parentPos)
+        if (!parentNode) return
+        if (splitMeta.newIndex >= parentNode.childCount) return
+        const newItemPos = positionOfListChild(parentNode, parentPos, splitMeta.newIndex)
+        if (typeof newItemPos !== 'number') return
+        const newNode = latest.doc.nodeAt(newItemPos)
+        const para = newNode?.childCount ? newNode.child(0) : null
+        const isEmpty = para?.type?.name === 'paragraph' && para.content.size === 0
+        if (!isEmpty) return
+        const resolvedDepth = Math.max(0, listItemDepth - 1)
+        const currentIndex = latest.selection.$from.index(resolvedDepth)
+        if (currentIndex !== splitMeta.newIndex + 1) return
+        const caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + newNode.nodeSize - 1
+        const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+        if (!chainResult) {
+          const tr = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
+          view.dispatch(tr)
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[split-adjust] enforce caret failed', error)
+      }
+    }
+
+    if (!selectionAdjusted) {
+      if (typeof window !== 'undefined') window.requestAnimationFrame(enforceEmptyCaret)
+      setTimeout(enforceEmptyCaret, 0)
+    }
+
     view.focus()
     requestAnimationFrame(() => view.focus())
     logCursorTiming('empty-sibling', enterStartedAt)

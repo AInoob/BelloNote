@@ -18,17 +18,17 @@ const storage = multer.diskStorage({
 const upload = multer({ storage })
 const router = Router()
 
-router.post('/image', upload.single('image'), (req, res) => {
+router.post('/image', upload.single('image'), async (req, res) => {
   const file = req.file
   if (!file) return res.status(400).json({ error: 'No file' })
   try {
-    const projectId = ensureDefaultProject()
-    const record = storeDiskFile(file.path, {
+    const projectId = await ensureDefaultProject()
+    const record = await storeDiskFile(file.path, {
       projectId,
       originalName: file.originalname,
       mimeType: file.mimetype
     })
-    res.json({
+    return res.json({
       id: record.id,
       url: record.url,
       mimeType: record.mime_type,
@@ -36,7 +36,7 @@ router.post('/image', upload.single('image'), (req, res) => {
     })
   } catch (err) {
     console.error('[upload] failed to store file', err)
-    res.status(500).json({ error: 'Failed to store file' })
+    return res.status(500).json({ error: 'Failed to store file' })
   }
 })
 

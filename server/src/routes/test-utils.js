@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { Router } from 'express'
 
-import { db } from '../lib/db.js'
+import { transaction } from '../lib/db.js'
 import { getUploadDir } from '../lib/files.js'
 
 const router = Router()
@@ -32,22 +32,18 @@ function clearUploadsDirectory() {
   }
 }
 
-router.post('/reset', (req, res) => {
+router.post('/reset', async (req, res) => {
   if (!isPlaywrightRequest(req)) return res.status(403).json({ error: 'forbidden' })
 
   try {
-    db.exec(`BEGIN;
-      DELETE FROM work_logs;
-      DELETE FROM tasks;
-      DELETE FROM outline_versions;
-      DELETE FROM files;
-      COMMIT;`)
+    await transaction(async (tx) => {
+      await tx.run('TRUNCATE TABLE work_logs, tasks, outline_versions, files RESTART IDENTITY CASCADE')
+    })
     clearUploadsDirectory()
-    res.json({ ok: true })
+    return res.json({ ok: true })
   } catch (err) {
-    try { db.exec('ROLLBACK;') } catch {}
     console.error('[test-utils] reset failed', err)
-    res.status(500).json({ error: err.message || 'reset failed' })
+    return res.status(500).json({ error: err.message || 'reset failed' })
   }
 })
 

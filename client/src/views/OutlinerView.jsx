@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
+import { TextSelection } from 'prosemirror-state'
 import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
@@ -357,6 +358,40 @@ export default function OutlinerView({
     dom.addEventListener('click', handler)
     return () => dom.removeEventListener('click', handler)
   }, [editor, pushDebug])
+
+  useEffect(() => {
+    if (!editor || isReadOnly) return
+    const { view } = editor
+    const handleBeforeInput = (event) => {
+      if (!pendingEmptyCaretRef.current) return
+      if (!(event instanceof InputEvent)) return
+      if (event.inputType && !event.inputType.startsWith('insert')) return
+      const sel = window.getSelection()
+      const anchorNode = sel?.anchorNode
+      const currentLi = anchorNode?.parentElement?.closest?.('li.li-node')
+      if (!currentLi) return
+      const items = Array.from(view.dom.querySelectorAll('li.li-node'))
+      const currentIndex = items.indexOf(currentLi)
+      if (currentIndex <= 0) return
+      const previousLi = items[currentIndex - 1]
+      const prevParagraph = previousLi?.querySelector('p')
+      if (!prevParagraph) return
+      const prevText = prevParagraph.textContent || ''
+      if (prevText.trim().length !== 0) return
+      const caretPos = view.posAtDOM(prevParagraph, prevParagraph.childNodes.length || 0)
+      const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+      if (!chainResult) {
+        const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, caretPos)).scrollIntoView()
+        view.dispatch(tr)
+      }
+      pendingEmptyCaretRef.current = false
+      event.preventDefault()
+    }
+    view.dom.addEventListener('beforeinput', handleBeforeInput, true)
+    return () => {
+      view.dom.removeEventListener('beforeinput', handleBeforeInput, true)
+    }
+  }, [editor, isReadOnly])
 
   const {
     slashOpen,
