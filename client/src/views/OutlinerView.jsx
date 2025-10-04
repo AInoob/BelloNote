@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
+import { Extension } from '@tiptap/core'
 import { TextSelection } from 'prosemirror-state'
 import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
@@ -47,6 +48,7 @@ import { SlashMenu } from './outliner/SlashMenu.jsx'
 import { handleDragOver, handleDrop } from './outliner/dragDropHandlers.js'
 import { handlePaste } from './outliner/pasteHandler.js'
 import { handleKeyDown } from './outliner/keyDownHandler.js'
+import { handleEnterKey } from './outliner/enterKeyHandler.js'
 
 import { ensureUploadedImages } from './outliner/imageUploadUtils.js'
 import { applySearchHighlight as applySearchHighlightUtil } from './outliner/searchHighlightUtils.js'
@@ -68,6 +70,27 @@ import {
 import { FocusContext } from './outliner/FocusContext.js'
 import { LOG } from './outliner/debugUtils.js'
 import { loadScrollState } from './outliner/scrollState.js'
+import { now, logCursorTiming } from './outliner/performanceUtils.js'
+
+const EnterHighPriority = Extension.create({
+  name: 'enterHighPriority',
+  priority: 1000,
+  addOptions() {
+    return {
+      onEnter: null
+    }
+  },
+  addKeyboardShortcuts() {
+    return {
+      Enter: ({ editor, event }) => {
+        if (typeof this.options.onEnter === 'function') {
+          return this.options.onEnter({ editor, event })
+        }
+        return false
+      }
+    }
+  }
+})
 import {
   loadStatusFilter,
   saveStatusFilter,
@@ -206,7 +229,33 @@ export default function OutlinerView({
     []
   )
 
+  const enterHighPriority = useMemo(() => EnterHighPriority.configure({
+    onEnter: ({ editor, event }) => {
+      if (!editor || !event) return false
+      if (typeof window !== 'undefined') {
+        window.__ENTER_EXTENSION_COUNT = (window.__ENTER_EXTENSION_COUNT || 0) + 1
+      }
+      return handleEnterKey({
+        event,
+        editor,
+        now,
+        logCursorTiming,
+        pushDebug,
+        pendingEmptyCaretRef
+      })
+    }
+  }), [pushDebug, pendingEmptyCaretRef])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__ENTER_HIGH_EXTENSION = enterHighPriority?.name || null
+      window.__ENTER_HIGH_INFO = enterHighPriority ? Object.keys(enterHighPriority) : null
+      window.__ENTER_HIGH_EXISTS = !!enterHighPriority
+    }
+  }, [enterHighPriority])
+
   const extensions = useMemo(() => [
+    enterHighPriority,
     StarterKit.configure({ listItem: false, codeBlock: false }),
     taskListItemExtension,
     Link.configure({ openOnClick: false, autolink: false, linkOnPaste: false }),
@@ -216,7 +265,13 @@ export default function OutlinerView({
     WorkDateHighlighter,
     ReminderTokenInline,
     DetailsBlock
-  ], [taskListItemExtension, CodeBlockWithCopy, imageExtension])
+  ], [enterHighPriority, taskListItemExtension, CodeBlockWithCopy, imageExtension])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__OUTLINER_EXTENSIONS = extensions.map((ext) => ext?.name || null)
+    }
+  }, [extensions])
 
   const editor = useEditor({
     // disable default codeBlock to avoid duplicate name with CodeBlockLowlight

@@ -1,5 +1,4 @@
 import { TextSelection } from 'prosemirror-state'
-import { Fragment } from 'prosemirror-model'
 import { STATUS_EMPTY } from './constants.js'
 import {
   applySplitStatusAdjustments,
@@ -8,48 +7,103 @@ import {
   positionOfListChild
 } from './listCommands.js'
 
+const noop = () => {}
+
+function defaultNow() {
+  return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now()
+}
+
+function coerceEnterArgs(args) {
+  const fallbackPendingRef = { current: false }
+  if (args.length === 1 && args[0] && typeof args[0] === 'object' && 'event' in args[0]) {
+    const { event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef } = args[0]
+    return {
+      event,
+      editor,
+      now: typeof now === 'function' ? now : defaultNow,
+      logCursorTiming: logCursorTiming || noop,
+      pushDebug: pushDebug || noop,
+      pendingEmptyCaretRef: pendingEmptyCaretRef || fallbackPendingRef
+    }
+  }
+  const [event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef] = args
+  return {
+    event,
+    editor,
+    now: typeof now === 'function' ? now : defaultNow,
+    logCursorTiming: logCursorTiming || noop,
+    pushDebug: pushDebug || noop,
+    pendingEmptyCaretRef: pendingEmptyCaretRef || fallbackPendingRef
+  }
+}
+
+function isEffectivelyEmptyListItem(listItemNode) {
+  if (!listItemNode || listItemNode.type?.name !== 'listItem') return false
+  if (listItemNode.childCount === 0) return true
+  let sawParagraph = false
+  for (let index = 0; index < listItemNode.childCount; index += 1) {
+    const child = listItemNode.child(index)
+    if (child.type?.name !== 'paragraph') return false
+    sawParagraph = true
+    if (child.content.size > 0) return false
+  }
+  return sawParagraph
+}
+
+function ensureSelection(view, editor, caretPos) {
+  if (caretPos == null) return
+  const latest = view.state
+  const clamped = Math.max(0, Math.min(caretPos, latest.doc.content.size))
+  const chainResult = editor?.chain?.().focus().setTextSelection({ from: clamped, to: clamped }).run()
+  if (!chainResult) {
+    const tr = latest.tr.setSelection(TextSelection.create(latest.doc, clamped)).scrollIntoView()
+    view.dispatch(tr)
+  }
+}
+
 /**
  * Handle Enter key press in the editor
- * @param {Event} event - Keyboard event
- * @param {Object} editor - TipTap editor instance
- * @param {Function} now - Function to get current timestamp
- * @param {Function} logCursorTiming - Function to log cursor timing
- * @param {Function} pushDebug - Function to push debug message
- * @param {Object} pendingEmptyCaretRef - Ref to pending empty caret state
  * @returns {boolean} True if handled, false otherwise
  */
-export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef) {
-  const enterStartedAt = now()
+export function handleEnterKey(...rawArgs) {
+  const { event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef } = coerceEnterArgs(rawArgs)
+  if (!event || !editor) return false
   const { state, view } = editor
+  if (!state || !view) return false
+
   const { $from } = view.state.selection
-  const inCode = $from.parent.type.name === 'codeBlock'
-  if (inCode) return false
+  if (!$from) return false
+  if ($from.parent?.type?.name === 'codeBlock') return false
+
   const schema = editor.schema
-  const listItemType = schema.nodes.listItem
-  const paragraphType = schema.nodes.paragraph
-  const bulletListType = schema.nodes.bulletList
-  event.preventDefault()
-  event.stopPropagation()
+  const listItemType = schema?.nodes?.listItem
+  const paragraphType = schema?.nodes?.paragraph
+  const bulletListType = schema?.nodes?.bulletList
+  if (!listItemType || !paragraphType) return false
 
-  const findListItemDepth = () => {
-    for (let depth = $from.depth; depth >= 0; depth--) {
-      if ($from.node(depth)?.type?.name === 'listItem') return depth
+  event.preventDefault?.()
+  event.stopPropagation?.()
+
+  const enterStartedAt = now()
+
+  let listItemDepth = -1
+  for (let depth = $from.depth; depth >= 0; depth -= 1) {
+    if ($from.node(depth)?.type?.name === 'listItem') {
+      listItemDepth = depth
+      break
     }
-    return -1
   }
-
-  const listItemDepth = findListItemDepth()
   if (listItemDepth === -1) return false
+
   const listItemPos = $from.before(listItemDepth)
   const listItemNode = $from.node(listItemDepth)
-  if (!listItemNode || listItemNode.type.name !== 'listItem' || listItemNode.childCount === 0) {
-    return false
-  }
+  if (!listItemNode || listItemNode.type.name !== 'listItem') return false
 
   const parentDepth = listItemDepth > 0 ? listItemDepth - 1 : null
   const parentPos = parentDepth !== null ? $from.before(parentDepth) : null
   const listParent = parentDepth !== null ? $from.node(parentDepth) : null
-  const originalAttrs = { ...(listItemNode.attrs || {}) }
   let originalIndex = $from.index(listItemDepth)
   if (listParent) {
     for (let idx = 0; idx < listParent.childCount; idx += 1) {
@@ -60,16 +114,61 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
     }
   }
 
-  const paragraphNode = listItemNode.child(0)
-  if (!paragraphNode || paragraphNode.type.name !== 'paragraph') {
-    return false
+  const defaultAttrs = {
+    dataId: null,
+    status: STATUS_EMPTY,
+    collapsed: false,
+    archivedSelf: false,
+    tags: []
   }
+
+  let nestedListInfo = null
+  if (bulletListType) {
+    let childPos = listItemPos + 1
+    listItemNode.content.forEach((child) => {
+      if (!nestedListInfo && child.type === bulletListType) {
+        nestedListInfo = { node: child, pos: childPos }
+      }
+      childPos += child.nodeSize
+    })
+  }
+
+  const emptyListItem = isEffectivelyEmptyListItem(listItemNode)
+  if (typeof window !== 'undefined') {
+    try {
+      window.__ENTER_EMPTY_DEBUG = {
+        empty: emptyListItem,
+        childCount: listItemNode.childCount,
+        json: typeof listItemNode.toJSON === 'function' ? listItemNode.toJSON() : null
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (emptyListItem) {
+    const insertPos = listItemPos + listItemNode.nodeSize
+    const newSibling = listItemType.create(defaultAttrs, paragraphType.create())
+    const tr = state.tr.insert(insertPos, newSibling)
+    const caretPos = insertPos + 1
+    tr.setSelection(TextSelection.create(tr.doc, caretPos)).scrollIntoView()
+    view.dispatch(tr)
+    pendingEmptyCaretRef.current = true
+    view.focus()
+    requestAnimationFrame(() => view.focus())
+    logCursorTiming('empty-sibling', enterStartedAt)
+    return true
+  }
+
+  const paragraphNode = listItemNode.child(0)
+  if (!paragraphNode || paragraphNode.type.name !== 'paragraph') return false
 
   const inParagraph = $from.parent === paragraphNode
   const offset = inParagraph ? $from.parentOffset : 0
   const isAtStart = inParagraph && offset === 0
   const isAtEnd = inParagraph && offset === paragraphNode.content.size
   const isChild = listItemDepth > 2
+
   if (typeof window !== 'undefined') {
     window.__ENTER_DEBUG = {
       listItemDepth,
@@ -83,127 +182,14 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
   }
   pushDebug('enter: state', { isChild, isAtStart, isAtEnd, offset, paraSize: paragraphNode.content.size, collapsed: !!listItemNode.attrs?.collapsed })
 
-  const defaultAttrs = {
-    dataId: null,
-    status: STATUS_EMPTY,
-    collapsed: false,
-    archivedSelf: false,
-    tags: []
-  }
-
-  const placeCursorAtEnd = (tr, pos) => {
-    const insertedNode = tr.doc.nodeAt(pos)
-    if (!insertedNode || insertedNode.childCount === 0) return tr
-    const para = insertedNode.child(0)
-    const paragraphStart = pos + 1
-    const paragraphEnd = paragraphStart + para.content.size
-    return tr.setSelection(TextSelection.create(tr.doc, paragraphEnd))
-  }
-
-  const onlyParagraph = listItemNode.childCount === 1 && listItemNode.child(0)?.type?.name === 'paragraph'
-  const paragraphEmpty = paragraphNode.content.size === 0
-
-  let nestedListInfo = null
-  if (bulletListType) {
-    let childPos = listItemPos + 1
-    listItemNode.content.forEach((child) => {
-      if (!nestedListInfo && child.type === bulletListType) {
-        nestedListInfo = { node: child, pos: childPos }
-      }
-      childPos += child.nodeSize
-    })
-  }
-
-  if (onlyParagraph && paragraphEmpty && isAtStart && isAtEnd) {
-    if (typeof console !== 'undefined') console.log('[enter-empty] branch', { originalIndex, parentPos, listItemDepth })
-    const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
-    const insertPos = listItemPos + listItemNode.nodeSize
-    let tr = state.tr.insert(insertPos, newSibling)
-    const selectionTarget = (() => {
-      const inserted = tr.doc.nodeAt(insertPos)
-      if (!inserted || inserted.childCount === 0) return null
-      const para = inserted.child(0)
-      const paragraphStart = insertPos + 1
-      return paragraphStart + para.content.size
-    })()
-    tr = placeCursorAtEnd(tr, insertPos)
-    view.dispatch(tr.scrollIntoView())
-    if (selectionTarget !== null) {
-      const mappedPos = tr.mapping.map(selectionTarget, 1)
-      try {
-        const latest = view.state
-        const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
-        const resolved = latest.doc.resolve(clamped)
-        const targetSelection = TextSelection.near(resolved, -1)
-        view.dispatch(latest.tr.setSelection(targetSelection))
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] empty sibling selection restore failed', error)
-      }
-    }
-
-    const newSiblingIndex = originalIndex + 1
-    const enforceNewSiblingFocus = () => {
-      try {
-        if (typeof parentPos !== 'number') return
-        const latest = view.state
-        const parentNode = latest.doc.nodeAt(parentPos)
-        if (!parentNode) return
-        const newItemPos = positionOfListChild(parentNode, parentPos, newSiblingIndex)
-        if (typeof newItemPos !== 'number') return
-        const newNode = latest.doc.nodeAt(newItemPos)
-        if (!newNode) return
-        const para = newNode.childCount > 0 ? newNode.child(0) : null
-        const caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + newNode.nodeSize - 1
-        const clamped = Math.max(0, Math.min(caretPos, latest.doc.content.size))
-        const chainResult = editor?.chain?.().focus().setTextSelection({ from: clamped, to: clamped }).run()
-        if (!chainResult) {
-          const trLatest = latest.tr.setSelection(TextSelection.create(latest.doc, clamped)).scrollIntoView()
-          view.dispatch(trLatest)
-        }
-        if (typeof console !== 'undefined') console.log('[enter-empty] focus applied', { newItemPos, caretPos: clamped })
-        pendingEmptyCaretRef.current = true
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] empty sibling caret enforce failed', error)
-      }
-    }
-    enforceNewSiblingFocus()
-    if (typeof window !== 'undefined') {
-      window.requestAnimationFrame(enforceNewSiblingFocus)
-      window.setTimeout(enforceNewSiblingFocus, 0)
-    }
-    view.focus()
-    requestAnimationFrame(() => view.focus())
-    logCursorTiming('empty-sibling', enterStartedAt)
-    return true
-  }
-
   if (!isChild && isAtEnd && nestedListInfo) {
     const isCollapsed = !!listItemNode.attrs?.collapsed
     if (isCollapsed) {
-      const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
       const insertPos = listItemPos + listItemNode.nodeSize
-      let tr = state.tr.insert(insertPos, newSibling)
-      const selectionTarget = (() => {
-        const inserted = tr.doc.nodeAt(insertPos)
-        if (!inserted || inserted.childCount === 0) return null
-        const para = inserted.child(0)
-        const paragraphStart = insertPos + 1
-        return paragraphStart + para.content.size
-      })()
-      tr = placeCursorAtEnd(tr, insertPos)
-      view.dispatch(tr.scrollIntoView())
-      if (selectionTarget !== null) {
-        const mappedPos = tr.mapping.map(selectionTarget, 1)
-        try {
-          const latest = view.state
-          const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
-          const resolved = latest.doc.resolve(clamped)
-          const targetSelection = TextSelection.near(resolved, -1)
-          view.dispatch(latest.tr.setSelection(targetSelection))
-        } catch (error) {
-          if (typeof console !== 'undefined') console.warn('[split-adjust] collapsed sibling selection restore failed', error)
-        }
-      }
+      const newSibling = listItemType.create(defaultAttrs, paragraphType.create())
+      const tr = state.tr.insert(insertPos, newSibling)
+      tr.setSelection(TextSelection.create(tr.doc, insertPos + 1)).scrollIntoView()
+      view.dispatch(tr)
       view.focus()
       requestAnimationFrame(() => view.focus())
       logCursorTiming('split-parent-keep-children', enterStartedAt)
@@ -211,30 +197,11 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
     }
 
     const { node: nestedListNode, pos: nestedListPos } = nestedListInfo
-    const newChild = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
     const childInsertPos = nestedListPos + nestedListNode.nodeSize - 1
-    let tr = state.tr.insert(childInsertPos, newChild)
-    const selectionTarget = (() => {
-      const inserted = tr.doc.nodeAt(childInsertPos)
-      if (!inserted || inserted.childCount === 0) return null
-      const para = inserted.child(0)
-      const paragraphStart = childInsertPos + 1
-      return paragraphStart + para.content.size
-    })()
-    tr = placeCursorAtEnd(tr, childInsertPos)
-    view.dispatch(tr.scrollIntoView())
-    if (selectionTarget !== null) {
-      const mappedPos = tr.mapping.map(selectionTarget, 1)
-      try {
-        const latest = view.state
-        const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
-        const resolved = latest.doc.resolve(clamped)
-        const targetSelection = TextSelection.near(resolved, -1)
-        view.dispatch(latest.tr.setSelection(targetSelection))
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] selection restore failed', error)
-      }
-    }
+    const newChild = listItemType.create(defaultAttrs, paragraphType.create())
+    const tr = state.tr.insert(childInsertPos, newChild)
+    tr.setSelection(TextSelection.create(tr.doc, childInsertPos + 1)).scrollIntoView()
+    view.dispatch(tr)
     view.focus()
     requestAnimationFrame(() => view.focus())
     logCursorTiming('append-child-from-parent', enterStartedAt)
@@ -242,29 +209,9 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
   }
 
   if (isChild && isAtStart) {
-    const newSiblingNode = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
-    let tr = state.tr.insert(listItemPos, newSiblingNode)
-    const selectionTarget = (() => {
-      const inserted = tr.doc.nodeAt(listItemPos)
-      if (!inserted || inserted.childCount === 0) return null
-      const para = inserted.child(0)
-      const paragraphStart = listItemPos + 1
-      return paragraphStart + para.content.size
-    })()
-    tr = placeCursorAtEnd(tr, listItemPos)
+    const tr = state.tr.insert(listItemPos, listItemType.create(defaultAttrs, paragraphType.create()))
+    tr.setSelection(TextSelection.create(tr.doc, listItemPos + 1)).scrollIntoView()
     view.dispatch(tr)
-    if (selectionTarget !== null) {
-      const mappedPos = tr.mapping.map(selectionTarget, 1)
-      try {
-        const latest = view.state
-        const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
-        const resolved = latest.doc.resolve(clamped)
-        const targetSelection = TextSelection.near(resolved, -1)
-        view.dispatch(latest.tr.setSelection(targetSelection))
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] prepend selection restore failed', error)
-      }
-    }
     view.focus()
     requestAnimationFrame(() => view.focus())
     logCursorTiming('prepend-child', enterStartedAt)
@@ -276,146 +223,69 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
     const endSelection = TextSelection.create(view.state.doc, paragraphEndPos)
     view.dispatch(view.state.tr.setSelection(endSelection))
   }
+
   const splitMeta = {
     parentPos,
     originalIndex,
     newIndex: originalIndex + 1,
-    originalAttrs
+    originalAttrs: { ...(listItemNode.attrs || {}) }
   }
   const didSplit = runSplitListItemWithSelection(editor, { splitAtStart: false })
-  if (typeof console !== 'undefined') console.log('[split-debug] didSplit', didSplit)
-  if (didSplit) {
-    if (typeof console !== 'undefined') console.log('[split-debug] applying adjustments', splitMeta)
-    const adjustment = applySplitStatusAdjustments(editor, splitMeta)
-    const promoted = !isChild && isAtEnd && !!nestedListInfo && promoteSplitSiblingToChild(editor, {
-      parentPos,
-      originalIndex,
-      newIndex: splitMeta.newIndex,
-      listItemType,
-      bulletListType,
-      paragraphType
-    })
-    if (promoted) {
-      view.focus()
-      requestAnimationFrame(() => view.focus())
-      logCursorTiming('append-child-from-parent', enterStartedAt)
-      return true
-    }
-    let selectionAdjusted = false
-    let finalCaretPos = null
-    if (isChild && typeof parentPos === 'number') {
-      try {
-        const latest = view.state
-        const parentLatest = latest.doc.nodeAt(parentPos)
-        let targetPos = typeof adjustment?.newItemPos === 'number' ? adjustment.newItemPos : null
-        if (targetPos === null && parentLatest) {
-          const originalEnd = listItemPos + listItemNode.nodeSize
-          let cursor = parentPos + 1
-          for (let idx = 0; idx < parentLatest.childCount; idx += 1) {
-            const child = parentLatest.child(idx)
-            const paraChild = child?.childCount ? child.child(0) : null
-            const isEmpty = paraChild?.type?.name === 'paragraph' && paraChild.content.size === 0
-            if (isEmpty && cursor >= originalEnd) {
-              targetPos = cursor
-              break
-            }
-            cursor += child.nodeSize
-          }
-          if (targetPos === null) {
-            cursor = parentPos + 1
-            for (let idx = 0; idx < parentLatest.childCount; idx += 1) {
-              const child = parentLatest.child(idx)
-              const paraChild = child?.childCount ? child.child(0) : null
-              const isEmpty = paraChild?.type?.name === 'paragraph' && paraChild.content.size === 0
-              if (isEmpty) {
-                targetPos = cursor
-                break
-              }
-              cursor += child.nodeSize
-            }
-          }
-        }
-        let resolvedPos = typeof targetPos === 'number' ? targetPos : null
-        let resolvedNode = typeof targetPos === 'number' ? latest.doc.nodeAt(targetPos) : null
-        if (resolvedNode && parentLatest) {
-          const para = resolvedNode.childCount > 0 ? resolvedNode.child(0) : null
-          const isEmpty = para?.type?.name === 'paragraph' && para.content.size === 0
-          if (!isEmpty) {
-            const scanStart = listItemPos + listItemNode.nodeSize
-            let cursor = parentPos + 1
-            for (let idx = 0; idx < parentLatest.childCount; idx += 1) {
-              const child = parentLatest.child(idx)
-              const paraChild = child?.childCount ? child.child(0) : null
-              const childEmpty = paraChild?.type?.name === 'paragraph' && paraChild.content.size === 0
-              if (childEmpty && cursor >= scanStart) {
-                resolvedPos = cursor
-                resolvedNode = latest.doc.nodeAt(cursor)
-                break
-              }
-              cursor += child.nodeSize
-            }
-          }
-        }
-        if (resolvedNode && resolvedNode.childCount > 0) {
-          const para = resolvedNode.child(0)
-          const paragraphStart = (resolvedPos ?? 0) + 1
-          const caretPos = para ? paragraphStart + para.content.size : (resolvedPos ?? 0) + resolvedNode.nodeSize - 1
-          selectionAdjusted = true
-          finalCaretPos = caretPos
-          pendingEmptyCaretRef.current = true
-        }
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] child caret restore failed', error)
-      }
-    }
+  if (!didSplit) return false
 
-    if (!selectionAdjusted && typeof parentPos === 'number') {
-      try {
-        const latest = view.state
-        const parentNode = latest.doc.nodeAt(parentPos)
-        let targetPos = typeof adjustment?.newItemPos === 'number' ? adjustment.newItemPos : null
-        if (targetPos === null && parentNode) {
-          targetPos = positionOfListChild(parentNode, parentPos, splitMeta.newIndex)
-        }
-        if (typeof targetPos === 'number') {
-          const newNode = latest.doc.nodeAt(targetPos)
-          if (newNode) {
-            const para = newNode.childCount > 0 ? newNode.child(0) : null
-            const caretPos = para ? targetPos + 1 + para.content.size : targetPos + newNode.nodeSize - 1
-            selectionAdjusted = true
-            finalCaretPos = caretPos
-            pendingEmptyCaretRef.current = true
-          }
-        }
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] top-level caret fallback failed', error)
-      }
-    }
-
+  const adjustment = applySplitStatusAdjustments(editor, splitMeta)
+  const promoted = !isChild && isAtEnd && !!nestedListInfo && promoteSplitSiblingToChild(editor, {
+    parentPos,
+    originalIndex,
+    newIndex: splitMeta.newIndex,
+    listItemType,
+    bulletListType,
+    paragraphType
+  })
+  if (promoted) {
     view.focus()
     requestAnimationFrame(() => view.focus())
-    if (selectionAdjusted) {
-      const applyCaretSelection = () => {
-        try {
-          const refreshed = view.state
-          const clamped = Math.max(0, Math.min(finalCaretPos ?? 0, refreshed.doc.content.size))
-          const chainResult = editor?.chain?.().focus().setTextSelection({ from: clamped, to: clamped }).run()
-          if (!chainResult) {
-            const tr = refreshed.tr.setSelection(TextSelection.create(refreshed.doc, clamped)).scrollIntoView()
-            view.dispatch(tr)
-          }
-        } catch (error) {
-          if (typeof console !== 'undefined') console.warn('[split-adjust] caret apply failed', error)
-        }
-      }
-      applyCaretSelection()
-      if (typeof window !== 'undefined') {
-        window.requestAnimationFrame(applyCaretSelection)
-        window.setTimeout(applyCaretSelection, 0)
-      }
-    }
-    logCursorTiming('split-list-item', enterStartedAt)
+    logCursorTiming('append-child-from-parent', enterStartedAt)
     return true
   }
-  return false
+
+  const latest = view.state
+  const parentLatest = typeof parentPos === 'number' ? latest.doc.nodeAt(parentPos) : null
+  let targetPos = typeof adjustment?.newItemPos === 'number' ? adjustment.newItemPos : null
+  if (targetPos == null && parentLatest) {
+    targetPos = positionOfListChild(parentLatest, parentPos, splitMeta.newIndex)
+  }
+
+  if (targetPos == null && parentLatest) {
+    let cursor = parentPos + 1
+    for (let idx = 0; idx < parentLatest.childCount; idx += 1) {
+      const child = parentLatest.child(idx)
+      const paraChild = child?.childCount ? child.child(0) : null
+      const isEmpty = paraChild?.type?.name === 'paragraph' && paraChild.content.size === 0
+      if (isEmpty && idx >= splitMeta.newIndex) {
+        targetPos = cursor
+        break
+      }
+      cursor += child.nodeSize
+    }
+  }
+
+  if (typeof targetPos === 'number') {
+    const newNode = latest.doc.nodeAt(targetPos)
+    if (newNode) {
+      const para = newNode.childCount > 0 ? newNode.child(0) : null
+      const caretPos = para ? targetPos + 1 + para.content.size : targetPos + Math.max(1, newNode.nodeSize - 1)
+      pendingEmptyCaretRef.current = true
+      ensureSelection(view, editor, caretPos)
+      view.focus()
+      requestAnimationFrame(() => view.focus())
+      logCursorTiming('split-list-item', enterStartedAt)
+      return true
+    }
+  }
+
+  view.focus()
+  requestAnimationFrame(() => view.focus())
+  logCursorTiming('split-list-item', enterStartedAt)
+  return true
 }
