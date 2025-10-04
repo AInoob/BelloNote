@@ -115,6 +115,7 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
   }
 
   if (onlyParagraph && paragraphEmpty && isAtStart && isAtEnd) {
+    if (typeof console !== 'undefined') console.log('[enter-empty] branch', { originalIndex, parentPos, listItemDepth })
     const newSibling = listItemType.create(defaultAttrs, Fragment.from(paragraphType.create()))
     const insertPos = listItemPos + listItemNode.nodeSize
     let tr = state.tr.insert(insertPos, newSibling)
@@ -129,7 +130,7 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
     view.dispatch(tr.scrollIntoView())
     if (selectionTarget !== null) {
       const mappedPos = tr.mapping.map(selectionTarget, 1)
-        try {
+      try {
         const latest = view.state
         const clamped = Math.max(0, Math.min(mappedPos, latest.doc.content.size))
         const resolved = latest.doc.resolve(clamped)
@@ -139,88 +140,37 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
         if (typeof console !== 'undefined') console.warn('[split-adjust] empty sibling selection restore failed', error)
       }
     }
-    if (!selectionAdjusted && typeof parentPos === 'number') {
-      try {
-        const latest = view.state
-        const parentNode = latest.doc.nodeAt(parentPos)
-        const newItemPos = parentNode ? positionOfListChild(parentNode, parentPos, splitMeta.newIndex) : null
-        if (typeof newItemPos === 'number') {
-          const newNode = latest.doc.nodeAt(newItemPos)
-          if (newNode) {
-            const para = newNode.childCount > 0 ? newNode.child(0) : null
-            const caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + newNode.nodeSize - 1
-            if (typeof console !== 'undefined') console.log('[split-adjust] top-level caret', { newItemPos, caretPos, newIndex: splitMeta.newIndex })
-            const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
-            if (!chainResult) {
-              const tr = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
-              view.dispatch(tr)
-            }
-            finalCaretPos = caretPos
-            selectionAdjusted = true
-            pendingEmptyCaretRef.current = true
-          }
-        }
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] top-level caret resolve failed', error)
-      }
-    }
-    if (!selectionAdjusted && typeof parentPos === 'number') {
-      try {
-        const latest = view.state
-        const parentNode = latest.doc.nodeAt(parentPos)
-        const newItemPos = parentNode ? positionOfListChild(parentNode, parentPos, splitMeta.newIndex) : null
-        if (typeof newItemPos === 'number') {
-          const newNode = latest.doc.nodeAt(newItemPos)
-          if (newNode) {
-            const para = newNode.childCount > 0 ? newNode.child(0) : null
-            const caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + newNode.nodeSize - 1
-            const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
-            if (!chainResult) {
-              const tr = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
-              view.dispatch(tr)
-            }
-            finalCaretPos = caretPos
-            selectionAdjusted = true
-            pendingEmptyCaretRef.current = true
-          }
-        }
-      } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] top-level caret resolve failed', error)
-      }
-    }
 
-    const enforceEmptyCaret = () => {
+    const newSiblingIndex = originalIndex + 1
+    const enforceNewSiblingFocus = () => {
       try {
         if (typeof parentPos !== 'number') return
         const latest = view.state
         const parentNode = latest.doc.nodeAt(parentPos)
         if (!parentNode) return
-        if (splitMeta.newIndex >= parentNode.childCount) return
-        const newItemPos = positionOfListChild(parentNode, parentPos, splitMeta.newIndex)
+        const newItemPos = positionOfListChild(parentNode, parentPos, newSiblingIndex)
         if (typeof newItemPos !== 'number') return
         const newNode = latest.doc.nodeAt(newItemPos)
-        const para = newNode?.childCount ? newNode.child(0) : null
-        const isEmpty = para?.type?.name === 'paragraph' && para.content.size === 0
-        if (!isEmpty) return
-        const resolvedDepth = Math.max(0, listItemDepth - 1)
-        const currentIndex = latest.selection.$from.index(resolvedDepth)
-        if (currentIndex !== splitMeta.newIndex + 1) return
+        if (!newNode) return
+        const para = newNode.childCount > 0 ? newNode.child(0) : null
         const caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + newNode.nodeSize - 1
-        const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+        const clamped = Math.max(0, Math.min(caretPos, latest.doc.content.size))
+        const chainResult = editor?.chain?.().focus().setTextSelection({ from: clamped, to: clamped }).run()
         if (!chainResult) {
-          const tr = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
-          view.dispatch(tr)
+          const trLatest = latest.tr.setSelection(TextSelection.create(latest.doc, clamped)).scrollIntoView()
+          view.dispatch(trLatest)
         }
+        if (typeof console !== 'undefined') console.log('[enter-empty] focus applied', { newItemPos, caretPos: clamped })
+        pendingEmptyCaretRef.current = true
       } catch (error) {
-        if (typeof console !== 'undefined') console.warn('[split-adjust] enforce caret failed', error)
+        if (typeof console !== 'undefined') console.warn('[split-adjust] empty sibling caret enforce failed', error)
       }
     }
-
-    if (!selectionAdjusted) {
-      if (typeof window !== 'undefined') window.requestAnimationFrame(enforceEmptyCaret)
-      setTimeout(enforceEmptyCaret, 0)
+    enforceNewSiblingFocus()
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(enforceNewSiblingFocus)
+      window.setTimeout(enforceNewSiblingFocus, 0)
     }
-
     view.focus()
     requestAnimationFrame(() => view.focus())
     logCursorTiming('empty-sibling', enterStartedAt)
@@ -418,6 +368,30 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
         if (typeof console !== 'undefined') console.warn('[split-adjust] child caret restore failed', error)
       }
     }
+
+    if (!selectionAdjusted && typeof parentPos === 'number') {
+      try {
+        const latest = view.state
+        const parentNode = latest.doc.nodeAt(parentPos)
+        let targetPos = typeof adjustment?.newItemPos === 'number' ? adjustment.newItemPos : null
+        if (targetPos === null && parentNode) {
+          targetPos = positionOfListChild(parentNode, parentPos, splitMeta.newIndex)
+        }
+        if (typeof targetPos === 'number') {
+          const newNode = latest.doc.nodeAt(targetPos)
+          if (newNode) {
+            const para = newNode.childCount > 0 ? newNode.child(0) : null
+            const caretPos = para ? targetPos + 1 + para.content.size : targetPos + newNode.nodeSize - 1
+            selectionAdjusted = true
+            finalCaretPos = caretPos
+            pendingEmptyCaretRef.current = true
+          }
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[split-adjust] top-level caret fallback failed', error)
+      }
+    }
+
     view.focus()
     requestAnimationFrame(() => view.focus())
     if (selectionAdjusted) {

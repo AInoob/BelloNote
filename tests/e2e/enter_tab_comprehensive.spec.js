@@ -157,40 +157,14 @@ test('Enter between siblings focuses the new blank item', async ({ page, app }) 
 
   await setSelectionToEnd(page, 0)
   await page.keyboard.press('Enter')
-  await page.waitForTimeout(100)
-
-  const enterDebug = await page.evaluate(() => ({
-    debug: window.__ENTER_DEBUG,
-    selection: window.__ENTER_SELECTION,
-    splitCaret: window.__WL_SPLIT_CARET,
-    doc: (window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR)?.getJSON?.() || null
-  }))
-  console.log('DEBUG enter split', JSON.stringify(enterDebug))
-
-  const selectionInfo = await page.evaluate(() => {
-    const sel = window.getSelection()
-    const anchorNode = sel?.anchorNode
-    const li = anchorNode?.parentElement?.closest?.('li.li-node')
-    const index = li ? Array.from(document.querySelectorAll('li.li-node')).indexOf(li) : -1
-    const positions = Array.from(document.querySelectorAll('li.li-node')).map((node) => {
-      const posAttr = node.getAttribute('data-pos')
-      return posAttr ? Number(posAttr) : null
-    })
-    return { index, anchorOffset: sel?.anchorOffset ?? null, positions }
-  })
-  console.log('DEBUG selection info', selectionInfo)
-
+  await page.waitForTimeout(50)
   await page.keyboard.type('bello')
   await page.waitForTimeout(50)
 
-  const docAfterType = await page.evaluate(() => (window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR)?.getJSON?.())
-  console.log('DEBUG doc after type', JSON.stringify(docAfterType))
-
-  const items = page.locator('li.li-node')
-  await expect(items).toHaveCount(3)
-  await expect(items.nth(0).locator('p').first()).toHaveText('task 1', { timeout: SHORT_TIMEOUT })
-  await expect(items.nth(1).locator('p').first()).toHaveText('bello', { timeout: SHORT_TIMEOUT })
-  await expect(items.nth(2).locator('p').first()).toHaveText('task 2', { timeout: SHORT_TIMEOUT })
+  expect(await getItemCount(page)).toBe(3)
+  expect(await getItemText(page, 0)).toBe('task 1')
+  expect(await getItemText(page, 1)).toBe('bello')
+  expect(await getItemText(page, 2)).toBe('task 2')
 })
 
 // Test 2: Enter in middle of task creates new empty task (doesn't split text)
@@ -292,37 +266,31 @@ test('Enter on empty task creates new task and keeps focus', async ({ page }) =>
   await page.keyboard.press('Enter')
   await page.waitForTimeout(100)
 
-  const afterFirstEnter = await page.evaluate(() => Array.from(document.querySelectorAll('li.li-node p'), p => p.textContent))
-  console.log('DEBUG after first enter', afterFirstEnter)
-  const docAfterFirst = await page.evaluate(() => {
-    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
-    return editor ? editor.getJSON() : null
-  })
-  console.log('DEBUG doc after first', JSON.stringify(docAfterFirst))
-  
   // Don't type anything, just press Enter again
   await page.keyboard.press('Enter')
   await page.waitForTimeout(100)
 
-  const afterSecondEnter = await page.evaluate(() => Array.from(document.querySelectorAll('li.li-node p'), p => p.textContent))
-  console.log('DEBUG after second enter', afterSecondEnter)
-  const liCount = await page.evaluate(() => document.querySelectorAll('li.li-node').length)
-  console.log('DEBUG li count', liCount)
-  const secondLiHtml = await page.evaluate(() => {
-    const li = document.querySelectorAll('li.li-node')[1]
-    return li ? li.innerHTML : null
+  const debugInfo = await page.evaluate(() => {
+    const items = Array.from(document.querySelectorAll('li.li-node')).map((item) => {
+      const para = item.querySelector('p')
+      return {
+        text: para ? para.textContent : '',
+        classes: item.className,
+        html: item.innerHTML
+      }
+    })
+    const sel = window.getSelection()
+    const focusLi = sel?.anchorNode?.parentElement?.closest?.('li.li-node')
+    const focusIndex = focusLi ? Array.from(document.querySelectorAll('li.li-node')).indexOf(focusLi) : null
+    return {
+      items,
+      focusIndex,
+      emptyDebug: window.__ENTER_EMPTY_DEBUG || null
+    }
   })
-  console.log('DEBUG second li html', secondLiHtml)
-  const docSnapshot = await page.evaluate(() => {
-    const editor = window.__WORKLOG_EDITOR_MAIN || window.__WORKLOG_EDITOR
-    return editor ? editor.getJSON() : null
-  })
-  console.log('DEBUG doc json', JSON.stringify(docSnapshot))
-  const emptyBranchCount = await page.evaluate(() => window.__ENTER_EMPTY_BRANCH || 0)
-  console.log('DEBUG empty branch count', emptyBranchCount)
-  
+  console.log('enter-empty-debug', JSON.stringify(debugInfo, null, 2))
+
   const count = await getItemCount(page)
-  console.log('DEBUG count value', count)
   expect(count).toBe(3)
   
   // Verify focus is on the new (third) item
@@ -392,8 +360,6 @@ test('Enter at end of parent with children creates new child', async ({ page }) 
   await page.waitForTimeout(100)
 
   const count = await getItemCount(page)
-  const debugTexts = await page.evaluate(() => Array.from(document.querySelectorAll('li.li-node p'), p => p.textContent))
-  console.log('DEBUG empty-enter texts', debugTexts)
   expect(count).toBe(3)
 
   // New item should be a child of parent
