@@ -40,9 +40,9 @@ router.get('/:id', async (req, res) => {
       }
     }
 
-    const logs = await db.all(`SELECT date FROM work_logs WHERE task_id = $1 ORDER BY date DESC`, [id])
     const tags = parseTagsField(row.tags)
-    return res.json({ ...row, tags, workedOnDates: logs.map((l) => l.date) })
+    const workedDates = Array.isArray(row.worked_dates) ? row.worked_dates : []
+    return res.json({ ...row, tags, workedOnDates: workedDates })
   } catch (err) {
     console.error('[tasks] failed to load task', err)
     return res.status(500).json({ error: 'Internal error' })
@@ -99,4 +99,3 @@ router.patch('/:id', async (req, res) => {
 })
 
 export default router
-

@@ -83,16 +83,12 @@ const SCHEMA_STATEMENTS = [
      status TEXT NOT NULL DEFAULT 'todo',
      content TEXT NOT NULL DEFAULT '',
      tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+     worked_dates JSONB NOT NULL DEFAULT '[]'::jsonb,
+     first_work_date DATE,
+     last_work_date DATE,
      position INTEGER NOT NULL DEFAULT 0,
      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-   );`,
-  `CREATE TABLE IF NOT EXISTS work_logs (
-     id SERIAL PRIMARY KEY,
-     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-     date DATE NOT NULL,
-     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-     UNIQUE (task_id, date)
    );`,
   `CREATE TABLE IF NOT EXISTS outline_versions (
      id SERIAL PRIMARY KEY,
@@ -117,11 +113,14 @@ const SCHEMA_STATEMENTS = [
    );`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash ON files(hash);`,
   `CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id, id DESC);`,
+  `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS worked_dates JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS first_work_date DATE;`,
+  `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS last_work_date DATE;`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_position ON tasks(project_id, parent_id, position, id);`,
-  `CREATE INDEX IF NOT EXISTS idx_worklogs_task ON work_logs(task_id);`,
-  `CREATE INDEX IF NOT EXISTS idx_worklogs_date ON work_logs(date);`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_first_work_date ON tasks(first_work_date);`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_last_work_date ON tasks(last_work_date);`,
   `CREATE INDEX IF NOT EXISTS idx_versions_project ON outline_versions(project_id, id DESC);`
 ]
 
@@ -131,10 +130,19 @@ async function initSchema() {
     for (const statement of SCHEMA_STATEMENTS) {
       await client.query(statement)
     }
+    await client.query('DROP TABLE IF EXISTS work_logs CASCADE')
+    await client.query('DROP VIEW IF EXISTS work_logs')
+    await client.query(`
+      CREATE OR REPLACE VIEW work_logs AS
+      SELECT
+        t.id::uuid              AS task_id,
+        (d.value)::date         AS date
+      FROM tasks t
+      CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(t.worked_dates, '[]'::jsonb)) AS d(value);
+    `)
   } finally {
     client.release()
   }
 }
 
 await initSchema()
-

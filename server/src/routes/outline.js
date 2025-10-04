@@ -44,18 +44,10 @@ router.get('/outline', async (req, res) => {
 
     if (!tasks.length) return res.json({ roots: [] })
 
-    const logs = await db.all(
-      `SELECT w.task_id, w.date
-         FROM work_logs w
-         JOIN tasks t ON t.id = w.task_id
-        WHERE t.project_id = $1`,
-      [projectId]
-    )
-
     const map = new Map()
-    for (const l of logs) {
-      if (!map.has(l.task_id)) map.set(l.task_id, [])
-      map.get(l.task_id).push(l.date)
+    for (const task of tasks) {
+      const dates = Array.isArray(task.worked_dates) ? task.worked_dates : []
+      map.set(task.id, dates)
     }
     const tree = buildProjectTree(tasks, map)
     return res.json({ roots: tree })
@@ -103,12 +95,30 @@ router.post('/outline', async (req, res) => {
           ? normalizedStatus
           : ''
 
+        const rawDates = Array.isArray(node.dates) ? node.dates : []
+        const normalizedDates = Array.from(new Set(rawDates.filter(Boolean))).sort()
+        const workedDatesJson = JSON.stringify(normalizedDates)
+        const firstDate = normalizedDates[0] || null
+        const lastDate = normalizedDates.length ? normalizedDates[normalizedDates.length - 1] : null
+
         if (!id || id.startsWith('new-')) {
           realId = randomUUID()
           await tx.run(
-            `INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
-            [realId, projectId, parentId, node.title || 'Untitled', statusValue, contentJson, tagsJson, position]
+            `INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position, worked_dates, first_work_date, last_work_date)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10, $11)`,
+            [
+              realId,
+              projectId,
+              parentId,
+              node.title || 'Untitled',
+              statusValue,
+              contentJson,
+              tagsJson,
+              position,
+              workedDatesJson,
+              firstDate,
+              lastDate
+            ]
           )
           if (id) newIdMap[id] = realId
         } else {
@@ -121,30 +131,26 @@ router.post('/outline', async (req, res) => {
                    content = $4,
                    tags = $5::jsonb,
                    position = $6,
+                   worked_dates = $7::jsonb,
+                   first_work_date = $8,
+                   last_work_date = $9,
                    updated_at = NOW()
-             WHERE id = $7`,
-            [parentId, node.title || 'Untitled', statusValue, contentJson, tagsJson, position, realId]
+             WHERE id = $10`,
+            [
+              parentId,
+              node.title || 'Untitled',
+              statusValue,
+              contentJson,
+              tagsJson,
+              position,
+              workedDatesJson,
+              firstDate,
+              lastDate,
+              realId
+            ]
           )
         }
         seen.add(realId)
-
-        const wanted = new Set((node.dates || []).filter(Boolean))
-        const haveRows = await tx.all(`SELECT date FROM work_logs WHERE task_id = $1`, [realId])
-        const have = new Set(haveRows.map((r) => r.date))
-        for (const d of wanted) {
-          if (!have.has(d)) {
-            await tx.run(
-              `INSERT INTO work_logs (task_id, date) VALUES ($1, $2)
-               ON CONFLICT (task_id, date) DO NOTHING`,
-              [realId, d]
-            )
-          }
-        }
-        for (const d of have) {
-          if (!wanted.has(d)) {
-            await tx.run(`DELETE FROM work_logs WHERE task_id = $1 AND date = $2`, [realId, d])
-          }
-        }
 
         if (Array.isArray(node.children)) {
           for (let idx = 0; idx < node.children.length; idx += 1) {
@@ -159,7 +165,6 @@ router.post('/outline', async (req, res) => {
 
       const unseen = existing.filter((id) => !seen.has(id))
       if (unseen.length) {
-        await tx.run(`DELETE FROM work_logs WHERE task_id = ANY($1::uuid[])`, [unseen])
         await tx.run(`DELETE FROM tasks WHERE id = ANY($1::uuid[])`, [unseen])
       }
 
@@ -176,4 +181,3 @@ router.post('/outline', async (req, res) => {
 })
 
 export default router
-

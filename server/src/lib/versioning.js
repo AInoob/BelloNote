@@ -10,17 +10,10 @@ async function canonicalOutline(projectId) {
     `SELECT * FROM tasks WHERE project_id = $1 ORDER BY position ASC, created_at ASC, id ASC`,
     [projectId]
   )
-  const logs = await db.all(
-    `SELECT w.task_id, w.date
-       FROM work_logs w
-       JOIN tasks t ON t.id = w.task_id
-      WHERE t.project_id = $1`,
-    [projectId]
-  )
   const map = new Map()
-  for (const l of logs) {
-    if (!map.has(l.task_id)) map.set(l.task_id, [])
-    map.get(l.task_id).push(l.date)
+  for (const task of tasks) {
+    const dates = Array.isArray(task.worked_dates) ? task.worked_dates : []
+    map.set(task.id, dates)
   }
   const roots = buildProjectTree(tasks, map)
   return { roots }
@@ -171,7 +164,6 @@ export async function restoreVersion(projectId, versionId) {
   const doc = row.doc
 
   await transaction(async (tx) => {
-    await tx.run(`DELETE FROM work_logs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)`, [projectId])
     await tx.run(`DELETE FROM tasks WHERE project_id = $1`, [projectId])
 
     async function insertNodes(nodes, parentId = null) {
@@ -201,9 +193,15 @@ export async function restoreVersion(projectId, versionId) {
             html: nodesForTags ? '' : contentValue
           })
         }
+        const rawDates = Array.isArray(n.ownWorkedOnDates) ? n.ownWorkedOnDates : []
+        const normalizedDates = Array.from(new Set(rawDates.filter(Boolean))).sort()
+        const workedDatesJson = JSON.stringify(normalizedDates)
+        const firstDate = normalizedDates[0] || null
+        const lastDate = normalizedDates.length ? normalizedDates[normalizedDates.length - 1] : null
+
         await tx.run(
-          `INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+          `INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position, worked_dates, first_work_date, last_work_date)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10, $11)
            ON CONFLICT (id) DO UPDATE
              SET project_id = EXCLUDED.project_id,
                  parent_id = EXCLUDED.parent_id,
@@ -212,16 +210,24 @@ export async function restoreVersion(projectId, versionId) {
                  content = EXCLUDED.content,
                  tags = EXCLUDED.tags,
                  position = EXCLUDED.position,
+                 worked_dates = EXCLUDED.worked_dates,
+                 first_work_date = EXCLUDED.first_work_date,
+                 last_work_date = EXCLUDED.last_work_date,
                  updated_at = NOW()`,
-          [n.id, projectId, parentId, n.title || 'Untitled', statusValue, contentValue || '', JSON.stringify(tags), idx]
+          [
+            n.id,
+            projectId,
+            parentId,
+            n.title || 'Untitled',
+            statusValue,
+            contentValue || '',
+            JSON.stringify(tags),
+            idx,
+            workedDatesJson,
+            firstDate,
+            lastDate
+          ]
         )
-        for (const d of n.ownWorkedOnDates || []) {
-          await tx.run(
-            `INSERT INTO work_logs (task_id, date) VALUES ($1, $2)
-             ON CONFLICT (task_id, date) DO NOTHING`,
-            [n.id, d]
-          )
-        }
         if (Array.isArray(n.children) && n.children.length) {
           await insertNodes(n.children, n.id)
         }

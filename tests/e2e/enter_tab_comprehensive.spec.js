@@ -193,16 +193,6 @@ test('Enter in middle of task creates new empty task', async ({ page }) => {
   await page.keyboard.press('Enter')
   await page.waitForTimeout(100)
 
-  const emptyDebug = await page.evaluate(() => {
-    try {
-      const payload = window.__ENTER_EMPTY_DEBUG || null
-      return payload ? JSON.stringify(payload) : null
-    } catch (error) {
-      return `error:${error?.message || 'unknown'}`
-    }
-  })
-  expect(emptyDebug).toBe('inspect')
-
   const count = await getItemCount(page)
   expect(count).toBe(2)
 
@@ -276,41 +266,22 @@ test('Enter on empty task creates new task and keeps focus', async ({ page }) =>
   await page.keyboard.press('Enter')
   await page.waitForTimeout(100)
 
-  const countAfterFirst = await page.evaluate(() => window.__ENTER_KEYDOWN_COUNT || 0)
-
   // Don't type anything, just press Enter again
   await page.keyboard.press('Enter')
   await page.waitForTimeout(100)
 
-  const { extensionCount, totalKeyDown, emptyDebug, stateDebug, keydownCount } = await page.evaluate(() => {
-    const payload = window.__ENTER_EMPTY_DEBUG || null
-    const statePayload = window.__ENTER_DEBUG || null
-    const keydownCount = window.__ENTER_KEYDOWN_COUNT || 0
-    const total = window.__KEYDOWN_TOTAL || 0
-    const extCount = window.__ENTER_EXTENSION_COUNT || 0
-    return {
-      extensionCount: extCount,
-      totalKeyDown: total,
-      emptyDebug: payload
-        ? {
-            empty: payload.empty,
-            childCount: payload.childCount,
-            json: payload.json
-          }
-        : null,
-      stateDebug: statePayload
-        ? {
-            isChild: statePayload.isChild,
-            isAtStart: statePayload.isAtStart,
-            isAtEnd: statePayload.isAtEnd,
-            newIndex: statePayload.newIndex,
-            parentPos: statePayload.parentPos
-          }
-        : null,
-      keydownCount
-    }
+  const count = await getItemCount(page)
+  expect(count).toBe(3)
+  
+  const focusedIndex = await page.evaluate(() => {
+    const sel = window.getSelection()
+    const node = sel?.anchorNode
+    const li = node?.parentElement?.closest?.('li.li-node')
+    if (!li) return null
+    const items = Array.from(document.querySelectorAll('li.li-node'))
+    return items.indexOf(li)
   })
-  throw new Error(JSON.stringify({ countAfterFirst, totalKeyDown, extensionCount, emptyDebug, stateDebug, keydownCount }))
+  expect(focusedIndex).toBe(2)
 })
 
 // Test 6: Multiple Tab presses create deeply nested structure

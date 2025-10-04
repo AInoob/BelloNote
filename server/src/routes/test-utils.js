@@ -37,7 +37,9 @@ router.post('/reset', async (req, res) => {
 
   try {
     await transaction(async (tx) => {
-      await tx.run('TRUNCATE TABLE work_logs, tasks, outline_versions, files RESTART IDENTITY CASCADE')
+      await tx.run('TRUNCATE TABLE outline_versions, files RESTART IDENTITY CASCADE')
+      await tx.run('TRUNCATE TABLE tasks RESTART IDENTITY CASCADE')
+      await tx.run('TRUNCATE TABLE projects RESTART IDENTITY CASCADE')
     })
     clearUploadsDirectory()
     return res.json({ ok: true })

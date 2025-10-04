@@ -10,7 +10,7 @@ const router = Router()
 
 async function loadAllTasks(projectId) {
   return db.all(
-    `SELECT id, parent_id, title, status, content, tags, project_id, created_at
+    `SELECT id, parent_id, title, status, content, tags, project_id, created_at, worked_dates
        FROM tasks
       WHERE project_id = $1`,
     [projectId]
@@ -57,16 +57,17 @@ router.get('/', async (req, res) => {
       .map((entry) => dayjs(entry.reminder.remindAt).format('YYYY-MM-DD'))
       .filter(Boolean)
 
-    const workLogDateRows = await db.all(
-      `SELECT DISTINCT w.date AS date
-         FROM work_logs w
-         JOIN tasks t ON t.id = w.task_id
-        WHERE t.project_id = $1`,
-      [projectId]
-    )
-    const workLogDates = workLogDateRows
-      .map((r) => dayjs(r.date).isValid() ? dayjs(r.date).format('YYYY-MM-DD') : null)
-      .filter(Boolean)
+    const dateToTaskIds = new Map()
+    for (const task of all) {
+      const dates = Array.isArray(task.worked_dates) ? task.worked_dates : []
+      for (const raw of dates) {
+        const formatted = dayjs(raw).isValid() ? dayjs(raw).format('YYYY-MM-DD') : null
+        if (!formatted) continue
+        if (!dateToTaskIds.has(formatted)) dateToTaskIds.set(formatted, new Set())
+        dateToTaskIds.get(formatted).add(task.id)
+      }
+    }
+    const workLogDates = Array.from(dateToTaskIds.keys())
 
     const dateSet = new Set([...workLogDates, ...reminderDates])
     const dates = Array.from(dateSet).sort((a, b) => b.localeCompare(a))
@@ -84,14 +85,11 @@ router.get('/', async (req, res) => {
 
     const days = []
     for (const d of dates) {
-      const rows = await db.all(
-        `SELECT t.*
-           FROM work_logs w
-           JOIN tasks t ON t.id = w.task_id
-          WHERE w.date = $1 AND t.project_id = $2
-          ORDER BY t.created_at ASC`,
-        [d, projectId]
-      )
+      const taskIdSet = dateToTaskIds.get(d) || new Set()
+      const rows = Array.from(taskIdSet)
+        .map((id) => byId.get(id))
+        .filter(Boolean)
+        .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
 
       const reminders = reminderEntries
         .filter((entry) => dayjs(entry.reminder.remindAt).format('YYYY-MM-DD') === d)

@@ -376,8 +376,14 @@ test('Enter on empty task creates a new task and focuses it', async ({ page }) =
   await expect(items.first()).toContainText('Task 1', { timeout: SHORT_TIMEOUT })
 
   const newItem = items.nth(2)
+  const htmlBefore = await newItem.evaluate((el) => el.innerHTML)
+  console.log('status-default new item before typing:', htmlBefore)
   await newItem.locator('p').first().click()
   await page.keyboard.type('Task 2')
+  const htmlAfter = await newItem.evaluate((el) => el.innerHTML)
+  console.log('status-default new item after typing:', htmlAfter)
+  const firstHtmlAfter = await items.first().evaluate((el) => el.innerHTML)
+  console.log('status-default first item after typing:', firstHtmlAfter)
   await expect(newItem).toContainText('Task 2', { timeout: SHORT_TIMEOUT })
   await expectOutlineState(page, [
     outlineNode('Task 1'),
