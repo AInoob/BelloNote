@@ -44,6 +44,33 @@ test('reload restores previous scroll position', async ({ page, request }) => {
   expect(Math.abs(restoredScroll - initialScroll)).toBeLessThanOrEqual(20)
 })
 
+test('reload keeps position for very long outlines (100 items)', async ({ page, request }) => {
+  await resetOutline(request, buildLongOutline(100))
+
+  await page.goto('/')
+  const rows = page.locator('li.li-node')
+  await expect(rows).toHaveCount(100)
+
+  const targetRow = rows.nth(99)
+  await targetRow.locator('p').first().scrollIntoViewIfNeeded()
+  await targetRow.locator('p').first().click()
+
+  await page.waitForTimeout(250)
+  const initialScroll = await page.evaluate(() => window.scrollY)
+  expect(initialScroll).toBeGreaterThan(800)
+
+  await page.reload()
+  const rowsAfter = page.locator('li.li-node')
+  await expect(rowsAfter).toHaveCount(100)
+  await page.waitForTimeout(300)
+
+  const restoredScroll = await page.evaluate(() => window.scrollY)
+  expect(Math.abs(restoredScroll - initialScroll)).toBeLessThanOrEqual(20)
+
+  const restoredRow = rowsAfter.nth(99)
+  await expect(restoredRow).toBeVisible()
+})
+
 test('topbar remains visible while scrolling long outline', async ({ page, request }) => {
   await resetOutline(request, buildLongOutline(80))
 
