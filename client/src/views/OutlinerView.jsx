@@ -232,9 +232,6 @@ export default function OutlinerView({
   const enterHighPriority = useMemo(() => EnterHighPriority.configure({
     onEnter: ({ editor, event }) => {
       if (!editor || !event) return false
-      if (typeof window !== 'undefined') {
-        window.__ENTER_EXTENSION_COUNT = (window.__ENTER_EXTENSION_COUNT || 0) + 1
-      }
       return handleEnterKey({
         event,
         editor,
@@ -245,14 +242,6 @@ export default function OutlinerView({
       })
     }
   }), [pushDebug, pendingEmptyCaretRef])
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.__ENTER_HIGH_EXTENSION = enterHighPriority?.name || null
-      window.__ENTER_HIGH_INFO = enterHighPriority ? Object.keys(enterHighPriority) : null
-      window.__ENTER_HIGH_EXISTS = !!enterHighPriority
-    }
-  }, [enterHighPriority])
 
   const extensions = useMemo(() => [
     enterHighPriority,
@@ -418,29 +407,28 @@ export default function OutlinerView({
     if (!editor || isReadOnly) return
     const { view } = editor
     const handleBeforeInput = (event) => {
-      if (!pendingEmptyCaretRef.current) return
+      const pending = pendingEmptyCaretRef.current
+      if (!pending) return
       if (!(event instanceof InputEvent)) return
       if (event.inputType && !event.inputType.startsWith('insert')) return
-      const sel = window.getSelection()
-      const anchorNode = sel?.anchorNode
-      const currentLi = anchorNode?.parentElement?.closest?.('li.li-node')
-      if (!currentLi) return
-      const items = Array.from(view.dom.querySelectorAll('li.li-node'))
-      const currentIndex = items.indexOf(currentLi)
-      if (currentIndex <= 0) return
-      const previousLi = items[currentIndex - 1]
-      const prevParagraph = previousLi?.querySelector('p')
-      if (!prevParagraph) return
-      const prevText = prevParagraph.textContent || ''
-      if (prevText.trim().length !== 0) return
-      const caretPos = view.posAtDOM(prevParagraph, prevParagraph.childNodes.length || 0)
-      const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
-      if (!chainResult) {
-        const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, caretPos)).scrollIntoView()
-        view.dispatch(tr)
-      }
       pendingEmptyCaretRef.current = false
-      event.preventDefault()
+      if (pending && pending.type === 'caret' && typeof pending.pos === 'number') {
+        const caretPos = pending.pos
+        const { state: curState, view: curView } = editor
+        try {
+          const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+          if (!chainResult) {
+            const tr = curState.tr.setSelection(TextSelection.create(curState.doc, caretPos)).scrollIntoView()
+            curView.dispatch(tr)
+          }
+          if (event.inputType === 'insertText' && typeof event.data === 'string' && event.data.length > 0) {
+            event.preventDefault()
+            editor?.chain?.().focus().insertContent(event.data).run()
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined') console.warn('[beforeinput caret] apply failed', error)
+        }
+      }
     }
     view.dom.addEventListener('beforeinput', handleBeforeInput, true)
     return () => {

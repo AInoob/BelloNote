@@ -105,12 +105,15 @@ export function handleEnterKey(...rawArgs) {
   const parentPos = parentDepth !== null ? $from.before(parentDepth) : null
   const listParent = parentDepth !== null ? $from.node(parentDepth) : null
   let originalIndex = $from.index(listItemDepth)
-  if (listParent) {
+  if (listParent && typeof parentPos === 'number') {
+    let probePos = parentPos + 1
     for (let idx = 0; idx < listParent.childCount; idx += 1) {
-      if (listParent.child(idx) === listItemNode) {
+      if (probePos === listItemPos) {
         originalIndex = idx
         break
       }
+      const childNode = listParent.child(idx)
+      probePos += childNode?.nodeSize ?? 0
     }
   }
 
@@ -134,28 +137,61 @@ export function handleEnterKey(...rawArgs) {
   }
 
   const emptyListItem = isEffectivelyEmptyListItem(listItemNode)
-  if (typeof window !== 'undefined') {
-    try {
-      window.__ENTER_EMPTY_DEBUG = {
-        empty: emptyListItem,
-        childCount: listItemNode.childCount,
-        json: typeof listItemNode.toJSON === 'function' ? listItemNode.toJSON() : null
-      }
-    } catch {
-      // ignore
-    }
-  }
 
   if (emptyListItem) {
     const insertPos = listItemPos + listItemNode.nodeSize
     const newSibling = listItemType.create(defaultAttrs, paragraphType.create())
     const tr = state.tr.insert(insertPos, newSibling)
-    const caretPos = insertPos + 1
-    tr.setSelection(TextSelection.create(tr.doc, caretPos)).scrollIntoView()
-    view.dispatch(tr)
-    pendingEmptyCaretRef.current = true
+    view.dispatch(tr.scrollIntoView())
+
+    const newIndex = originalIndex + 1
+    let caretPos = insertPos + 1
+    try {
+      if (typeof parentPos === 'number') {
+        const latest = view.state
+        const parentLatest = latest.doc.nodeAt(parentPos)
+        if (parentLatest) {
+          const newItemPos = positionOfListChild(parentLatest, parentPos, newIndex)
+          if (typeof newItemPos === 'number') {
+            const newNode = latest.doc.nodeAt(newItemPos)
+            if (newNode) {
+              const para = newNode.childCount > 0 ? newNode.child(0) : null
+              caretPos = para ? newItemPos + 1 + para.content.size : newItemPos + Math.max(1, newNode.nodeSize - 1)
+            }
+          }
+        }
+      }
+    } catch (error) {
+      if (typeof console !== 'undefined') console.warn('[enter-empty] caret resolve failed', error)
+    }
+
+    if (pendingEmptyCaretRef && typeof pendingEmptyCaretRef === 'object') {
+      pendingEmptyCaretRef.current = { type: 'caret', pos: caretPos }
+    }
+
+    const applyCaretSelection = () => {
+      try {
+        const refreshed = view.state
+        const clamped = Math.max(0, Math.min(caretPos, refreshed.doc.content.size))
+        const targetSelection = TextSelection.create(refreshed.doc, clamped)
+        view.dispatch(refreshed.tr.setSelection(targetSelection).scrollIntoView())
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[enter-empty] caret apply failed', error)
+      }
+    }
+
+    applyCaretSelection()
     view.focus()
-    requestAnimationFrame(() => view.focus())
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        applyCaretSelection()
+        view.focus()
+      })
+      window.setTimeout(() => {
+        applyCaretSelection()
+        view.focus()
+      }, 0)
+    }
     logCursorTiming('empty-sibling', enterStartedAt)
     return true
   }
@@ -169,17 +205,6 @@ export function handleEnterKey(...rawArgs) {
   const isAtEnd = inParagraph && offset === paragraphNode.content.size
   const isChild = listItemDepth > 2
 
-  if (typeof window !== 'undefined') {
-    window.__ENTER_DEBUG = {
-      listItemDepth,
-      parentPos,
-      originalIndex,
-      newIndex: originalIndex + 1,
-      isChild,
-      isAtStart,
-      isAtEnd
-    }
-  }
   pushDebug('enter: state', { isChild, isAtStart, isAtEnd, offset, paraSize: paragraphNode.content.size, collapsed: !!listItemNode.attrs?.collapsed })
 
   if (!isChild && isAtEnd && nestedListInfo) {
