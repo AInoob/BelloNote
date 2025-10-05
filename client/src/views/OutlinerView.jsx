@@ -17,6 +17,8 @@ import { useSlashCommands } from './outliner/useSlashCommands.js'
 import { useReminderActions } from './outliner/useReminderActions.js'
 import { useFocusShortcut } from './outliner/useFocusShortcut.js'
 import { useDomMutationObserver } from './outliner/useDomMutationObserver.js'
+import { ensureListItemIds } from './outliner/plugins/ensureListItemIds.js'
+
 import { useTaskStatusSync } from './outliner/useTaskStatusSync.js'
 import { useScrollStateSaver } from './outliner/useScrollStateSaver.js'
 import { useCopyHandler } from './outliner/useCopyHandler.js'
@@ -292,6 +294,8 @@ export default function OutlinerView({
     }
   })
 
+
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.__WORKLOG_EDITOR = editor
@@ -304,6 +308,15 @@ export default function OutlinerView({
         if (!isReadOnly && window.__WORKLOG_EDITOR_MAIN === editor) window.__WORKLOG_EDITOR_MAIN = null
         if (isReadOnly && window.__WORKLOG_EDITOR_RO === editor) window.__WORKLOG_EDITOR_RO = null
       }
+    }
+  }, [editor, isReadOnly])
+
+  useEffect(() => {
+    if (!editor || isReadOnly) return
+    try {
+      editor.registerPlugin(ensureListItemIds(editor.schema))
+    } catch (err) {
+      console.warn('[editor] ensureListItemIds registration failed', err)
     }
   }, [editor, isReadOnly])
 
