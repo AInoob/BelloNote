@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { Extension } from '@tiptap/core'
 import { TextSelection } from 'prosemirror-state'
@@ -7,7 +7,6 @@ import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import Link from '@tiptap/extension-link'
-import Highlight from '@tiptap/extension-highlight'
 import { lowlight } from 'lowlight/lib/core.js'
 import { absoluteUrl, getOutline } from '../api.js'
 import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
@@ -51,7 +50,6 @@ import { handleKeyDown } from './outliner/keyDownHandler.js'
 import { handleEnterKey } from './outliner/enterKeyHandler.js'
 
 import { ensureUploadedImages } from './outliner/imageUploadUtils.js'
-import { applySearchHighlight as applySearchHighlightUtil } from './outliner/searchHighlightUtils.js'
 import {
   addTagFilter as addTagFilterUtil,
   removeTagFilter as removeTagFilterUtil,
@@ -72,6 +70,25 @@ import { LOG } from './outliner/debugUtils.js'
 import { loadScrollState } from './outliner/scrollState.js'
 import { now, logCursorTiming } from './outliner/performanceUtils.js'
 import { cssEscape } from '../utils/cssEscape.js'
+import {
+  stripHighlightMarksFromDoc,
+  stripHighlightMarksFromOutlineNodes
+} from './outliner/highlightCleanup.js'
+import {
+  loadStatusFilter,
+  saveStatusFilter,
+  loadArchivedVisible,
+  saveArchivedVisible,
+  loadTagFilters,
+  saveTagFilters
+} from './outliner/filterUtils.js'
+import { CodeBlockView } from './outliner/CodeBlockView.jsx'
+import { createTaskListItemExtension } from './outliner/TaskListItemExtension.jsx'
+import {
+  moveNodeInOutline,
+  extractTitle,
+  extractDates
+} from './outliner/outlineManipulation.js'
 
 const EnterHighPriority = Extension.create({
   name: 'enterHighPriority',
@@ -92,21 +109,6 @@ const EnterHighPriority = Extension.create({
     }
   }
 })
-import {
-  loadStatusFilter,
-  saveStatusFilter,
-  loadArchivedVisible,
-  saveArchivedVisible,
-  loadTagFilters,
-  saveTagFilters
-} from './outliner/filterUtils.js'
-import { CodeBlockView } from './outliner/CodeBlockView.jsx'
-import { createTaskListItemExtension } from './outliner/TaskListItemExtension.jsx'
-import {
-  moveNodeInOutline,
-  extractTitle,
-  extractDates
-} from './outliner/outlineManipulation.js'
 
 export default function OutlinerView({
   onSaveStateChange = () => {},
@@ -170,11 +172,7 @@ export default function OutlinerView({
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
   useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
   const draggingRef = useRef(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const deferredSearchQuery = useDeferredValue(searchQuery)
-  const searchQueryRef = useRef('')
   const convertingImagesRef = useRef(false)
-  const suppressSelectionRestoreRef = useRef(false)
   const pendingEmptyCaretRef = useRef(false)
 
   const pendingImageSrcRef = useRef(new Set())
@@ -204,7 +202,6 @@ export default function OutlinerView({
       draggingRef.current = null
     }
   }, [draggingRef])
-  useEffect(() => { searchQueryRef.current = searchQuery }, [searchQuery])
   const dirtyRef = useRef(false)
   const savingRef = useRef(false)
 
@@ -249,7 +246,6 @@ export default function OutlinerView({
     StarterKit.configure({ listItem: false, codeBlock: false }),
     taskListItemExtension,
     Link.configure({ openOnClick: false, autolink: false, linkOnPaste: false }),
-    Highlight.configure({ multicolor: true }),
     imageExtension,
     CodeBlockWithCopy,
     WorkDateHighlighter,
@@ -367,22 +363,6 @@ export default function OutlinerView({
       editor.off('update', handler)
     }
   }, [editor, isReadOnly, ensureUploadedImagesCallback])
-
-  const applySearchHighlight = useCallback(() => {
-    applySearchHighlightUtil(editor, searchQueryRef, suppressSelectionRestoreRef)
-  }, [editor])
-
-  useEffect(() => {
-    if (!editor) return
-    applySearchHighlight()
-  }, [editor, applySearchHighlight, searchQuery])
-
-  useEffect(() => {
-    if (!editor) return
-    const handler = () => applySearchHighlight()
-    editor.on('update', handler)
-    return () => editor.off('update', handler)
-  }, [editor, applySearchHighlight])
 
   useEffect(() => { onSaveStateChange({ dirty, saving }) }, [dirty, saving])
 
@@ -541,10 +521,9 @@ export default function OutlinerView({
       statusFilterRef,
       showArchivedRef,
       tagFiltersRef,
-      focusRootRef,
-      { current: deferredSearchQuery }
+      focusRootRef
     )
-  }, [editor, statusFilter, showArchived, tagFilters, deferredSearchQuery])
+  }, [editor, statusFilter, showArchived, tagFilters])
 
   const { scheduleApplyStatusFilter } = useFilterScheduler(
     applyStatusFilter,
@@ -672,12 +651,14 @@ export default function OutlinerView({
       : Array.isArray(initialOutline)
         ? initialOutline
         : (initialOutline?.roots || [])
-    const doc = { type: 'doc', content: [buildList(roots)] }
-    editor.commands.setContent(doc)
+    const cleanRoots = stripHighlightMarksFromOutlineNodes(roots)
+    const doc = { type: 'doc', content: [buildList(cleanRoots)] }
+    const cleanDoc = stripHighlightMarksFromDoc(doc)
+    editor.commands.setContent(cleanDoc)
     dirtyRef.current = false
     setDirty(false)
     applyStatusFilter()
-    emitOutlineSnapshot(roots)
+    emitOutlineSnapshot(cleanRoots)
   }, [editor, initialOutline, isReadOnly, applyStatusFilter, emitOutlineSnapshot])
 
 
@@ -690,9 +671,11 @@ export default function OutlinerView({
     if (!editor || isReadOnly) return
     ;(async () => {
       const data = await getOutline()
-      const roots = data.roots || []
+      const rawRoots = data.roots || []
+      const roots = stripHighlightMarksFromOutlineNodes(rawRoots)
       const doc = { type: 'doc', content: [buildList(roots)] }
-      editor.commands.setContent(doc)
+      const cleanDoc = stripHighlightMarksFromDoc(doc)
+      editor.commands.setContent(cleanDoc)
       dirtyRef.current = false
       setDirty(false)
       pushDebug('loaded outline', { roots: roots.length })
@@ -867,8 +850,7 @@ export default function OutlinerView({
   return (
     <div style={{ position:'relative' }}>
       {!isReadOnly && (
-        <>
-          <FilterBar
+        <FilterBar
             availableFilters={availableFilters}
             statusFilter={statusFilter}
             toggleStatusFilter={toggleStatusFilter}
@@ -889,18 +871,6 @@ export default function OutlinerView({
             excludeTagInput={excludeTagInput}
             clearTagFilters={clearTagFilters}
           />
-          <div className="search-bar">
-            <input
-              type="search"
-              value={searchQuery}
-              placeholder="Search outline…"
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button type="button" onClick={() => setSearchQuery('')}>Clear</button>
-            )}
-          </div>
-        </>
       )}
       {focusRootId && (
         <div className="focus-banner">

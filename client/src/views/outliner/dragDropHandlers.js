@@ -1,4 +1,5 @@
 import { moveListItemById } from './reorderTransaction.js'
+import { stripHighlightMarksFromDoc } from './highlightCleanup.js'
 
 /**
  * Handle drag over event
@@ -118,7 +119,8 @@ export function handleDrop(
   if (!moved) return
   console.log('[drop] fallback move applied', { order: moved.map(n => n.id) })
   const docJSON = { type: 'doc', content: [buildList(moved)] }
-  editor.commands.setContent(docJSON)
+  const cleanDoc = stripHighlightMarksFromDoc(docJSON)
+  editor.commands.setContent(cleanDoc)
   markDirty()
   queueSave(300)
   applyStatusFilter()

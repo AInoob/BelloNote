@@ -1,5 +1,6 @@
 import { isLikelyUrl, normalizeUrl } from './urlUtils.js'
 import { extractOutlineClipboardPayload } from '../../utils/outlineClipboard.js'
+import { stripHighlightMarksFromDoc } from './highlightCleanup.js'
 
 /**
  * Handle paste event in the editor
@@ -26,7 +27,8 @@ export function handlePaste(view, event, editor, markDirty, saveTimer, doSave, p
   if (result?.payload) {
     event.preventDefault()
     if (result.payload.kind === 'doc') {
-      editor?.commands?.setContent(result.payload.doc, true)
+      const cleanDoc = stripHighlightMarksFromDoc(result.payload.doc)
+      editor?.commands?.setContent(cleanDoc, true)
       markDirty()
       if (saveTimer.current) clearTimeout(saveTimer.current)
       void doSave()
@@ -56,4 +58,3 @@ export function handlePaste(view, event, editor, markDirty, saveTimer, doSave, p
   pushDebug('paste: link applied', { href })
   return true
 }
-

@@ -9,7 +9,7 @@ const LAST_VISIBILITY = new WeakMap()
  * @param {Object} editor - TipTap editor instance
  * @param {Object} statusFilterRef - Ref to status filter state
  * @param {Object} showArchivedRef - Ref to show archived state
-* @param {Object} tagFiltersRef - Ref to tag filters state
+ * @param {Object} tagFiltersRef - Ref to tag filters state
  * @param {Object} focusRootRef - Ref to focus root ID
  */
 export function applyStatusFilter(
@@ -17,8 +17,7 @@ export function applyStatusFilter(
   statusFilterRef,
   showArchivedRef,
   tagFiltersRef,
-  focusRootRef,
-  searchQueryRef
+  focusRootRef
 ) {
   if (!editor) return
   const root = editor.view.dom
