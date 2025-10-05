@@ -11,7 +11,7 @@ import { useFocusRouter } from './hooks/useFocusRouter.js'
 import { useActiveTab } from './hooks/useActiveTab.js'
 import { useHistoryPanel } from './hooks/useHistoryPanel.js'
 import { useCheckpointDialog } from './hooks/useCheckpointDialog.js'
-import { CLIENT_BUILD_TIME, TAB_IDS } from './constants/config.js'
+import { CLIENT_BUILD_TIME, TAB_IDS, APP_NAME, APP_VERSION } from './constants/config.js'
 
 // Lazy-load secondary views
 const TimelineView = lazy(() => import('./views/TimelineView.jsx'))
@@ -55,6 +55,12 @@ export default function App() {
       window.__APP_SET_TAB__ = setActiveTab
     }
   }, [activeTab, setActiveTab])
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.title = `${APP_NAME} v${APP_VERSION}`
+    }
+  }, [])
 
   const openCheckpoint = useCallback(() => {
     setCheckpointNote('')
@@ -109,6 +115,8 @@ export default function App() {
         clientBuildTime={CLIENT_BUILD_TIME}
         serverBuildTime={serverBuildTime}
         healthFetchedAt={healthFetchedAt}
+        appName={APP_NAME}
+        appVersion={APP_VERSION}
       />
       <main>
         <TabPanel active={activeTab === TAB_IDS.OUTLINE}>

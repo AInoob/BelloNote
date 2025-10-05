@@ -29,6 +29,9 @@ export const CLIENT_BUILD_TIME = typeof __APP_BUILD_TIME__ !== 'undefined'
   ? __APP_BUILD_TIME__ 
   : null
 
+export const APP_NAME = 'Bello Note'
+export const APP_VERSION = '0.1.0'
+
 // Tab identifiers
 export const TAB_IDS = {
   OUTLINE: 'outline',

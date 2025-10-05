@@ -5,9 +5,10 @@ import { TABS } from '../constants/tabs.js'
 /**
  * Version banner component showing build times
  */
-function VersionBanner({ clientBuildTime, serverBuildTime, healthFetchedAt }) {
+function VersionBanner({ clientBuildTime, serverBuildTime, healthFetchedAt, appName, appVersion }) {
   return (
     <div className="version-banner">
+      {appName && <span>{appVersion ? `${appName} v${appVersion}` : appName}</span>}
       <span>Client built {formatTimestamp(clientBuildTime)}</span>
       <span>Server built {formatTimestamp(serverBuildTime)}</span>
       {healthFetchedAt && <span>Checked {formatTimestamp(healthFetchedAt)}</span>}
@@ -67,7 +68,9 @@ export function TopBar({
   statusText,
   clientBuildTime,
   serverBuildTime,
-  healthFetchedAt
+  healthFetchedAt,
+  appName,
+  appVersion
 }) {
   return (
     <div className="topbar">
@@ -75,9 +78,11 @@ export function TopBar({
         clientBuildTime={clientBuildTime}
         serverBuildTime={serverBuildTime}
         healthFetchedAt={healthFetchedAt}
+        appName={appName}
+        appVersion={appVersion}
       />
       <header>
-        <h1>Bello Note</h1>
+        <h1>{appName || 'Bello Note'}</h1>
         <div className="spacer" />
         <TabNavigation activeTab={activeTab} onSelectTab={onSelectTab} />
         <div className="spacer" />
