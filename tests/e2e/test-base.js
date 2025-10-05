@@ -584,28 +584,49 @@ async function readOutlineState(page) {
   return snapshot
 }
 
-async function expectOutlineState(page, expected, { timeout = 5000, message = 'outline state mismatch', includeTags = true } = {}) {
-  const normalize = (nodes) => {
-    if (!Array.isArray(nodes)) return []
-    return nodes.map(node => {
-      const normalizedTags = Array.isArray(node?.tags)
-        ? node.tags.map(tag => String(tag || '').toLowerCase())
-        : []
-      const normalized = {
-        text: typeof node?.text === 'string' ? node.text : '',
-        status: typeof node?.status === 'string' ? node.status : '',
-        children: normalize(node?.children || [])
-      }
-      if (includeTags) normalized.tags = normalizedTags
-      return normalized
-    })
-  }
+function normalizeOutlineNodes(nodes, includeTags = true) {
+  if (!Array.isArray(nodes)) return []
+  return nodes.map(node => {
+    const normalizedTags = Array.isArray(node?.tags)
+      ? node.tags.map(tag => String(tag || '').toLowerCase())
+      : []
+    const normalized = {
+      text: typeof node?.text === 'string' ? node.text : '',
+      status: typeof node?.status === 'string' ? node.status : '',
+      children: normalizeOutlineNodes(node?.children || [], includeTags)
+    }
+    if (includeTags) normalized.tags = normalizedTags
+    return normalized
+  })
+}
 
-  const expectedNormalized = normalize(expected)
+function mapApiOutlineNodes(nodes) {
+  if (!Array.isArray(nodes)) return []
+  return nodes.map(node => ({
+    text: typeof node?.title === 'string' ? node.title : '',
+    status: typeof node?.status === 'string' ? node.status : '',
+    tags: Array.isArray(node?.tags) ? node.tags : [],
+    children: mapApiOutlineNodes(node?.children || [])
+  }))
+}
+
+async function expectOutlineState(page, expected, { timeout = 5000, message = 'outline state mismatch', includeTags = true } = {}) {
+  const expectedNormalized = normalizeOutlineNodes(expected, includeTags)
   await expect.poll(async () => {
     const state = await readOutlineState(page)
     if (state === null) return '__pending__'
-    return normalize(state)
+    return normalizeOutlineNodes(state, includeTags)
+  }, { timeout, message }).toEqual(expectedNormalized)
+}
+
+async function expectOutlineApiState(request, app, expected, { timeout = 10000, message = 'api outline state mismatch', includeTags = true } = {}) {
+  const expectedNormalized = normalizeOutlineNodes(expected, includeTags)
+  await expect.poll(async () => {
+    const response = await request.get(`${app.apiUrl}/api/outline`, { headers: { 'x-playwright-test': '1' } })
+    if (!response.ok()) return '__pending__'
+    const json = await response.json().catch(() => null)
+    if (!json || !Array.isArray(json.roots)) return '__pending__'
+    return normalizeOutlineNodes(mapApiOutlineNodes(json.roots), includeTags)
   }, { timeout, message }).toEqual(expectedNormalized)
 }
 
@@ -618,5 +639,4 @@ const outlineNode = (text, { status = '', tags, children = [] } = {}) => {
   if (Array.isArray(tags)) node.tags = tags
   return node
 }
-
-module.exports = { test, expect, readOutlineState, expectOutlineState, outlineNode }
+module.exports = { test, expect, readOutlineState, expectOutlineState, expectOutlineApiState, outlineNode }

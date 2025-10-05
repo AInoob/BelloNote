@@ -1,7 +1,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const { test, expect } = require('./test-base')
+const { test, expect, expectOutlineApiState, outlineNode } = require('./test-base')
 
 async function ensureBackendReady(request, app) {
   await expect.poll(async () => {
@@ -138,6 +138,18 @@ test('export and import round trip with image assets', async ({ page, request, a
   })
   expect(outlineResponse.ok()).toBeTruthy()
   const outlineJson = await outlineResponse.json()
+  await expectOutlineApiState(request, app, [
+    outlineNode('Parent task', {
+      status: 'in-progress',
+      children: [
+        outlineNode('Child image note', { status: 'todo' }),
+        outlineNode('Sibling referencing same asset', { status: 'todo' })
+      ]
+    })
+  ], {
+    includeTags: false,
+    message: 'API outline should match imported manifest structure'
+  })
   expect(outlineJson.roots).toHaveLength(1)
   const childNodes = outlineJson.roots[0].children
   expect(childNodes).toHaveLength(2)
@@ -221,10 +233,19 @@ test('import appends to existing outline', async ({ request, app }) => {
   })
   expect(outlineResponse.ok()).toBeTruthy()
   const outlineJson = await outlineResponse.json()
-  const rootTitles = (outlineJson.roots || []).map((node) => node.title)
-  expect(rootTitles).toContain('Existing root')
-  expect(rootTitles).toContain('Imported root')
-  expect(rootTitles[rootTitles.length - 1]).toBe('Imported root')
+  await expectOutlineApiState(request, app, [
+    outlineNode('Existing root', {
+      status: 'todo',
+      children: [outlineNode('Existing child', { status: 'todo' })]
+    }),
+    outlineNode('Imported root', {
+      status: 'todo',
+      children: [outlineNode('Imported child', { status: 'todo' })]
+    })
+  ], {
+    includeTags: false,
+    message: 'API outline should append imported structure after existing nodes'
+  })
 })
 
 test('import rejects invalid manifest', async ({ request, app }) => {
@@ -277,4 +298,8 @@ test('export and import via UI', async ({ page, request, app }) => {
   await page.setInputFiles('[data-testid="import-manifest-input"]', manifestPath)
   await expect(page.locator('[data-testid="export-import-status"]')).toHaveText(/Imported/i, { timeout: 10000 })
   await expect(page.locator('li.li-node p').first()).toContainText('UI body', { timeout: 10000 })
+  await expectOutlineApiState(request, app, [outlineNode('UI parent', { status: 'todo' })], {
+    includeTags: false,
+    message: 'API outline should reflect imported UI manifest'
+  })
 })

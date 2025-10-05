@@ -1,4 +1,4 @@
-const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
+const { test, expect, expectOutlineState, expectOutlineApiState, outlineNode } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 const path = require('path')
@@ -27,6 +27,12 @@ const tasksWithDateState = (dateToken) => [
   outlineNode('task 3')
 ]
 
+const tasksWithDateApiState = () => [
+  outlineNode('task 1'),
+  outlineNode('task 2'),
+  outlineNode('task 3')
+]
+
 async function resetOutline(request) {
   const response = await request.post(`${API_URL}/api/outline`, {
     data: { outline: [] }
@@ -38,13 +44,6 @@ async function waitForOutline(request) {
   const response = await request.get(`${API_URL}/api/outline`)
   expect(response.ok(), 'outline fetch should succeed').toBeTruthy()
   return response.json()
-}
-
-async function expectOutlineTitles(request, expectedTitles) {
-  await expect.poll(async () => {
-    const data = await waitForOutline(request)
-    return (data.roots || []).map(node => node.title)
-  }, { message: 'outline titles should match expected order' }).toEqual(expectedTitles)
 }
 
 test.beforeEach(async ({ request, app }) => {
@@ -143,7 +142,7 @@ function countNodeType(nodes, type) {
   return total
 }
 
-test('create task 1, task 2, and task 3', async ({ page, request }) => {
+test('create task 1, task 2, and task 3', async ({ page, request, app }) => {
   await createThreeTasks(page, request)
 
   const items = page.locator('li.li-node')
@@ -151,11 +150,14 @@ test('create task 1, task 2, and task 3', async ({ page, request }) => {
   await expect(items.nth(1)).toContainText('task 2', { timeout: SHORT_TIMEOUT })
   await expect(items.nth(2)).toContainText('task 3', { timeout: SHORT_TIMEOUT })
 
-  await expectOutlineTitles(request, ['task 1', 'task 2', 'task 3'])
   await expectOutlineState(page, basicTasksState(), { includeTags: false })
+  await expectOutlineApiState(request, app, basicTasksState(), {
+    includeTags: false,
+    message: 'API outline should contain the three created tasks'
+  })
 })
 
-test('insert code block into task 2 via slash command', async ({ page, request }) => {
+test('insert code block into task 2 via slash command', async ({ page, request, app }) => {
   await createThreeTasks(page, request)
 
   const secondItem = page.locator('li.li-node').nth(1)
@@ -172,6 +174,10 @@ test('insert code block into task 2 via slash command', async ({ page, request }
   await expect(secondItem.locator('code')).toHaveCount(1)
   await expect(page.locator('li.li-node').nth(2)).toContainText('task 3')
   await expectOutlineState(page, codeBlockTasksState(), { includeTags: false })
+  await expectOutlineApiState(request, app, codeBlockTasksState(), {
+    includeTags: false,
+    message: 'API outline should reflect code block insertion'
+  })
 
   await expect.poll(async () => {
     const data = await waitForOutline(request)
@@ -186,7 +192,7 @@ test('insert code block into task 2 via slash command', async ({ page, request }
   })
 })
 
-test('upload image into task 2 via slash command', async ({ page, request }) => {
+test('upload image into task 2 via slash command', async ({ page, request, app }) => {
   await createThreeTasks(page, request)
 
   const secondItem = page.locator('li.li-node').nth(1)
@@ -203,6 +209,10 @@ test('upload image into task 2 via slash command', async ({ page, request }) => 
   await expect(page.locator('li.li-node img').first()).toBeVisible()
   await expect(page.locator('li.li-node')).toHaveCount(3)
   await expectOutlineState(page, imageTasksState(), { includeTags: false })
+  await expectOutlineApiState(request, app, imageTasksState(), {
+    includeTags: false,
+    message: 'API outline should reflect image insertion'
+  })
 
   await expect.poll(async () => {
     const data = await waitForOutline(request)
@@ -220,7 +230,7 @@ test('upload image into task 2 via slash command', async ({ page, request }) => 
 
 
 
-test('insert today date inline via slash command', async ({ page, request }) => {
+test('insert today date inline via slash command', async ({ page, request, app }) => {
   await createThreeTasks(page, request)
 
   const secondItem = page.locator('li.li-node').nth(1)
@@ -237,4 +247,8 @@ test('insert today date inline via slash command', async ({ page, request }) => 
   await expect(page.locator('li.li-node').nth(2)).not.toContainText(`@${today}`, { timeout: SHORT_TIMEOUT })
   await expect(page.locator('li.li-node')).toHaveCount(3, { timeout: SHORT_TIMEOUT })
   await expectOutlineState(page, tasksWithDateState(today), { includeTags: false })
+  await expectOutlineApiState(request, app, tasksWithDateApiState(), {
+    includeTags: false,
+    message: 'API outline should preserve task structure with inline date content'
+  })
 })
