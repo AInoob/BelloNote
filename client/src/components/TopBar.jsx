@@ -77,7 +77,7 @@ export function TopBar({
         healthFetchedAt={healthFetchedAt}
       />
       <header>
-        <h1>Daily Worklog</h1>
+        <h1>Bello Note</h1>
         <div className="spacer" />
         <TabNavigation activeTab={activeTab} onSelectTab={onSelectTab} />
         <div className="spacer" />

@@ -4,7 +4,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Daily Worklog v4.9.4</title>
+    <title>Bello Note v0.1.0</title>
     <link rel="icon" type="image/png" href="/favicon.ico" />
     <style>
       :root { --border:#e5e7eb; --muted:#6b7280; --bg:#fff; --text:#111827; --overlay: rgba(17,24,39,.5); --task-prefix-offset:61px; }
@@ -241,7 +241,9 @@
       .debug-line { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace; border-bottom:1px dashed #eee; padding:2px 0; white-space:pre-wrap; }
       .image-modal { background:#fff; padding:16px; border-radius:12px; box-shadow:0 16px 48px rgba(15,23,42,.25); display:flex; flex-direction:column; align-items:center; max-width:90vw; max-height:90vh; }
       .image-modal img { max-width:80vw; max-height:70vh; border-radius:8px; }
-      .version-banner { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:flex-end; font-size:.8rem; padding:.35rem .9rem; border-bottom:1px solid var(--border); background:#f9fafb; color:var(--muted); }
+      .version-banner { position: fixed; top: 16px; right: 16px; font-size:.8rem; color:var(--muted); z-index: 70; transform: translateY(-12px); transition: transform .15s ease, opacity .15s ease; opacity:0.1; pointer-events:none; }
+      .version-banner:hover { transform: translateY(0); opacity:1; pointer-events:auto; background:rgba(255,255,255,.95); border:1px solid var(--border); border-radius:8px; padding:.4rem .75rem; box-shadow:0 12px 24px rgba(15,23,42,.18); }
+      .version-banner span { display:block; white-space:nowrap; }
       .version-banner span { white-space:nowrap; }
       .history-empty { padding:12px; display:flex; flex-direction:column; gap:4px; color:var(--muted); }
       .meta.error { color:#dc2626; }

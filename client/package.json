@@ -1,6 +1,6 @@
 {
   "name": "worklog-client",
-  "version": "0.4.9.18",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {

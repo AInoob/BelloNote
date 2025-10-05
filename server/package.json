@@ -1,6 +1,6 @@
 {
   "name": "worklog-server",
-  "version": "0.4.9.15",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "src/index.js",
