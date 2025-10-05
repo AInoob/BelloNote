@@ -11,6 +11,7 @@ import outlineRouter from './routes/outline.js'
 import historyRouter from './routes/history.js'
 import filesRouter from './routes/files.js'
 import testUtilsRouter from './routes/test-utils.js'
+import exportImportRouter from './routes/export-import.js'
 
 const require = createRequire(import.meta.url)
 const { version: pkgVersion } = require('../package.json')
@@ -34,6 +35,7 @@ app.use(express.urlencoded({ extended: true }))
 app.use('/files', filesRouter)
 
 app.use('/api', outlineRouter)
+app.use('/api', exportImportRouter)
 app.use('/api/tasks', tasksRouter)
 app.use('/api/day', dayRouter)
 app.use('/api/upload', uploadRouter)

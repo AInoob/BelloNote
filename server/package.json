@@ -10,14 +10,17 @@
     "seed": "node src/seed.js"
   },
   "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^2.1.1",
     "cors": "^2.8.5",
     "dayjs": "^1.11.10",
     "express": "^4.19.2",
+    "mime-types": "^2.1.35",
     "multer": "^2.0.0",
     "pg": "^8.11.5"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2",
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.0.2"
   }
 }

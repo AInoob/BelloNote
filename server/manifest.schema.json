@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bellonote.app/schema/export-manifest.json",
+  "title": "BelloNote Export Manifest",
+  "type": "object",
+  "required": ["app", "version", "exportedAt", "entities", "assets"],
+  "properties": {
+    "app": { "type": "string" },
+    "version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+$"
+    },
+    "exportedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "entities": {
+      "type": "object",
+      "required": ["notes"],
+      "properties": {
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "content", "contentFormat", "createdAt", "updatedAt"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "content": { "type": "string" },
+              "contentFormat": {
+                "type": "string",
+                "enum": ["markdown", "html", "plaintext", "json"]
+              },
+              "coverImage": { "type": ["string", "null"] },
+              "tags": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "status": { "type": "string" },
+              "parentId": { "type": ["string", "null"] },
+              "position": { "type": ["integer", "null"] },
+              "workedDates": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "createdAt": { "type": "string", "format": "date-time" },
+              "updatedAt": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "color": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "users": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "filename", "mimeType", "sha256", "dataBase64"],
+        "properties": {
+          "id": { "type": "string" },
+          "filename": { "type": "string" },
+          "mimeType": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{40,64}$"
+          },
+          "dataBase64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
