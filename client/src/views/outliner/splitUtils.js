@@ -26,10 +26,8 @@ export function applySplitStatusAdjustments(editor, meta) {
   if (!editor || !meta) return null
   const { parentPos, originalIndex, newIndex, originalAttrs = {} } = meta
   const { state, view } = editor
-  if (typeof console !== 'undefined') console.log('[split-adjust] invoked', meta)
   const parentNode = typeof parentPos === 'number' ? state.doc.nodeAt(parentPos) : null
   if (!parentNode) {
-    if (typeof console !== 'undefined') console.log('[split-adjust] missing parent', { parentPos, originalIndex, newIndex })
     return null
   }
 
@@ -40,7 +38,6 @@ export function applySplitStatusAdjustments(editor, meta) {
   if (typeof newItemPos === 'number') {
     const newNode = tr.doc.nodeAt(newItemPos)
     if (newNode) {
-      if (typeof console !== 'undefined') console.log('[split-adjust] new item', { parentPos, newIndex, attrs: newNode.attrs })
       const sanitizedAttrs = {
         ...newNode.attrs,
         status: STATUS_EMPTY,
@@ -62,7 +59,6 @@ export function applySplitStatusAdjustments(editor, meta) {
   if (typeof originalItemPos === 'number') {
     const originalNode = tr.doc.nodeAt(originalItemPos)
     if (originalNode) {
-      if (typeof console !== 'undefined') console.log('[split-adjust] original item', { parentPos, originalIndex, attrs: originalNode.attrs, restore: originalAttrs })
       const restoredAttrs = {
         ...originalNode.attrs,
         status: originalAttrs.status ?? STATUS_EMPTY,
@@ -198,4 +194,3 @@ export function promoteSplitSiblingToChild(editor, context) {
   view.dispatch(tr.scrollIntoView())
   return true
 }
-

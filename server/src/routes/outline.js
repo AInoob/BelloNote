@@ -62,12 +62,6 @@ router.post('/outline', async (req, res) => {
   const { outline } = req.body
   if (!Array.isArray(outline)) return res.status(400).json({ error: 'outline array required' })
 
-  try {
-    console.log('[outline] save', outline.map(o => ({ id: o.id, title: o.title, dates: o.dates, children: (o.children || []).length })))
-  } catch (e) {
-    console.log('[outline] save log failed', e.message)
-  }
-
   const newIdMap = {}
 
   try {

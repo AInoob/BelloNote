@@ -36,9 +36,9 @@ function TabNavigation({ activeTab, onSelectTab }) {
 }
 
 /**
- * Action buttons (Checkpoint, History, Debug)
+ * Action buttons (Checkpoint, History)
  */
-function ActionButtons({ onOpenCheckpoint, onShowHistory, onToggleDebug, showDebug }) {
+function ActionButtons({ onOpenCheckpoint, onShowHistory }) {
   return (
     <>
       <button className="btn" onClick={onOpenCheckpoint}>
@@ -46,9 +46,6 @@ function ActionButtons({ onOpenCheckpoint, onShowHistory, onToggleDebug, showDeb
       </button>
       <button className="btn" onClick={onShowHistory}>
         History
-      </button>
-      <button className="btn" onClick={onToggleDebug}>
-        {showDebug ? 'Hide' : 'Show'} Debug
       </button>
     </>
   )
@@ -63,8 +60,6 @@ export function TopBar({
   onSelectTab,
   onOpenCheckpoint,
   onShowHistory,
-  onToggleDebug,
-  showDebug,
   statusText,
   clientBuildTime,
   serverBuildTime,
@@ -89,8 +84,6 @@ export function TopBar({
         <ActionButtons
           onOpenCheckpoint={onOpenCheckpoint}
           onShowHistory={onShowHistory}
-          onToggleDebug={onToggleDebug}
-          showDebug={showDebug}
         />
         <div className="save-indicator">{statusText}</div>
       </header>

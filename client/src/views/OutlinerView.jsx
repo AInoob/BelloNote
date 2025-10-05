@@ -67,7 +67,6 @@ import {
 } from './outliner/collapsedState.js'
 
 import { FocusContext } from './outliner/FocusContext.js'
-import { LOG } from './outliner/debugUtils.js'
 import { loadScrollState } from './outliner/scrollState.js'
 import { now, logCursorTiming } from './outliner/performanceUtils.js'
 import { cssEscape } from '../utils/cssEscape.js'
@@ -113,7 +112,6 @@ const EnterHighPriority = Extension.create({
 
 export default function OutlinerView({
   onSaveStateChange = () => {},
-  showDebug = false,
   readOnly = false,
   broadcastSnapshots = true,
   initialOutline = null,
@@ -130,7 +128,6 @@ export default function OutlinerView({
   const reminderActionsEnabled = reminderActionsEnabledProp !== undefined ? reminderActionsEnabledProp : !isReadOnly
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [debugLines, setDebugLines] = useState([])
   const slashHandlersRef = useRef({ handleKeyDown: () => false, openAt: () => {} })
   const [imagePreview, setImagePreview] = useState(null)
   const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
@@ -206,13 +203,7 @@ export default function OutlinerView({
   const dirtyRef = useRef(false)
   const savingRef = useRef(false)
 
-  const pushDebug = useCallback((msg, extra = {}) => {
-    if (showDebug) {
-      const line = `${new Date().toLocaleTimeString()} ${msg} ${Object.keys(extra).length ? JSON.stringify(extra) : ''}`
-      setDebugLines((existing) => [...existing.slice(-200), line])
-    }
-    LOG(msg, extra)
-  }, [showDebug])
+  const pushDebug = useCallback(() => {}, [])
 
   const CodeBlockWithCopy = useMemo(
     () => CodeBlockLowlight.extend({
@@ -684,7 +675,6 @@ export default function OutlinerView({
       restoredScrollRef.current = false
       setTimeout(() => {
         if (restoredScrollRef.current) {
-          LOG('scrollState.restore skip (already restored)')
           return
         }
         const state = loadScrollState()
@@ -697,51 +687,40 @@ export default function OutlinerView({
             if (restoredScrollRef.current) return
             if (!editor || !editor.view || !editor.view.dom) {
               if (attempt + 1 < maxAttempts) {
-                LOG('scrollState.restore waiting for editor', { attempt, topTaskId })
                 requestAnimationFrame(() => attemptRestore(attempt + 1))
                 return
               }
-              LOG('scrollState.restore giveup (no editor)', { attempt, topTaskId })
               restoredScrollRef.current = true
-              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
               return
             }
             let targetEl = null
             try {
               targetEl = editor.view.dom.querySelector(`li.li-node[data-id="${cssEscape(String(topTaskId))}"]`)
             } catch (err) {
-              LOG('scrollState.restore selector error', { message: err?.message })
               targetEl = null
             }
             if (!targetEl) {
               if (attempt + 1 < maxAttempts) {
-                LOG('scrollState.restore missing target (retry)', { attempt, topTaskId })
                 requestAnimationFrame(() => attemptRestore(attempt + 1))
                 return
               }
-              LOG('scrollState.restore missing target (giveup)', { attempt, topTaskId })
               restoredScrollRef.current = true
-              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
               return
             }
 
             const rect = targetEl.getBoundingClientRect()
             if (!rect || !Number.isFinite(rect.top)) {
               if (attempt + 1 < maxAttempts) {
-                LOG('scrollState.restore no snapshot (retry)', { attempt, topTaskId })
                 requestAnimationFrame(() => attemptRestore(attempt + 1))
                 return
               }
-              LOG('scrollState.restore no snapshot (giveup)', { attempt, topTaskId })
               restoredScrollRef.current = true
-              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
               return
             }
 
             const absoluteTop = rect.top + window.scrollY
             const desired = Math.max(0, absoluteTop - expectedOffset)
             pushDebug('restoring scroll anchor', { attempt, topTaskId, desired, expectedOffset })
-            LOG('scrollState.restore attempt', { attempt, topTaskId, desired, expectedOffset })
             window.scrollTo({ top: desired, behavior: 'auto' })
 
             requestAnimationFrame(() => {
@@ -752,26 +731,17 @@ export default function OutlinerView({
                 : Math.abs(actualOffset - expectedOffset)
               const meta = { attempt, topTaskId, actualOffset, diff, expectedOffset }
               if (diff !== null && diff > tolerance && attempt + 1 < maxAttempts) {
-                LOG('scrollState.restore retry', meta)
                 requestAnimationFrame(() => attemptRestore(attempt + 1))
                 return
               }
-              if (diff !== null && diff > tolerance) {
-                LOG('scrollState.restore drift', meta)
-              } else {
-                LOG('scrollState.restore success', meta)
-              }
               restoredScrollRef.current = true
-              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
             })
           }
 
           attemptRestore(0)
         } else {
           pushDebug('no scroll state to restore', { state })
-          LOG('scrollState.restore skip', { state })
           restoredScrollRef.current = true
-          LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
         }
       }, 120)
     } catch (err) {
@@ -914,11 +884,6 @@ export default function OutlinerView({
         </div>
       )}
 
-      {showDebug && (
-        <div className="debug-pane">
-          {debugLines.slice(-40).map((l, i) => <div className="debug-line" key={i}>{l}</div>)}
-        </div>
-      )}
     </div>
   )
 }

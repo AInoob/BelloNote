@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import React, { memo, useCallback, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import { useReminders } from '../context/ReminderContext.jsx'
 import { usePendingReminderCount } from '../context/ReminderSelectors.js'
@@ -97,20 +97,6 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
   const [customEditingId, setCustomEditingId] = useState(null)
   const [customDateTime, setCustomDateTime] = useState('')
   const [customError, setCustomError] = useState('')
-
-  useEffect(() => {
-    if (typeof console !== 'undefined') {
-      console.log(
-        '[reminder-notification] pending reminders updated',
-        pendingReminders.map((reminder) => ({
-          id: reminder.taskId,
-          status: reminder.status,
-          remindAt: reminder.remindAt,
-          due: reminder.due
-        }))
-      )
-    }
-  }, [pendingReminders])
 
   const resetCustomState = useCallback(() => {
     setCustomEditingId(null)

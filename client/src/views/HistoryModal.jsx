@@ -251,7 +251,6 @@ export default function HistoryModal({ onClose, onRestored }) {
                         key={`inline-${selected?.id ?? 'preview'}`}
                         readOnly
                         initialOutline={preview}
-                        showDebug={false}
                         broadcastSnapshots={false}
                         onSaveStateChange={() => {}}
                       />
@@ -347,7 +346,6 @@ function SnapshotViewer({ doc, onClose, onPrev, onNext, hasPrev = false, hasNext
           <OutlinerView
             readOnly
             initialOutline={doc}
-            showDebug={false}
             broadcastSnapshots={false}
             onSaveStateChange={() => {}}
           />

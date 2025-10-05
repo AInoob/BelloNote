@@ -6,7 +6,6 @@ import { TopBar } from './components/TopBar.jsx'
 import { TabPanel } from './components/TabPanel.jsx'
 import { useReminders } from './context/ReminderContext.jsx'
 import { useBuildInfo } from './hooks/useBuildInfo.js'
-import { usePersistentFlag } from './hooks/usePersistentFlag.js'
 import { useFocusRouter } from './hooks/useFocusRouter.js'
 import { useActiveTab } from './hooks/useActiveTab.js'
 import { useHistoryPanel } from './hooks/useHistoryPanel.js'
@@ -34,7 +33,6 @@ export default function App() {
     createCheckpoint: createCheckpointAction
   } = useCheckpointDialog()
 
-  const { value: showDebug, toggle: toggleDebug } = usePersistentFlag('WL_DEBUG', true)
   const { serverBuildTime, healthFetchedAt } = useBuildInfo()
 
   const { pendingReminders } = useReminders()
@@ -93,10 +91,6 @@ export default function App() {
     openHistory()
   }, [closeCheckpointDialog, openHistory])
 
-  const handleToggleDebug = useCallback(() => {
-    toggleDebug()
-  }, [toggleDebug])
-
   const statusText = useMemo(() => {
     if (saveState.saving) return 'Saving…'
     return saveState.dirty ? 'Unsaved changes' : 'Saved'
@@ -109,8 +103,6 @@ export default function App() {
         onSelectTab={setActiveTab}
         onOpenCheckpoint={openCheckpoint}
         onShowHistory={openHistory}
-        onToggleDebug={handleToggleDebug}
-        showDebug={showDebug}
         statusText={statusText}
         clientBuildTime={CLIENT_BUILD_TIME}
         serverBuildTime={serverBuildTime}
@@ -122,7 +114,6 @@ export default function App() {
         <TabPanel active={activeTab === TAB_IDS.OUTLINE}>
           <OutlinerView
             onSaveStateChange={setSaveState}
-            showDebug={showDebug}
             focusRequest={outlineFocusRequest}
             onFocusHandled={handleOutlineFocusHandled}
             onRequestTimelineFocus={requestTimelineFocus}

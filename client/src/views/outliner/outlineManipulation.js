@@ -26,23 +26,16 @@ export function cloneOutline(outline) {
  * @returns {Array|null} The modified outline or null if move failed
  */
 export function moveNodeInOutline(nodes, dragId, targetId, position = 'before') {
-  console.log('[drop] moveNodeInOutline', { dragId, targetId, position })
   if (!dragId || dragId === targetId) return null
   const clone = cloneOutline(nodes)
   const removedInfo = removeNodeById(clone, dragId)
-  if (!removedInfo?.node) {
-    console.log('[drop] move failed to find dragged node', { dragId })
-    return null
-  }
+  if (!removedInfo?.node) return null
   const removed = removedInfo.node
   if (!targetId) {
     clone.push(removed)
     return clone
   }
-  if (!insertNodeRelative(clone, targetId, removed, position === 'after')) {
-    console.log('[drop] insert fallback to end', { dragId, targetId })
-    clone.push(removed)
-  }
+  if (!insertNodeRelative(clone, targetId, removed, position === 'after')) clone.push(removed)
   return clone
 }
 

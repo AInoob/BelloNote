@@ -90,18 +90,10 @@ export function handleDrop(
   }
   const targetId = chosen?.getAttribute('data-id') || null
   if (dragEl && chosen && dragEl.contains(chosen)) {
-    console.log('[drop] aborted: target inside drag element', { dragId: drag.id, targetId })
     draggingRef.current = null
     return
   }
   const outline = parseOutline()
-  console.log('[drop] request', {
-    dragId: drag.id,
-    targetId,
-    dropAfter,
-    pointerY,
-    chosenBounds: chosen ? (() => { const rect = chosen.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, mid: rect.top + rect.height / 2 } })() : null
-  })
   const place = dropAfter ? 'after' : 'before'
   let reordered = false
   if (targetId) {
@@ -117,7 +109,6 @@ export function handleDrop(
 
   const moved = moveNodeInOutline(outline, drag.id, targetId, place)
   if (!moved) return
-  console.log('[drop] fallback move applied', { order: moved.map(n => n.id) })
   const docJSON = { type: 'doc', content: [buildList(moved)] }
   const cleanDoc = stripHighlightMarksFromDoc(docJSON)
   editor.commands.setContent(cleanDoc)

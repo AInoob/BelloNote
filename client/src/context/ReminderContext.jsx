@@ -208,10 +208,6 @@ export function ReminderProvider({ children }) {
     const key = JSON.stringify((next || []).map(item => `${item.taskId}|${item.status}|${item.remindAt}`))
     if (lastSnapshotRef.current === key) return
     lastSnapshotRef.current = key
-    if (typeof console !== 'undefined') {
-      const dueCount = next.filter(item => reminderIsDue(item)).length
-      console.log('[reminders] outline snapshot detected', { count: next.length, due: dueCount })
-    }
     setReminders(next)
     if (typeof window !== 'undefined') {
       window.__WORKLOG_REMINDERS = next

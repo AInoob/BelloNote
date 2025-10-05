@@ -65,7 +65,6 @@ export default function RemindersView() {
             readOnly
             initialOutline={outlinePayload}
             forceExpand
-            showDebug={false}
             reminderActionsEnabled
             broadcastSnapshots={false}
           />

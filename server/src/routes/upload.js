@@ -3,7 +3,7 @@ import { Router } from 'express'
 import multer from 'multer'
 
 import { ensureUploadDir, getUploadDir, storeDiskFile } from '../lib/files.js'
-import { ensureDefaultProject } from '../lib/projects.js'
+import { resolveProjectId } from '../util/projectContext.js'
 
 ensureUploadDir()
 
@@ -22,7 +22,7 @@ router.post('/image', upload.single('image'), async (req, res) => {
   const file = req.file
   if (!file) return res.status(400).json({ error: 'No file' })
   try {
-    const projectId = await ensureDefaultProject()
+    const projectId = await resolveProjectId(req)
     const record = await storeDiskFile(file.path, {
       projectId,
       originalName: file.originalname,

@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
 import { saveScrollState } from './scrollState.js'
-import { LOG } from './debugUtils.js'
 
 function createDebounce(fn, wait) {
   let timeout = null
@@ -36,17 +35,13 @@ function createDebounce(fn, wait) {
  */
 export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrollSaveFrameRef) {
   const debouncedSaveRef = useRef(null)
-  const skipBeforeRestoreLoggedRef = useRef(false)
 
   const captureTopTaskState = () => {
     if (!editor || !editor.view || !editor.view.dom) return { topTaskId: null, topTaskOffset: null }
     if (typeof window === 'undefined') return { topTaskId: null, topTaskOffset: null }
     const rootEl = editor.view.dom
     const nodes = Array.from(rootEl.querySelectorAll('li.li-node[data-id]'))
-    if (!nodes.length) {
-      LOG('scrollStateSaver.captureTopTask none')
-      return { topTaskId: null, topTaskOffset: null }
-    }
+    if (!nodes.length) return { topTaskId: null, topTaskOffset: null }
 
     const pickTopVisible = () => {
       for (const node of nodes) {
@@ -61,10 +56,7 @@ export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrol
     }
 
     const candidate = pickTopVisible()
-    if (candidate) {
-      LOG('scrollStateSaver.captureTopTask', candidate)
-      return candidate
-    }
+    if (candidate) return candidate
 
     const fallbackNode = nodes[nodes.length - 1]
     const fallbackRect = fallbackNode?.getBoundingClientRect()
@@ -72,9 +64,7 @@ export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrol
     const fallbackOffset = fallbackRect && Number.isFinite(fallbackRect.top)
       ? Number(fallbackRect.top.toFixed(3))
       : null
-    const fallback = { topTaskId: fallbackId, topTaskOffset: fallbackOffset }
-    LOG('scrollStateSaver.captureTopTask fallback', fallback)
-    return fallback
+    return { topTaskId: fallbackId, topTaskOffset: fallbackOffset }
   }
 
   useEffect(() => {
@@ -88,19 +78,7 @@ export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrol
 
     const performSave = () => {
       if (typeof window === 'undefined') return
-      if (!restoredScrollRef.current) {
-        if (!skipBeforeRestoreLoggedRef.current) {
-          skipBeforeRestoreLoggedRef.current = true
-          LOG('scrollStateSaver.skip (not restored yet)', {
-            scrollY: window.scrollY,
-            selectionFrom: editor?.state?.selection?.from ?? null
-          })
-        }
-        return
-      }
-      if (skipBeforeRestoreLoggedRef.current) {
-        skipBeforeRestoreLoggedRef.current = false
-      }
+      if (!restoredScrollRef.current) return
       const { topTaskId, topTaskOffset } = captureTopTaskState()
       const payload = {
         topTaskId,
@@ -109,16 +87,11 @@ export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrol
         selectionFrom: editor?.state?.selection?.from ?? null,
         timestamp: Date.now()
       }
-      LOG('scrollStateSaver.performSave', payload)
       debouncedSave(payload)
     }
     const scheduleSave = (reason) => {
       if (scrollSaveFrameRef.current) cancelAnimationFrame(scrollSaveFrameRef.current)
       scrollSaveFrameRef.current = requestAnimationFrame(performSave)
-      LOG('scrollStateSaver.scheduleSave', {
-        reason,
-        scrollY: typeof window !== 'undefined' ? window.scrollY : null
-      })
     }
     const handleBeforeUnload = () => {
       if (!restoredScrollRef.current) return
@@ -130,7 +103,6 @@ export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrol
         selectionFrom: editor?.state?.selection?.from ?? null,
         timestamp: Date.now()
       }
-      LOG('scrollStateSaver.beforeUnload', payload)
       debouncedSave.flush(payload)
     }
     const handleScroll = () => scheduleSave('scroll')

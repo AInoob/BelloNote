@@ -1,15 +1,11 @@
 import { SCROLL_STATE_KEY } from './constants.js'
-import { LOG } from './debugUtils.js'
 
 const SCROLL_STATE_VERSION = 2
 
 function normalizeState(parsed) {
   if (!parsed || typeof parsed !== 'object') return null
   const version = Number(parsed.version)
-  if (version !== SCROLL_STATE_VERSION) {
-    LOG('scrollState.load legacy payload discarded', { version })
-    return null
-  }
+  if (version !== SCROLL_STATE_VERSION) return null
   const topTaskId = typeof parsed.topTaskId === 'string' && parsed.topTaskId.trim() !== ''
     ? parsed.topTaskId
     : null
@@ -29,7 +25,6 @@ function normalizeState(parsed) {
     timestamp,
     scrollY
   }
-  LOG('scrollState.load normalized', normalized)
   return normalized
 }
 
@@ -38,25 +33,15 @@ function normalizeState(parsed) {
  * @returns {Object|null} The scroll state object with scrollY property, or null if not found
  */
 export const loadScrollState = () => {
-  if (typeof window === 'undefined') {
-    LOG('scrollState.load skip (no window)')
-    return null
-  }
+  if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(SCROLL_STATE_KEY)
-    if (!raw) {
-      LOG('scrollState.load miss')
-      return null
-    }
+    if (!raw) return null
     const parsed = JSON.parse(raw)
     const normalized = normalizeState(parsed)
-    if (!normalized) {
-      LOG('scrollState.load unusable payload', { raw })
-      return null
-    }
+    if (!normalized) return null
     return normalized
   } catch (err) {
-    LOG('scrollState.load error', { message: err?.message })
     return null
   }
 }
@@ -71,15 +56,11 @@ export const loadScrollState = () => {
  * @param {number} [payload.timestamp] - The timestamp (optional)
  */
 export const saveScrollState = (payload) => {
-  if (typeof window === 'undefined') {
-    LOG('scrollState.save skip (no window)')
-    return
-  }
+  if (typeof window === 'undefined') return
   try {
     const toStore = { version: SCROLL_STATE_VERSION, ...payload }
     localStorage.setItem(SCROLL_STATE_KEY, JSON.stringify(toStore))
-    LOG('scrollState.save', toStore)
-  } catch (err) {
-    LOG('scrollState.save error', { message: err?.message })
+  } catch {
+    /* ignore persistence errors */
   }
 }

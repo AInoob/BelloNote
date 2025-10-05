@@ -31,7 +31,6 @@ test('tasks default to no status and cycle through states', async ({ page, reque
   ])
 
   await page.goto('/')
-  page.on('console', msg => console.log('browser:', msg.text()))
   await waitForOutlineReady(page)
   const task = page.locator('li.li-node').first()
   await expect(task).toBeVisible()
