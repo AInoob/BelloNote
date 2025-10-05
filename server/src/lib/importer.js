@@ -150,7 +150,8 @@ async function insertNoteTree({
   resolveAsset,
   projectId,
   tx,
-  idMap
+  idMap,
+  positionOverride
 }) {
   const newId = randomUUID()
   idMap.set(note.id, newId)
@@ -165,6 +166,9 @@ async function insertNoteTree({
   const workedDates = uniqueSortedDates(note.workedDates)
   const firstDate = workedDates[0] || null
   const lastDate = workedDates.length ? workedDates[workedDates.length - 1] : null
+  const positionValue = positionOverride != null
+    ? Number(positionOverride)
+    : (note.position == null ? 0 : Number(note.position))
 
   await tx.run(
     `INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position, worked_dates, first_work_date, last_work_date, created_at, updated_at)
@@ -177,7 +181,7 @@ async function insertNoteTree({
       (note.status || '').trim(),
       contentJson,
       tagsJson,
-      note.position == null ? 0 : Number(note.position),
+      positionValue,
       JSON.stringify(workedDates),
       firstDate,
       lastDate,
@@ -190,7 +194,6 @@ async function insertNoteTree({
   for (let idx = 0; idx < children.length; idx += 1) {
     const child = children[idx]
     // Ensure child knows its position when missing
-    if (child.position == null) child.position = idx
     // eslint-disable-next-line no-await-in-loop
     await insertNoteTree({
       parentId: newId,
@@ -199,7 +202,8 @@ async function insertNoteTree({
       resolveAsset,
       projectId,
       tx,
-      idMap
+      idMap,
+      positionOverride: child.position == null ? idx : Number(child.position)
     })
   }
 }
@@ -249,11 +253,25 @@ export async function importManifest({ manifestPath, schemaPath = DEFAULT_SCHEMA
     projectId: project
   }
 
+  const positionRows = await db.all(
+    `SELECT parent_id, MAX(position) AS max_position
+       FROM tasks
+      WHERE project_id = $1
+      GROUP BY parent_id`,
+    [project]
+  )
+  const maxPositionByParent = new Map()
+  for (const row of positionRows) {
+    const key = row.parent_id ? String(row.parent_id) : '__root__'
+    const value = Number(row.max_position)
+    maxPositionByParent.set(key, Number.isFinite(value) ? value : -1)
+  }
+
   await transaction(async (tx) => {
-    await tx.run('DELETE FROM tasks WHERE project_id = $1', [project])
+    let rootBase = (maxPositionByParent.get('__root__') ?? -1) + 1
     for (let idx = 0; idx < roots.length; idx += 1) {
       const root = roots[idx]
-      if (root.position == null) root.position = idx
+      const rootPosition = rootBase + idx
       // eslint-disable-next-line no-await-in-loop
       await insertNoteTree({
         parentId: null,
@@ -262,7 +280,8 @@ export async function importManifest({ manifestPath, schemaPath = DEFAULT_SCHEMA
         resolveAsset,
         projectId: project,
         tx,
-        idMap
+        idMap,
+        positionOverride: rootPosition
       })
     }
   })

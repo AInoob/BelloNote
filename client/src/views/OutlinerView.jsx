@@ -44,6 +44,7 @@ import {
 import { computeActiveTask as computeActiveTaskUtil } from './outliner/activeTaskUtils.js'
 import { FilterBar } from './outliner/FilterBar.jsx'
 import { SlashMenu } from './outliner/SlashMenu.jsx'
+import { ExportImportControls } from './outliner/ExportImportControls.jsx'
 import { handleDragOver, handleDrop } from './outliner/dragDropHandlers.js'
 import { handlePaste } from './outliner/pasteHandler.js'
 import { handleKeyDown } from './outliner/keyDownHandler.js'
@@ -666,10 +667,9 @@ export default function OutlinerView({
 
   useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrollSaveFrameRef)
 
-  useEffect(() => {
-
+  const loadOutlineFromServer = useCallback(async () => {
     if (!editor || isReadOnly) return
-    ;(async () => {
+    try {
       const data = await getOutline()
       const rawRoots = data.roots || []
       const roots = stripHighlightMarksFromOutlineNodes(rawRoots)
@@ -680,8 +680,8 @@ export default function OutlinerView({
       setDirty(false)
       pushDebug('loaded outline', { roots: roots.length })
       applyCollapsedStateForRoot(focusRootRef.current)
-      // Ensure filters (status/archive) apply on first load
       scheduleApplyStatusFilter('initial-outline-load')
+      restoredScrollRef.current = false
       setTimeout(() => {
         if (restoredScrollRef.current) {
           LOG('scrollState.restore skip (already restored)')
@@ -725,16 +725,8 @@ export default function OutlinerView({
               return
             }
 
-            const computeDesired = () => {
-              const rect = targetEl.getBoundingClientRect()
-              if (!rect || !Number.isFinite(rect.top)) return null
-              const absoluteTop = rect.top + window.scrollY
-              const desired = Math.max(0, absoluteTop - expectedOffset)
-              return { absoluteTop, rectTop: rect.top, desired }
-            }
-
-            const snapshot = computeDesired()
-            if (!snapshot) {
+            const rect = targetEl.getBoundingClientRect()
+            if (!rect || !Number.isFinite(rect.top)) {
               if (attempt + 1 < maxAttempts) {
                 LOG('scrollState.restore no snapshot (retry)', { attempt, topTaskId })
                 requestAnimationFrame(() => attemptRestore(attempt + 1))
@@ -746,39 +738,31 @@ export default function OutlinerView({
               return
             }
 
-            const metadata = {
-              attempt,
-              topTaskId,
-              desired: snapshot.desired,
-              expectedOffset
-            }
-            pushDebug('restoring scroll anchor', metadata)
-            LOG('scrollState.restore attempt', metadata)
-            window.scrollTo({ top: snapshot.desired, behavior: 'auto' })
+            const absoluteTop = rect.top + window.scrollY
+            const desired = Math.max(0, absoluteTop - expectedOffset)
+            pushDebug('restoring scroll anchor', { attempt, topTaskId, desired, expectedOffset })
+            LOG('scrollState.restore attempt', { attempt, topTaskId, desired, expectedOffset })
+            window.scrollTo({ top: desired, behavior: 'auto' })
 
             requestAnimationFrame(() => {
-              const rect = targetEl.getBoundingClientRect()
-              const actualOffset = rect && Number.isFinite(rect.top) ? rect.top : null
+              const updatedRect = targetEl.getBoundingClientRect()
+              const actualOffset = updatedRect && Number.isFinite(updatedRect.top) ? updatedRect.top : null
               const diff = (actualOffset === null || !Number.isFinite(expectedOffset))
                 ? null
                 : Math.abs(actualOffset - expectedOffset)
-              const resultMeta = {
-                ...metadata,
-                actualOffset,
-                diff
-              }
+              const meta = { attempt, topTaskId, actualOffset, diff, expectedOffset }
               if (diff !== null && diff > tolerance && attempt + 1 < maxAttempts) {
-                LOG('scrollState.restore retry', resultMeta)
+                LOG('scrollState.restore retry', meta)
                 requestAnimationFrame(() => attemptRestore(attempt + 1))
                 return
               }
               if (diff !== null && diff > tolerance) {
-                LOG('scrollState.restore drift', resultMeta)
+                LOG('scrollState.restore drift', meta)
               } else {
-                LOG('scrollState.restore success', resultMeta)
+                LOG('scrollState.restore success', meta)
               }
               restoredScrollRef.current = true
-              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId })
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
             })
           }
 
@@ -790,8 +774,15 @@ export default function OutlinerView({
           LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
         }
       }, 120)
-    })()
-  }, [editor, isReadOnly, applyCollapsedStateForRoot, scheduleApplyStatusFilter])
+    } catch (err) {
+      console.error('[outline] failed to load outline', err)
+    }
+  }, [editor, isReadOnly, applyCollapsedStateForRoot, focusRootRef, scheduleApplyStatusFilter, restoredScrollRef, pushDebug])
+
+  useEffect(() => {
+    if (!editor || isReadOnly) return
+    loadOutlineFromServer()
+  }, [editor, isReadOnly, loadOutlineFromServer])
 
   useEffect(() => {
     if (isReadOnly) return
@@ -870,6 +861,9 @@ export default function OutlinerView({
             excludeInputRef={excludeInputRef}
             excludeTagInput={excludeTagInput}
             clearTagFilters={clearTagFilters}
+            extraControls={(
+              <ExportImportControls onImportComplete={loadOutlineFromServer} />
+            )}
           />
       )}
       {focusRootId && (

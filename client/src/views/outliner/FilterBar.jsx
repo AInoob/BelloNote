@@ -22,6 +22,7 @@ import React from 'react'
  * @param {Object} props.excludeInputRef - Ref to exclude input element
  * @param {string} props.excludeTagInput - Exclude tag input value
  * @param {Function} props.clearTagFilters - Function to clear all tag filters
+ * @param {React.ReactNode} [props.extraControls] - Optional controls rendered at the end of the bar
  */
 export function FilterBar({
   availableFilters,
@@ -42,7 +43,8 @@ export function FilterBar({
   excludeFilterList,
   excludeInputRef,
   excludeTagInput,
-  clearTagFilters
+  clearTagFilters,
+  extraControls
 }) {
   return (
     <div className="status-filter-bar">
@@ -136,6 +138,11 @@ export function FilterBar({
           >Clear</button>
         )}
       </div>
+      {extraControls && (
+        <div className="filter-extra-controls">
+          {extraControls}
+        </div>
+      )}
     </div>
   )
 }

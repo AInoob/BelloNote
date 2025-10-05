@@ -20,7 +20,7 @@ export {
   createCheckpoint
 } from './services/historyService.js'
 export { getHealth } from './services/healthService.js'
+export { fetchExportManifest, importManifestFile } from './services/exportImportService.js'
 
 // Legacy compatibility - keep old export name
 export { saveOutline as saveOutlineApi } from './services/outlineService.js'
-

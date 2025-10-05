@@ -24,3 +24,8 @@ export {
   createCheckpoint,
   getHealth
 } from './api/index.js'
+
+export {
+  fetchExportManifest,
+  importManifestFile
+} from './api/index.js'

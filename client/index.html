@@ -21,6 +21,7 @@
       main { min-height: calc(100vh - 86px); padding:.9rem; }
       /* Make the outline filter sticky below the topbar */
       .status-filter-bar { position: sticky; top: 70px; z-index: 65; background:#fff; display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px; padding:6px 4px; margin-top:-1px; border-top:1px solid var(--border); box-shadow: 0 1px 0 rgba(229,231,235,1) inset; }
+      .filter-extra-controls { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
       .focus-banner { position: sticky; top: 126px; z-index: 64; background: rgba(79,70,229,.08); border:1px solid rgba(79,70,229,.18); border-radius:12px; padding:8px 12px; display:flex; align-items:center; gap:12px; margin:-2px 0 10px; backdrop-filter: blur(4px); }
       .focus-banner-label { display:flex; align-items:center; gap:8px; font-size:.88rem; color:#1f2937; }
       .focus-banner-title { font-weight:600; color:#1d4ed8; background:rgba(99,102,241,.12); padding:2px 10px; border-radius:999px; }
@@ -58,6 +59,9 @@
       }
       /* Dim (grey out) status filter buttons when not selected, while keeping their colors */
       .status-filter-bar .btn.pill[data-status]:not(.active) { opacity: .55; }
+      .export-import-controls { display:flex; align-items:center; gap:8px; }
+      .export-import-controls button { min-width: 84px; }
+      .export-import-status { font-size:.8rem; color:var(--muted); }
 
 
       .tiptap a { color:#2563eb; text-decoration:underline; }

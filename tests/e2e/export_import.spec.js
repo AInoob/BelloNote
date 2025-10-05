@@ -149,6 +149,84 @@ test('export and import round trip with image assets', async ({ page, request, a
   expect(imageAttrs['data-file-id']).toBeDefined()
 })
 
+test('import appends to existing outline', async ({ request, app }) => {
+  await ensureBackendReady(request, app)
+  const initialOutline = [
+    buildTask({
+      title: 'Existing root',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Existing body' }] }],
+      children: [buildTask({ title: 'Existing child', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Child body' }] }] })]
+    })
+  ]
+  await app.resetOutline(initialOutline)
+
+  const paragraph = [{ type: 'paragraph', content: [{ type: 'text', text: 'Imported body' }] }]
+  const manifest = {
+    app: 'BelloNote',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
+    entities: {
+      notes: [
+        {
+          id: 'import-root',
+          title: 'Imported root',
+          contentFormat: 'json',
+          content: JSON.stringify(paragraph),
+          tags: [],
+          status: 'todo',
+          parentId: null,
+          position: 0,
+          workedDates: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'import-child',
+          title: 'Imported child',
+          contentFormat: 'json',
+          content: JSON.stringify(paragraph),
+          tags: [],
+          status: 'todo',
+          parentId: 'import-root',
+          position: 0,
+          workedDates: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ],
+      tags: [],
+      users: []
+    },
+    assets: [],
+    meta: {}
+  }
+
+  const importResponse = await request.post(`${app.apiUrl}/api/import`, {
+    headers: { 'x-playwright-test': '1' },
+    multipart: {
+      manifest: {
+        name: 'append.json',
+        mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify(manifest), 'utf8')
+      }
+    }
+  })
+  expect(importResponse.ok()).toBeTruthy()
+  const importJson = await importResponse.json()
+  expect(importJson.ok).toBe(true)
+  expect(importJson.notesImported).toBe(2)
+
+  const outlineResponse = await request.get(`${app.apiUrl}/api/outline`, {
+    headers: { 'x-playwright-test': '1' }
+  })
+  expect(outlineResponse.ok()).toBeTruthy()
+  const outlineJson = await outlineResponse.json()
+  const rootTitles = (outlineJson.roots || []).map((node) => node.title)
+  expect(rootTitles).toContain('Existing root')
+  expect(rootTitles).toContain('Imported root')
+  expect(rootTitles[rootTitles.length - 1]).toBe('Imported root')
+})
+
 test('import rejects invalid manifest', async ({ request, app }) => {
   await ensureBackendReady(request, app)
   const invalidManifest = Buffer.from(JSON.stringify({ foo: 'bar' }), 'utf8')
@@ -166,4 +244,37 @@ test('import rejects invalid manifest', async ({ request, app }) => {
   const body = await importResponse.json()
   expect(body.ok).toBe(false)
   expect(body.error).toContain('Manifest validation failed')
+})
+
+test('export and import via UI', async ({ page, request, app }) => {
+  await ensureBackendReady(request, app)
+  const outline = [
+    buildTask({ title: 'UI parent', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'UI body' }] }] })
+  ]
+  await app.resetOutline(outline)
+
+  await page.goto('/')
+  await expect.poll(async () => {
+    const count = await page.locator('li.li-node').count()
+    return count > 0 ? 'ready' : 'loading'
+  }, { timeout: 15000 }).toBe('ready')
+  await expect(page.locator('li.li-node p').first()).toContainText('UI body', { timeout: 5000 })
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.click('[data-testid="export-outline"]')
+  const download = await downloadPromise
+  const manifestPath = path.join(app.dataDir, `ui-export-${Date.now()}.json`)
+  await download.saveAs(manifestPath)
+  expect(fs.existsSync(manifestPath)).toBeTruthy()
+
+  await request.post(`${app.apiUrl}/api/test/reset`, {
+    headers: { 'x-playwright-test': '1' }
+  })
+
+  await page.reload()
+  await expect(page.locator('.tiptap.ProseMirror')).toBeVisible({ timeout: 10000 })
+
+  await page.setInputFiles('[data-testid="import-manifest-input"]', manifestPath)
+  await expect(page.locator('[data-testid="export-import-status"]')).toHaveText(/Imported/i, { timeout: 10000 })
+  await expect(page.locator('li.li-node p').first()).toContainText('UI body', { timeout: 10000 })
 })
