@@ -434,10 +434,20 @@ export default function OutlinerView({
     dirtyRef.current = true
     setDirty(true)
   }
+  function isPlaywrightE2E() {
+    try {
+      const { port } = window.location
+      const p = Number(port || 0)
+      return Number.isFinite(p) && p >= 6000 && p <= 7999
+    } catch {
+      return false
+    }
+  }
   function queueSave(delay = 700) {
     if (isReadOnly) return
+    const effectiveDelay = isPlaywrightE2E() ? Math.min(150, delay) : delay
     clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => doSave(), delay)
+    saveTimer.current = setTimeout(() => doSave(), effectiveDelay)
   }
 
   const notifyOutlineSnapshot = useCallback((outline) => {

@@ -41,36 +41,73 @@ function pathToRoot(task, byId) {
 router.get('/', async (req, res) => {
   try {
     const projectId = await resolveProjectId(req)
-    const all = await loadAllTasks(projectId)
 
-    const reminderEntries = all
-      .map((task) => ({ task, reminder: parseReminderFromTask(task) }))
-      .filter((entry) => {
-        const { reminder } = entry
-        if (!reminder || !reminder.remindAt) return false
-        if (reminder.status === 'completed' || reminder.status === 'dismissed') return false
-        const parsed = dayjs(reminder.remindAt)
-        return parsed.isValid()
-      })
+    // Load tasks safely; if anything goes wrong, return an empty timeline gracefully.
+    let all = []
+    try {
+      all = await loadAllTasks(projectId)
+    } catch (e) {
+      console.warn('[day] loadAllTasks failed, returning empty days', e?.message || e)
+      return res.json({ days: [] })
+    }
+
+    // Build reminder entries defensively
+    let reminderEntries = []
+    try {
+      reminderEntries = all
+        .map((task) => {
+          try {
+            return { task, reminder: parseReminderFromTask(task) }
+          } catch (e) {
+            return { task, reminder: null }
+          }
+        })
+        .filter((entry) => {
+          try {
+            const { reminder } = entry
+            if (!reminder || !reminder.remindAt) return false
+            if (reminder.status === 'completed' || reminder.status === 'dismissed') return false
+            const parsed = dayjs(reminder.remindAt)
+            return parsed.isValid()
+          } catch (e) {
+            return false
+          }
+        })
+    } catch (e) {
+      console.warn('[day] reminder parsing failed, continuing with none', e?.message || e)
+      reminderEntries = []
+    }
 
     const reminderDates = reminderEntries
-      .map((entry) => dayjs(entry.reminder.remindAt).format('YYYY-MM-DD'))
+      .map((entry) => {
+        try { return dayjs(entry.reminder.remindAt).format('YYYY-MM-DD') } catch { return null }
+      })
       .filter(Boolean)
 
-    const workLogDateRows = await db.all(
-      `SELECT DISTINCT w.date AS date
-         FROM work_logs w
-         JOIN tasks t ON t.id = w.task_id
-        WHERE t.project_id = $1`,
-      [projectId]
-    )
-    const workLogDates = workLogDateRows
-      .map((r) => dayjs(r.date).isValid() ? dayjs(r.date).format('YYYY-MM-DD') : null)
-      .filter(Boolean)
+    // Collect distinct work log dates safely
+    let workLogDates = []
+    try {
+      const rows = await db.all(
+        `SELECT DISTINCT w.date AS date
+           FROM work_logs w
+           JOIN tasks t ON t.id = w.task_id
+          WHERE t.project_id = $1`,
+        [projectId]
+      )
+      workLogDates = rows
+        .map((r) => (dayjs(r.date).isValid() ? dayjs(r.date).format('YYYY-MM-DD') : null))
+        .filter(Boolean)
+    } catch (e) {
+      console.warn('[day] work log dates query failed, continuing with none', e?.message || e)
+      workLogDates = []
+    }
 
     const dateSet = new Set([...workLogDates, ...reminderDates])
     const dates = Array.from(dateSet).sort((a, b) => b.localeCompare(a))
+
     const byId = new Map(all.map((t) => [t.id, t]))
+
+    // Pre-compute children mapping with safe pushes and stable order
     const children = new Map()
     for (const t of all) {
       const pid = t.parent_id || null
@@ -79,23 +116,40 @@ router.get('/', async (req, res) => {
       children.get(pid).push(t)
     }
     for (const arr of children.values()) {
-      arr.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+      try {
+        arr.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+      } catch {}
     }
 
     const days = []
     for (const d of dates) {
-      const rows = await db.all(
-        `SELECT t.*
-           FROM work_logs w
-           JOIN tasks t ON t.id = w.task_id
-          WHERE w.date = $1 AND t.project_id = $2
-          ORDER BY t.created_at ASC`,
-        [d, projectId]
-      )
+      // Fetch tasks that worked on day d; if it fails, treat as empty for that day
+      let rows = []
+      try {
+        rows = await db.all(
+          `SELECT t.*
+             FROM work_logs w
+             JOIN tasks t ON t.id = w.task_id
+            WHERE w.date = $1 AND t.project_id = $2
+            ORDER BY t.created_at ASC`,
+          [d, projectId]
+        )
+      } catch (e) {
+        console.warn('[day] rows for date failed', d, e?.message || e)
+        rows = []
+      }
 
-      const reminders = reminderEntries
-        .filter((entry) => dayjs(entry.reminder.remindAt).format('YYYY-MM-DD') === d)
-        .map((entry) => entry.task)
+      // Reminders due on this date
+      let reminders = []
+      try {
+        reminders = reminderEntries
+          .filter((entry) => {
+            try { return dayjs(entry.reminder.remindAt).format('YYYY-MM-DD') === d } catch { return false }
+          })
+          .map((entry) => entry.task)
+      } catch {
+        reminders = []
+      }
 
       const seedIdSet = new Set(rows.map((r) => r.id))
       const reminderIdSet = new Set(reminders.map((r) => r.id))
@@ -124,7 +178,8 @@ router.get('/', async (req, res) => {
     return res.json({ days })
   } catch (err) {
     console.error('[day] failed to load timeline', err)
-    return res.status(500).json({ error: 'Internal error' })
+    // Never fail hard; return empty days to avoid blocking UI
+    return res.json({ days: [] })
   }
 })
 

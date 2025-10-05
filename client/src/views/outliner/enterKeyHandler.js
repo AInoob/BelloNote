@@ -162,6 +162,7 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
           const tr2 = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
           view.dispatch(tr2)
         }
+        if (typeof window !== 'undefined') window.__ENTER_SELECTION = { pos: caretPos, reason: 'empty-sibling' }
         if (pendingEmptyCaretRef?.current != null) pendingEmptyCaretRef.current = true
       } catch (error) {
         if (typeof console !== 'undefined') console.warn('[split-adjust] enforce caret failed', error)
@@ -300,9 +301,44 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
       logCursorTiming('append-child-from-parent', enterStartedAt)
       return true
     }
+
+    // Ensure caret lands in the newly created sibling for top-level splits
     let selectionAdjusted = false
     let finalCaretPos = null
-    if (isChild && typeof parentPos === 'number') {
+
+    if (!isChild && typeof parentPos === 'number') {
+      try {
+        const latest = view.state
+        const parentLatest = latest.doc.nodeAt(parentPos)
+        let targetPos = typeof adjustment?.newItemPos === 'number' ? adjustment.newItemPos : null
+        if (targetPos === null && parentLatest) {
+          const idx = originalIndex + 1
+          if (idx >= 0 && idx < parentLatest.childCount) {
+            targetPos = positionOfListChild(parentLatest, parentPos, idx)
+          }
+        }
+        if (typeof targetPos === 'number') {
+          const node = latest.doc.nodeAt(targetPos)
+          const para = node?.childCount ? node.child(0) : null
+          if (para && para.type?.name === 'paragraph') {
+            const caretPos = targetPos + 1 + para.content.size
+            // Apply immediately, then schedule retries as needed
+            try {
+              const trNow = latest.tr.setSelection(TextSelection.create(latest.doc, caretPos)).scrollIntoView()
+              view.dispatch(trNow)
+              if (typeof window !== 'undefined') window.__ENTER_SELECTION = { pos: caretPos, reason: 'top-level-split' }
+            } catch (e) {
+              if (typeof console !== 'undefined') console.warn('[split-adjust] immediate caret set failed', e)
+            }
+            selectionAdjusted = true
+            finalCaretPos = caretPos
+            pendingEmptyCaretRef.current = true
+          }
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[split-adjust] top-level caret restore failed', error)
+      }
+    } else if (isChild && typeof parentPos === 'number') {
       try {
         const latest = view.state
         const parentLatest = latest.doc.nodeAt(parentPos)
@@ -367,6 +403,7 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
         if (typeof console !== 'undefined') console.warn('[split-adjust] child caret restore failed', error)
       }
     }
+
     view.focus()
     requestAnimationFrame(() => view.focus())
     if (selectionAdjusted) {
@@ -387,6 +424,7 @@ export function handleEnterKey(event, editor, now, logCursorTiming, pushDebug, p
       if (typeof window !== 'undefined') {
         window.requestAnimationFrame(applyCaretSelection)
         window.setTimeout(applyCaretSelection, 0)
+        window.setTimeout(applyCaretSelection, 50)
       }
     }
     logCursorTiming('split-list-item', enterStartedAt)

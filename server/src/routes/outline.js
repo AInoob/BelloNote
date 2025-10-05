@@ -17,6 +17,7 @@ router.get('/outline', async (req, res) => {
       `SELECT * FROM tasks WHERE project_id = $1 ORDER BY position ASC, created_at ASC, id ASC`,
       [projectId]
     )
+    try { console.log('[outline:get] tasks fetched', { projectId, count: tasks.length }) } catch {}
 
     const dataUriRe = /data:[^;]+;base64,/i
     for (const task of tasks) {
@@ -58,6 +59,7 @@ router.get('/outline', async (req, res) => {
       map.get(l.task_id).push(l.date)
     }
     const tree = buildProjectTree(tasks, map)
+    try { console.log('[outline:get] roots', { projectId, roots: tree.length }) } catch {}
     return res.json({ roots: tree })
   } catch (err) {
     console.error('[outline] failed to load outline', err)
@@ -66,19 +68,41 @@ router.get('/outline', async (req, res) => {
 })
 
 router.post('/outline', async (req, res) => {
-  const projectId = await resolveProjectId(req)
-  const { outline } = req.body
-  if (!Array.isArray(outline)) return res.status(400).json({ error: 'outline array required' })
-
   try {
-    console.log('[outline] save', outline.map(o => ({ id: o.id, title: o.title, dates: o.dates, children: (o.children || []).length })))
-  } catch (e) {
-    console.log('[outline] save log failed', e.message)
-  }
+    const projectId = await resolveProjectId(req)
 
-  const newIdMap = {}
+    // Accept outline in multiple shapes to be resilient to client transport:
+    // - { outline: [...] }
+    // - [...] (raw array)
+    // - '{ "outline": [...] }' (stringified)
+    // - '[]' (stringified raw array)
+    let incoming = req.body
+    let outline = null
+    try {
+      if (Array.isArray(incoming?.outline)) outline = incoming.outline
+      else if (Array.isArray(incoming)) outline = incoming
+      else if (typeof incoming === 'string') {
+        const parsed = JSON.parse(incoming)
+        if (Array.isArray(parsed?.outline)) outline = parsed.outline
+        else if (Array.isArray(parsed)) outline = parsed
+      }
+    } catch (parseErr) {
+      console.warn('[outline] request body parse failed', parseErr?.message || parseErr)
+    }
 
-  try {
+    if (!Array.isArray(outline)) return res.status(400).json({ error: 'outline array required' })
+
+    try {
+      const titles = outline.slice(0, 5).map(o => (o?.title || '').slice(0, 80))
+      console.log('[outline] incoming', { projectId, count: outline.length, sampleTitles: titles })
+    } catch (e) {
+      console.log('[outline] log incoming failed', e?.message || e)
+    }
+
+    const newIdMap = {}
+    let insertedCount = 0
+    let updatedCount = 0
+
     const { deleted } = await transaction(async (tx) => {
       const existingRows = await tx.all(`SELECT id FROM tasks WHERE project_id = $1`, [projectId])
       const existing = existingRows.map((r) => String(r.id))
@@ -86,19 +110,19 @@ router.post('/outline', async (req, res) => {
 
       async function upsertNode(node, parentId = null, position = 0) {
         let realId
-        const rawId = node.id
+        const rawId = node?.id
         const id = rawId == null ? null : String(rawId)
-        const rawBody = parseMaybeJson(node.body ?? node.content)
-        const sanitizedBody = sanitizeRichText(rawBody, projectId, { title: node.title })
+        const rawBody = parseMaybeJson(node?.body ?? node?.content)
+        const sanitizedBody = sanitizeRichText(rawBody, projectId, { title: node?.title })
         const contentJson = stringifyNodes(sanitizedBody)
         const tagNodes = Array.isArray(sanitizedBody) ? sanitizedBody : null
         const tags = computeTaskTags({
-          title: node.title || 'Untitled',
+          title: node?.title || 'Untitled',
           nodes: tagNodes,
           html: tagNodes ? '' : contentJson
         })
         const tagsJson = JSON.stringify(tags)
-        const normalizedStatus = (node.status ?? '').trim()
+        const normalizedStatus = String(node?.status ?? '').trim()
         const statusValue = ['todo', 'in-progress', 'done', ''].includes(normalizedStatus)
           ? normalizedStatus
           : ''
@@ -108,8 +132,9 @@ router.post('/outline', async (req, res) => {
           await tx.run(
             `INSERT INTO tasks (id, project_id, parent_id, title, status, content, tags, position)
              VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
-            [realId, projectId, parentId, node.title || 'Untitled', statusValue, contentJson, tagsJson, position]
+            [realId, projectId, parentId, node?.title || 'Untitled', statusValue, contentJson, tagsJson, position]
           )
+          insertedCount += 1
           if (id) newIdMap[id] = realId
         } else {
           realId = id
@@ -123,12 +148,16 @@ router.post('/outline', async (req, res) => {
                    position = $6,
                    updated_at = NOW()
              WHERE id = $7`,
-            [parentId, node.title || 'Untitled', statusValue, contentJson, tagsJson, position, realId]
+            [parentId, node?.title || 'Untitled', statusValue, contentJson, tagsJson, position, realId]
           )
+          updatedCount += 1
         }
         seen.add(realId)
 
-        const wanted = new Set((node.dates || []).filter(Boolean))
+        const rawDates = Array.isArray(node?.dates)
+          ? node.dates
+          : (Array.isArray(node?.workedDates) ? node.workedDates : (Array.isArray(node?.ownWorkedOnDates) ? node.ownWorkedOnDates : []))
+        const wanted = new Set((rawDates || []).map(d => String(d)).filter(Boolean))
         const haveRows = await tx.all(`SELECT date FROM work_logs WHERE task_id = $1`, [realId])
         const have = new Set(haveRows.map((r) => r.date))
         for (const d of wanted) {
@@ -146,7 +175,7 @@ router.post('/outline', async (req, res) => {
           }
         }
 
-        if (Array.isArray(node.children)) {
+        if (Array.isArray(node?.children)) {
           for (let idx = 0; idx < node.children.length; idx += 1) {
             await upsertNode(node.children[idx], realId, idx)
           }
@@ -166,12 +195,20 @@ router.post('/outline', async (req, res) => {
       return { deleted: unseen }
     })
 
-    await recordVersion(projectId, 'autosave')
+    try {
+      console.log('[outline] upsert summary', { projectId, insertedCount, updatedCount, deletedCount: (deleted || []).length })
+    } catch {}
+
+    try {
+      await recordVersion(projectId, 'autosave')
+    } catch (verr) {
+      console.warn('[outline] recordVersion skipped', verr?.message || verr)
+    }
 
     return res.json({ ok: true, newIdMap, deleted })
   } catch (err) {
     console.error('[outline] failed to save outline', err)
-    return res.status(500).json({ error: err.message || 'Failed to save outline' })
+    return res.status(500).json({ error: err?.message || 'Failed to save outline' })
   }
 })
 

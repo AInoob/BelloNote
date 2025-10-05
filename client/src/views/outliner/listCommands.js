@@ -104,21 +104,23 @@ export function runSplitListItemWithSelection(editor, options = {}) {
     const splitDebugInfo = { nested: 0, remaining: 0, reason: 'unprocessed', index: itemIndex, splitAtStart }
 
     if (bulletListType) {
-      const newItemResolved = tr.doc.resolve(Math.min(tr.doc.content.size, initialSelectionPos))
+      // Prefer a mapping-based computation of the new sibling's position to avoid
+      // resolving into the wrong node (e.g., the following existing sibling).
+      const originalEnd = listItemPos + listItemNode.nodeSize
+      const mappedNewItemPos = tr.mapping.map(originalEnd, 1)
       let newListItem = null
       let newListItemPos = null
-      if (listItemDepth <= newItemResolved.depth) {
-        try {
-          newListItem = newItemResolved.node(listItemDepth)
-          newListItemPos = newItemResolved.before(listItemDepth)
-        } catch (error) {
-          splitDebugInfo.reason = `resolve-failed:${error?.message || 'unknown'}`
-          newListItem = null
-          newListItemPos = null
-        }
-      } else {
-        splitDebugInfo.reason = `depth-mismatch:${listItemDepth}->${newItemResolved.depth}`
+      try {
+        // The new list item should start at or before the mapped end; walk back to node start
+        const resolved = tr.doc.resolve(Math.min(tr.doc.content.size, mappedNewItemPos))
+        newListItem = resolved.node(listItemDepth)
+        newListItemPos = resolved.before(listItemDepth)
+      } catch (error) {
+        splitDebugInfo.reason = `map-resolve-failed:${error?.message || 'unknown'}`
+        newListItem = null
+        newListItemPos = null
       }
+
       if (newListItem) {
         const nestedLists = []
         const remainingChildren = []
@@ -156,8 +158,8 @@ export function runSplitListItemWithSelection(editor, options = {}) {
           newCaretPos = newListItemPos + 1 + paragraphSize
           if (typeof window !== 'undefined') window.__WL_SPLIT_CARET = { newCaretPos, newListItemPos, paragraphSize }
         }
-      } else if (!splitDebugInfo.reason.startsWith('resolve') && !splitDebugInfo.reason.startsWith('depth')) {
-        splitDebugInfo.reason = 'no-new-item'
+      } else {
+        splitDebugInfo.reason = splitDebugInfo.reason === 'unprocessed' ? 'no-new-item' : splitDebugInfo.reason
       }
     } else {
       splitDebugInfo.reason = 'no-bullet-type'
