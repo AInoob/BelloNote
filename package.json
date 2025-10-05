@@ -3,10 +3,13 @@
   "private": true,
   "scripts": {
     "pretest:e2e": "VITE_API_URL=http://127.0.0.1:5231 npm --prefix client run build",
-    "test:e2e": "npx playwright test"
+    "test:e2e": "npx playwright test",
+    "migrate:pg": "node scripts/migrate-sqlite-to-postgres.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",
-    "playwright": "^1.55.0"
+    "pg": "^8.11.5",
+    "playwright": "^1.55.0",
+    "sql.js": "^1.11.0"
   }
 }

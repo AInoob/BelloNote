@@ -25,6 +25,18 @@ function buildInitialOutline() {
   ]
 }
 
+function buildTask(title) {
+  return {
+    id: null,
+    title,
+    status: '',
+    dates: [],
+    ownWorkedOnDates: [],
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: title }] }],
+    children: []
+  }
+}
+
 async function openOutline(page) {
   await page.goto('/')
   const editor = page.locator('.tiptap.ProseMirror')
@@ -139,6 +151,22 @@ test('Enter at end of task creates new sibling with empty status', async ({ page
   expect(newStatus).toBe('')
 })
 
+test('Enter between siblings focuses the new blank item', async ({ page, app }) => {
+  await resetOutline(app, [buildTask('task 1'), buildTask('task 2')])
+  await openOutline(page)
+
+  await setSelectionToEnd(page, 0)
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(50)
+  await page.keyboard.type('bello')
+  await page.waitForTimeout(50)
+
+  expect(await getItemCount(page)).toBe(3)
+  expect(await getItemText(page, 0)).toBe('task 1')
+  expect(await getItemText(page, 1)).toBe('bello')
+  expect(await getItemText(page, 2)).toBe('task 2')
+})
+
 // Test 2: Enter in middle of task creates new empty task (doesn't split text)
 test('Enter in middle of task creates new empty task', async ({ page }) => {
   await openOutline(page)
@@ -237,24 +265,23 @@ test('Enter on empty task creates new task and keeps focus', async ({ page }) =>
   await typeIntoFirstItem(page, 'Task 1')
   await page.keyboard.press('Enter')
   await page.waitForTimeout(100)
-  
+
   // Don't type anything, just press Enter again
   await page.keyboard.press('Enter')
   await page.waitForTimeout(100)
-  
+
   const count = await getItemCount(page)
   expect(count).toBe(3)
   
-  // Verify focus is on the new (third) item
-  const focusedText = await page.evaluate(() => {
+  const focusedIndex = await page.evaluate(() => {
     const sel = window.getSelection()
-    const node = sel.anchorNode
+    const node = sel?.anchorNode
     const li = node?.parentElement?.closest?.('li.li-node')
     if (!li) return null
     const items = Array.from(document.querySelectorAll('li.li-node'))
     return items.indexOf(li)
   })
-  expect(focusedText).toBe(2)
+  expect(focusedIndex).toBe(2)
 })
 
 // Test 6: Multiple Tab presses create deeply nested structure

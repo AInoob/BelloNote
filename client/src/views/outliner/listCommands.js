@@ -97,6 +97,7 @@ export function runSplitListItemWithSelection(editor, options = {}) {
   const itemIndex = $from.index(listItemDepth)
   const splitAtStart = !!options.splitAtStart
   let performed = false
+  let newCaretPos = null
   const splitSuccess = splitListItem(listItemType)(state, (tr) => {
     performed = true
     const initialSelectionPos = tr.selection.from
@@ -149,6 +150,12 @@ export function runSplitListItemWithSelection(editor, options = {}) {
             splitDebugInfo.reason = 'missing-original'
           }
         }
+        if (newListItemPos !== null) {
+          const paragraphNode = newListItem.childCount > 0 ? newListItem.child(0) : null
+          const paragraphSize = paragraphNode?.content?.size || 0
+          newCaretPos = newListItemPos + 1 + paragraphSize
+          if (typeof window !== 'undefined') window.__WL_SPLIT_CARET = { newCaretPos, newListItemPos, paragraphSize }
+        }
       } else if (!splitDebugInfo.reason.startsWith('resolve') && !splitDebugInfo.reason.startsWith('depth')) {
         splitDebugInfo.reason = 'no-new-item'
       }
@@ -159,7 +166,8 @@ export function runSplitListItemWithSelection(editor, options = {}) {
     if (typeof window !== 'undefined') window.__WL_LAST_SPLIT = splitDebugInfo
     if (typeof console !== 'undefined') console.log('[split-debug] info', splitDebugInfo)
 
-    const mappedSelectionPos = tr.mapping.map(initialSelectionPos, 1)
+    const targetPos = newCaretPos != null ? newCaretPos : initialSelectionPos
+    const mappedSelectionPos = tr.mapping.map(targetPos, 1)
     const resolved = tr.doc.resolve(Math.min(tr.doc.content.size, mappedSelectionPos))
     const nextSelection = TextSelection.create(tr.doc, resolved.pos)
     view.dispatch(tr.setSelection(nextSelection).scrollIntoView())

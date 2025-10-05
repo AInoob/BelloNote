@@ -1,6 +1,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
+import { Extension } from '@tiptap/core'
+import { TextSelection } from 'prosemirror-state'
 import StarterKit from '@tiptap/starter-kit'
 import { ImageWithMeta } from '../extensions/imageWithMeta.js'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
@@ -46,6 +48,7 @@ import { SlashMenu } from './outliner/SlashMenu.jsx'
 import { handleDragOver, handleDrop } from './outliner/dragDropHandlers.js'
 import { handlePaste } from './outliner/pasteHandler.js'
 import { handleKeyDown } from './outliner/keyDownHandler.js'
+import { handleEnterKey } from './outliner/enterKeyHandler.js'
 
 import { ensureUploadedImages } from './outliner/imageUploadUtils.js'
 import { applySearchHighlight as applySearchHighlightUtil } from './outliner/searchHighlightUtils.js'
@@ -67,6 +70,28 @@ import {
 import { FocusContext } from './outliner/FocusContext.js'
 import { LOG } from './outliner/debugUtils.js'
 import { loadScrollState } from './outliner/scrollState.js'
+import { now, logCursorTiming } from './outliner/performanceUtils.js'
+import { cssEscape } from '../utils/cssEscape.js'
+
+const EnterHighPriority = Extension.create({
+  name: 'enterHighPriority',
+  priority: 1000,
+  addOptions() {
+    return {
+      onEnter: null
+    }
+  },
+  addKeyboardShortcuts() {
+    return {
+      Enter: ({ editor, event }) => {
+        if (typeof this.options.onEnter === 'function') {
+          return this.options.onEnter({ editor, event })
+        }
+        return false
+      }
+    }
+  }
+})
 import {
   loadStatusFilter,
   saveStatusFilter,
@@ -205,7 +230,22 @@ export default function OutlinerView({
     []
   )
 
+  const enterHighPriority = useMemo(() => EnterHighPriority.configure({
+    onEnter: ({ editor, event }) => {
+      if (!editor || !event) return false
+      return handleEnterKey({
+        event,
+        editor,
+        now,
+        logCursorTiming,
+        pushDebug,
+        pendingEmptyCaretRef
+      })
+    }
+  }), [pushDebug, pendingEmptyCaretRef])
+
   const extensions = useMemo(() => [
+    enterHighPriority,
     StarterKit.configure({ listItem: false, codeBlock: false }),
     taskListItemExtension,
     Link.configure({ openOnClick: false, autolink: false, linkOnPaste: false }),
@@ -215,7 +255,13 @@ export default function OutlinerView({
     WorkDateHighlighter,
     ReminderTokenInline,
     DetailsBlock
-  ], [taskListItemExtension, CodeBlockWithCopy, imageExtension])
+  ], [enterHighPriority, taskListItemExtension, CodeBlockWithCopy, imageExtension])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__OUTLINER_EXTENSIONS = extensions.map((ext) => ext?.name || null)
+    }
+  }, [extensions])
 
   const editor = useEditor({
     // disable default codeBlock to avoid duplicate name with CodeBlockLowlight
@@ -357,6 +403,39 @@ export default function OutlinerView({
     dom.addEventListener('click', handler)
     return () => dom.removeEventListener('click', handler)
   }, [editor, pushDebug])
+
+  useEffect(() => {
+    if (!editor || isReadOnly) return
+    const { view } = editor
+    const handleBeforeInput = (event) => {
+      const pending = pendingEmptyCaretRef.current
+      if (!pending) return
+      if (!(event instanceof InputEvent)) return
+      if (event.inputType && !event.inputType.startsWith('insert')) return
+      pendingEmptyCaretRef.current = false
+      if (pending && pending.type === 'caret' && typeof pending.pos === 'number') {
+        const caretPos = pending.pos
+        const { state: curState, view: curView } = editor
+        try {
+          const chainResult = editor?.chain?.().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
+          if (!chainResult) {
+            const tr = curState.tr.setSelection(TextSelection.create(curState.doc, caretPos)).scrollIntoView()
+            curView.dispatch(tr)
+          }
+          if (event.inputType === 'insertText' && typeof event.data === 'string' && event.data.length > 0) {
+            event.preventDefault()
+            editor?.chain?.().focus().insertContent(event.data).run()
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined') console.warn('[beforeinput caret] apply failed', error)
+        }
+      }
+    }
+    view.dom.addEventListener('beforeinput', handleBeforeInput, true)
+    return () => {
+      view.dom.removeEventListener('beforeinput', handleBeforeInput, true)
+    }
+  }, [editor, isReadOnly])
 
   const {
     slashOpen,
@@ -621,12 +700,112 @@ export default function OutlinerView({
       // Ensure filters (status/archive) apply on first load
       scheduleApplyStatusFilter('initial-outline-load')
       setTimeout(() => {
-        if (restoredScrollRef.current) return
-        const state = loadScrollState()
-        if (state && typeof state.scrollY === 'number') {
-          window.scrollTo({ top: state.scrollY, behavior: 'auto' })
+        if (restoredScrollRef.current) {
+          LOG('scrollState.restore skip (already restored)')
+          return
         }
-        restoredScrollRef.current = true
+        const state = loadScrollState()
+        if (state && typeof state.topTaskId === 'string' && state.topTaskId) {
+          const topTaskId = state.topTaskId
+          const expectedOffset = Number.isFinite(state.topTaskOffset) ? state.topTaskOffset : 0
+          const maxAttempts = 6
+          const tolerance = 12
+          const attemptRestore = (attempt = 0) => {
+            if (restoredScrollRef.current) return
+            if (!editor || !editor.view || !editor.view.dom) {
+              if (attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore waiting for editor', { attempt, topTaskId })
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              LOG('scrollState.restore giveup (no editor)', { attempt, topTaskId })
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+              return
+            }
+            let targetEl = null
+            try {
+              targetEl = editor.view.dom.querySelector(`li.li-node[data-id="${cssEscape(String(topTaskId))}"]`)
+            } catch (err) {
+              LOG('scrollState.restore selector error', { message: err?.message })
+              targetEl = null
+            }
+            if (!targetEl) {
+              if (attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore missing target (retry)', { attempt, topTaskId })
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              LOG('scrollState.restore missing target (giveup)', { attempt, topTaskId })
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+              return
+            }
+
+            const computeDesired = () => {
+              const rect = targetEl.getBoundingClientRect()
+              if (!rect || !Number.isFinite(rect.top)) return null
+              const absoluteTop = rect.top + window.scrollY
+              const desired = Math.max(0, absoluteTop - expectedOffset)
+              return { absoluteTop, rectTop: rect.top, desired }
+            }
+
+            const snapshot = computeDesired()
+            if (!snapshot) {
+              if (attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore no snapshot (retry)', { attempt, topTaskId })
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              LOG('scrollState.restore no snapshot (giveup)', { attempt, topTaskId })
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+              return
+            }
+
+            const metadata = {
+              attempt,
+              topTaskId,
+              desired: snapshot.desired,
+              expectedOffset
+            }
+            pushDebug('restoring scroll anchor', metadata)
+            LOG('scrollState.restore attempt', metadata)
+            window.scrollTo({ top: snapshot.desired, behavior: 'auto' })
+
+            requestAnimationFrame(() => {
+              const rect = targetEl.getBoundingClientRect()
+              const actualOffset = rect && Number.isFinite(rect.top) ? rect.top : null
+              const diff = (actualOffset === null || !Number.isFinite(expectedOffset))
+                ? null
+                : Math.abs(actualOffset - expectedOffset)
+              const resultMeta = {
+                ...metadata,
+                actualOffset,
+                diff
+              }
+              if (diff !== null && diff > tolerance && attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore retry', resultMeta)
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              if (diff !== null && diff > tolerance) {
+                LOG('scrollState.restore drift', resultMeta)
+              } else {
+                LOG('scrollState.restore success', resultMeta)
+              }
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId })
+            })
+          }
+
+          attemptRestore(0)
+        } else {
+          pushDebug('no scroll state to restore', { state })
+          LOG('scrollState.restore skip', { state })
+          restoredScrollRef.current = true
+          LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+        }
       }, 120)
     })()
   }, [editor, isReadOnly, applyCollapsedStateForRoot, scheduleApplyStatusFilter])

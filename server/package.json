@@ -10,11 +10,11 @@
     "seed": "node src/seed.js"
   },
   "dependencies": {
-    "better-sqlite3": "^9.4.0",
     "cors": "^2.8.5",
     "dayjs": "^1.11.10",
     "express": "^4.19.2",
-    "multer": "^2.0.0"
+    "multer": "^2.0.0",
+    "pg": "^8.11.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.2",

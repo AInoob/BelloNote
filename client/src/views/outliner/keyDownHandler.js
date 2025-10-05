@@ -32,6 +32,9 @@ export function handleKeyDown(
   pendingEmptyCaretRef,
   pushDebug
 ) {
+  if (typeof window !== 'undefined') {
+    window.__KEYDOWN_TOTAL = (window.__KEYDOWN_TOTAL || 0) + 1
+  }
   const handledBySlash = slashHandlersRef.current.handleKeyDown(view, event)
   if (handledBySlash) return true
   
@@ -63,7 +66,17 @@ export function handleKeyDown(
   }
   
   if (event.key === 'Enter') {
-    return handleEnterKey(event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef)
+    if (typeof window !== 'undefined') {
+      window.__ENTER_KEYDOWN_COUNT = (window.__ENTER_KEYDOWN_COUNT || 0) + 1
+    }
+    return handleEnterKey({
+      event,
+      editor,
+      now,
+      logCursorTiming,
+      pushDebug,
+      pendingEmptyCaretRef
+    })
   }
   
   if (event.key === 'Tab') {
@@ -142,4 +155,3 @@ export function handleKeyDown(
   
   return false
 }
-

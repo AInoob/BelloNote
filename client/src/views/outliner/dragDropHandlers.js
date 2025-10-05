@@ -1,3 +1,5 @@
+import { moveListItemById } from './reorderTransaction.js'
+
 /**
  * Handle drag over event
  * @param {DragEvent} event - Drag event
@@ -99,10 +101,22 @@ export function handleDrop(
     pointerY,
     chosenBounds: chosen ? (() => { const rect = chosen.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, mid: rect.top + rect.height / 2 } })() : null
   })
-  const moved = moveNodeInOutline(outline, drag.id, targetId, dropAfter ? 'after' : 'before')
+  const place = dropAfter ? 'after' : 'before'
+  let reordered = false
+  if (targetId) {
+    reordered = moveListItemById(editor, { dragId: drag.id, targetId, place })
+  }
   draggingRef.current = null
+  if (reordered) {
+    markDirty()
+    queueSave(300)
+    applyStatusFilter()
+    return
+  }
+
+  const moved = moveNodeInOutline(outline, drag.id, targetId, place)
   if (!moved) return
-  console.log('[drop] move applied', { order: moved.map(n => n.id) })
+  console.log('[drop] fallback move applied', { order: moved.map(n => n.id) })
   const docJSON = { type: 'doc', content: [buildList(moved)] }
   editor.commands.setContent(docJSON)
   markDirty()
