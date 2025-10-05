@@ -2,8 +2,7 @@ import {
   FILTER_ARCHIVED_KEY,
   FILTER_STATUS_KEY,
   FILTER_TAG_EXCLUDE_KEY,
-  FILTER_TAG_INCLUDE_KEY,
-  SCROLL_STATE_KEY
+  FILTER_TAG_INCLUDE_KEY
 } from './constants.js'
 import { parseTagInput } from './tagUtils.js'
 
@@ -89,17 +88,4 @@ export function saveTagFilters(filters) {
     localStorage.setItem(FILTER_TAG_INCLUDE_KEY, JSON.stringify(include))
     localStorage.setItem(FILTER_TAG_EXCLUDE_KEY, JSON.stringify(exclude))
   } catch {}
-}
-
-export function loadScrollState() {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = localStorage.getItem(SCROLL_STATE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (typeof parsed.scrollY !== 'number') return null
-    return parsed
-  } catch {
-    return null
-  }
 }

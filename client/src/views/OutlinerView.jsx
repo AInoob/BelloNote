@@ -71,6 +71,7 @@ import { FocusContext } from './outliner/FocusContext.js'
 import { LOG } from './outliner/debugUtils.js'
 import { loadScrollState } from './outliner/scrollState.js'
 import { now, logCursorTiming } from './outliner/performanceUtils.js'
+import { cssEscape } from '../utils/cssEscape.js'
 
 const EnterHighPriority = Extension.create({
   name: 'enterHighPriority',
@@ -699,12 +700,112 @@ export default function OutlinerView({
       // Ensure filters (status/archive) apply on first load
       scheduleApplyStatusFilter('initial-outline-load')
       setTimeout(() => {
-        if (restoredScrollRef.current) return
-        const state = loadScrollState()
-        if (state && typeof state.scrollY === 'number') {
-          window.scrollTo({ top: state.scrollY, behavior: 'auto' })
+        if (restoredScrollRef.current) {
+          LOG('scrollState.restore skip (already restored)')
+          return
         }
-        restoredScrollRef.current = true
+        const state = loadScrollState()
+        if (state && typeof state.topTaskId === 'string' && state.topTaskId) {
+          const topTaskId = state.topTaskId
+          const expectedOffset = Number.isFinite(state.topTaskOffset) ? state.topTaskOffset : 0
+          const maxAttempts = 6
+          const tolerance = 12
+          const attemptRestore = (attempt = 0) => {
+            if (restoredScrollRef.current) return
+            if (!editor || !editor.view || !editor.view.dom) {
+              if (attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore waiting for editor', { attempt, topTaskId })
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              LOG('scrollState.restore giveup (no editor)', { attempt, topTaskId })
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+              return
+            }
+            let targetEl = null
+            try {
+              targetEl = editor.view.dom.querySelector(`li.li-node[data-id="${cssEscape(String(topTaskId))}"]`)
+            } catch (err) {
+              LOG('scrollState.restore selector error', { message: err?.message })
+              targetEl = null
+            }
+            if (!targetEl) {
+              if (attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore missing target (retry)', { attempt, topTaskId })
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              LOG('scrollState.restore missing target (giveup)', { attempt, topTaskId })
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+              return
+            }
+
+            const computeDesired = () => {
+              const rect = targetEl.getBoundingClientRect()
+              if (!rect || !Number.isFinite(rect.top)) return null
+              const absoluteTop = rect.top + window.scrollY
+              const desired = Math.max(0, absoluteTop - expectedOffset)
+              return { absoluteTop, rectTop: rect.top, desired }
+            }
+
+            const snapshot = computeDesired()
+            if (!snapshot) {
+              if (attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore no snapshot (retry)', { attempt, topTaskId })
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              LOG('scrollState.restore no snapshot (giveup)', { attempt, topTaskId })
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+              return
+            }
+
+            const metadata = {
+              attempt,
+              topTaskId,
+              desired: snapshot.desired,
+              expectedOffset
+            }
+            pushDebug('restoring scroll anchor', metadata)
+            LOG('scrollState.restore attempt', metadata)
+            window.scrollTo({ top: snapshot.desired, behavior: 'auto' })
+
+            requestAnimationFrame(() => {
+              const rect = targetEl.getBoundingClientRect()
+              const actualOffset = rect && Number.isFinite(rect.top) ? rect.top : null
+              const diff = (actualOffset === null || !Number.isFinite(expectedOffset))
+                ? null
+                : Math.abs(actualOffset - expectedOffset)
+              const resultMeta = {
+                ...metadata,
+                actualOffset,
+                diff
+              }
+              if (diff !== null && diff > tolerance && attempt + 1 < maxAttempts) {
+                LOG('scrollState.restore retry', resultMeta)
+                requestAnimationFrame(() => attemptRestore(attempt + 1))
+                return
+              }
+              if (diff !== null && diff > tolerance) {
+                LOG('scrollState.restore drift', resultMeta)
+              } else {
+                LOG('scrollState.restore success', resultMeta)
+              }
+              restoredScrollRef.current = true
+              LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId })
+            })
+          }
+
+          attemptRestore(0)
+        } else {
+          pushDebug('no scroll state to restore', { state })
+          LOG('scrollState.restore skip', { state })
+          restoredScrollRef.current = true
+          LOG('scrollState.markRestored', { scrollY: window.scrollY, topTaskId: null })
+        }
       }, 120)
     })()
   }, [editor, isReadOnly, applyCollapsedStateForRoot, scheduleApplyStatusFilter])

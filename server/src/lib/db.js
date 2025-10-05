@@ -130,8 +130,27 @@ async function initSchema() {
     for (const statement of SCHEMA_STATEMENTS) {
       await client.query(statement)
     }
-    await client.query('DROP TABLE IF EXISTS work_logs CASCADE')
-    await client.query('DROP VIEW IF EXISTS work_logs')
+    await client.query(`
+      DO $func$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM pg_views
+          WHERE schemaname = current_schema()
+            AND viewname = 'work_logs'
+        ) THEN
+          EXECUTE 'DROP VIEW work_logs';
+        ELSIF EXISTS (
+          SELECT 1
+          FROM pg_tables
+          WHERE schemaname = current_schema()
+            AND tablename = 'work_logs'
+        ) THEN
+          EXECUTE 'DROP TABLE work_logs CASCADE';
+        END IF;
+      END
+      $func$;
+    `)
     await client.query(`
       CREATE OR REPLACE VIEW work_logs AS
       SELECT
