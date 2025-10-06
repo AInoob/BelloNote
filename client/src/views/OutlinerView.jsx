@@ -755,6 +755,20 @@ export default function OutlinerView({
   }, [editor, isReadOnly, loadOutlineFromServer])
 
   useEffect(() => {
+    if (!editor || isReadOnly) return () => {}
+    if (typeof window === 'undefined') return () => {}
+    const cancelPendingRestore = () => {
+      restoredScrollRef.current = true
+    }
+    window.addEventListener('pointerdown', cancelPendingRestore, { capture: true })
+    window.addEventListener('wheel', cancelPendingRestore, { passive: true })
+    return () => {
+      window.removeEventListener('pointerdown', cancelPendingRestore, { capture: true })
+      window.removeEventListener('wheel', cancelPendingRestore)
+    }
+  }, [editor, isReadOnly, restoredScrollRef])
+
+  useEffect(() => {
     if (isReadOnly) return
     const handler = () => queueSave(0)
     window.addEventListener('worklog:request-save', handler)

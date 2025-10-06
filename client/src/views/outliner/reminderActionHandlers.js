@@ -125,8 +125,21 @@ function restoreCaretToListItem(editor, getPos, findListItemDepth) {
       const paragraphStart = listItemPos + 1
       const caretPos = paragraphStart + paragraph.content.size
       if (state.selection.from === caretPos && state.selection.to === caretPos) return
-      const tr = state.tr.setSelection(TextSelection.create(state.doc, caretPos)).scrollIntoView()
-      view.dispatch(tr)
+      const tr = state.tr.setSelection(TextSelection.create(state.doc, caretPos))
+      const listItemDom = typeof view.nodeDOM === 'function' ? view.nodeDOM(listItemPos) : null
+      let shouldScroll = true
+      if (listItemDom && typeof window !== 'undefined' && typeof listItemDom.getBoundingClientRect === 'function') {
+        try {
+          const rect = listItemDom.getBoundingClientRect()
+          if (rect && Number.isFinite(rect.top) && Number.isFinite(rect.bottom)) {
+            const viewportHeight = window.innerHeight || 0
+            shouldScroll = !(rect.bottom > 0 && rect.top < viewportHeight)
+          }
+        } catch {
+          shouldScroll = true
+        }
+      }
+      view.dispatch(shouldScroll ? tr.scrollIntoView() : tr)
     } catch (error) {
       if (typeof console !== 'undefined') console.warn('[status-toggle] caret restore failed', error)
     }
@@ -184,6 +197,81 @@ export function cycleStatus(
   if (event?.currentTarget?.blur) {
     try { event.currentTarget.blur() } catch {}
   }
-  editor?.commands?.focus?.()
-  if (!readOnly) restoreCaretToListItem(editor, getPos, findListItemDepth)
+
+  const focusEditorSafely = () => {
+    const view = editor?.view
+    const dom = view?.dom
+    if (dom && typeof dom.focus === 'function') {
+      try {
+        dom.focus({ preventScroll: true })
+        return
+      } catch {}
+      dom.focus()
+      return
+    }
+    if (typeof editor?.commands?.focus === 'function') {
+      editor.commands.focus(undefined, { scrollIntoView: false })
+    }
+  }
+
+  const datasetScroll = (() => {
+    if (!event || !event.currentTarget || !event.currentTarget.dataset) return null
+    const raw = event.currentTarget.dataset.scrollCapture
+    if (typeof raw === 'string' && raw.trim() !== '') {
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    return null
+  })()
+  const datasetRowTop = (() => {
+    if (!event || !event.currentTarget || !event.currentTarget.dataset) return null
+    const raw = event.currentTarget.dataset.rowOffsetCapture
+    if (typeof raw === 'string' && raw.trim() !== '') {
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    return null
+  })()
+  const initialScrollY = Number.isFinite(datasetScroll)
+    ? datasetScroll
+    : (typeof window !== 'undefined' && Number.isFinite(window.scrollY) ? window.scrollY : null)
+  if (typeof window !== 'undefined') {
+    window.__statusToggleInitialScroll = initialScrollY
+  }
+
+  const selectionInsideTarget = (() => {
+    if (!editor || typeof getPos !== 'function') return false
+    try {
+      const pos = getPos()
+      if (typeof pos !== 'number') return false
+      const size = typeof node?.nodeSize === 'number' ? node.nodeSize : 0
+      if (size <= 0) return false
+      const { from, to } = editor.state.selection || {}
+      if (typeof from !== 'number' || typeof to !== 'number') return false
+      return from >= pos && to <= (pos + size)
+    } catch {
+      return false
+    }
+  })()
+
+  if (!readOnly) {
+    if (selectionInsideTarget) focusEditorSafely()
+    restoreCaretToListItem(editor, getPos, findListItemDepth)
+  } else if (allowStatusToggleInReadOnly && selectionInsideTarget) {
+    focusEditorSafely()
+  }
+
+  const scheduleScrollRecovery = () => {
+    if (typeof window === 'undefined') return
+    if (typeof window.setTimeout !== 'function') return
+    const recenterRow = () => {
+      const rowEl = rowRef?.current
+      if (!rowEl || typeof rowEl.scrollIntoView !== 'function') return
+      rowEl.scrollIntoView({ block: 'center', behavior: 'auto' })
+    }
+    const delays = [160, 360, 600, 900, 1200, 1500]
+    delays.forEach((delay) => window.setTimeout(recenterRow, delay))
+  }
+
+  scheduleScrollRecovery()
 }
