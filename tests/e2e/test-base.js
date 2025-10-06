@@ -233,7 +233,7 @@ function buildServerEnv({ serverPort, databaseName }) {
 }
 
 const reservedPorts = new Set()
-const UNSAFE_PORTS = new Set([5000, 5500, 5566, 5665, 5666, 5667, 5668, 5669, 5697])
+const UNSAFE_PORTS = new Set([5000, 5060, 5061, 5500, 5566, 5665, 5666, 5667, 5668, 5669, 5697])
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
 function sanitizeSegment(segment) {

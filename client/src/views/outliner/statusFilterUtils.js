@@ -1,5 +1,4 @@
-import { DEFAULT_STATUS_FILTER } from './filterPreferences.js'
-import { saveStatusFilter } from './filterPreferences.js'
+import { DEFAULT_STATUS_FILTER, saveStatusFilter } from './filterUtils.js'
 
 /**
  * Available status filter options
@@ -51,4 +50,3 @@ export function applyPresetFilter(preset, setStatusFilter, statusFilterRef) {
     setStatusFilter(next)
   }
 }
-
