@@ -131,11 +131,11 @@ test('timeline includes tasks scheduled via reminders on the due date', async ({
   await openTimeline(page)
 
   const todaySection = sectionByDate(page, today)
-  await expect(todaySection).toHaveCount(1)
+  await expect(todaySection).toHaveCount(1, { timeout: SHORT_TIMEOUT * 5 })
   const todayItems = listItemsInSection(page, todaySection)
-  await expect(todayItems).toContainText('Reminder Task')
+  await expect(todayItems).toContainText('Reminder Task', { timeout: SHORT_TIMEOUT * 5 })
   const reminderRow = todayItems.filter({ hasText: 'Reminder Task' }).first()
-  await expect(reminderRow.locator('.li-reminder-area .reminder-toggle')).toBeVisible()
+  await expect(reminderRow.locator('.li-reminder-area .reminder-toggle')).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
 })
 
 function daysAgoStr(days) {

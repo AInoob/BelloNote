@@ -126,6 +126,33 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   await expect(page.locator('.reminders-view .tiptap.ProseMirror li.li-node', { hasText: 'Follow up item' })).toHaveCount(1, { timeout: SHORT_TIMEOUT })
 })
 
+test('reminders view shows single completed marker', async ({ page, request }) => {
+  await resetOutline(request, [
+    { title: 'Reminder duplication', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Reminder duplication' }] }] }
+  ])
+
+  await page.goto('/')
+  const node = page.locator('li.li-node').first()
+  const reminderToggle = node.locator('.li-reminder-area .reminder-toggle')
+  await reminderToggle.click()
+  await page.locator('.reminder-menu').locator('button', { hasText: '30 minutes' }).click()
+
+  await node.locator('.reminder-inline-chip').click()
+  await page.locator('.reminder-menu').getByRole('button', { name: 'Mark complete' }).click()
+
+  await page.getByRole('button', { name: 'Reminders' }).click()
+  const remindersList = page.locator('.reminders-view .tiptap.ProseMirror')
+  await expect(remindersList).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const reminderEntry = remindersList.locator('li.li-node', { hasText: 'Reminder duplication' }).first()
+  await expect(reminderEntry).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect(reminderEntry).toContainText(/Completed/i, { timeout: SHORT_TIMEOUT * 5 })
+
+  const entryText = await reminderEntry.evaluate((el) => el?.innerText || '')
+  const occurrences = (entryText.match(/Reminder completed/gi) || []).length
+  expect(occurrences).toBe(1)
+  expect(entryText).toMatch(/Completed\s+•/i)
+})
+
 test('reminder banner supports custom schedule from notification', async ({ page, request }) => {
   await resetOutline(request, [
     { title: 'Banner reminder', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Banner reminder' }] }] }

@@ -6,9 +6,11 @@ export function buildReminderOutlineRoots(reminders, outlineMap) {
   return reminders.map((reminder) => {
     const infoParts = []
     const display = computeReminderDisplay(reminder)
-    if (display.summary) infoParts.push(display.summary)
-    const absolute = formatReminderAbsolute(reminder)
-    if (absolute) infoParts.push(absolute)
+    const primaryLabel = (display.pillText || '').trim()
+    if (primaryLabel) infoParts.push(primaryLabel)
+    else if ((display.summary || '').trim()) infoParts.push(display.summary.trim())
+    const absolute = (formatReminderAbsolute(reminder) || '').trim()
+    if (absolute && !infoParts.includes(absolute)) infoParts.push(absolute)
     const infoText = infoParts.join(' • ')
 
     const baseNode = outlineMap?.get(String(reminder.taskId))
