@@ -436,37 +436,12 @@ function ListItemView({
         <button
           className="status-chip inline"
           onClick={(readOnly && !allowStatusToggleInReadOnly) ? undefined : cycle}
+          onMouseDown={(event) => {
+            event.preventDefault()
+          }}
           title="Click to change status"
           disabled={readOnly && !allowStatusToggleInReadOnly}
           onKeyDown={handleStatusKeyDown}
-          onPointerEnter={(event) => {
-            if (typeof window !== 'undefined') {
-              if (!event.currentTarget.dataset.scrollCapture) {
-                const scrollValue = Number.isFinite(window.scrollY) ? String(window.scrollY) : ''
-                event.currentTarget.dataset.scrollCapture = scrollValue
-              }
-            }
-            if (!event.currentTarget.dataset.rowOffsetCapture) {
-              const rowEl = rowRef.current
-              if (rowEl && typeof rowEl.getBoundingClientRect === 'function') {
-                const rect = rowEl.getBoundingClientRect()
-                const topValue = Number.isFinite(rect.top) ? String(rect.top) : ''
-                event.currentTarget.dataset.rowOffsetCapture = topValue
-              }
-            }
-          }}
-          onMouseDown={(event) => {
-            if (typeof window !== 'undefined') {
-              const value = Number.isFinite(window.scrollY) ? String(window.scrollY) : ''
-              event.currentTarget.dataset.scrollCapture = value
-            }
-            const rowEl = rowRef.current
-            if (rowEl && typeof rowEl.getBoundingClientRect === 'function') {
-              const rect = rowEl.getBoundingClientRect()
-              const topValue = Number.isFinite(rect.top) ? String(rect.top) : ''
-              event.currentTarget.dataset.rowOffsetCapture = topValue
-            }
-          }}
         >
           {statusAttr === STATUS_EMPTY ? '' : (STATUS_ICON[statusAttr] ?? '○')}
         </button>

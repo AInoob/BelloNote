@@ -101,18 +101,19 @@ export function handleStatusKeyDown(
   } catch {}
 }
 
-function restoreCaretToListItem(editor, getPos, findListItemDepth) {
+function restoreCaretToListItem(editor, getPos, findListItemDepth, options = {}) {
+  const { force = false } = options
   if (!editor || typeof getPos !== 'function' || typeof findListItemDepth !== 'function') return
   const targetPos = getPos()
   if (typeof targetPos !== 'number') return
-  const run = () => {
+  const run = (attemptForce = force) => {
     try {
       const { state, view } = editor
       if (!view) return
       const node = state.doc.nodeAt(targetPos)
       if (!node || node.type.name !== 'listItem') return
       const selectionInside = state.selection.from >= targetPos && state.selection.to <= (targetPos + node.nodeSize)
-      if (!selectionInside) return
+      if (!selectionInside && !attemptForce) return
       const innerPos = Math.max(0, Math.min(targetPos + 1, state.doc.content.size))
       const resolved = state.doc.resolve(innerPos)
       const depth = findListItemDepth(resolved)
@@ -131,7 +132,7 @@ function restoreCaretToListItem(editor, getPos, findListItemDepth) {
       if (listItemDom && typeof window !== 'undefined' && typeof listItemDom.getBoundingClientRect === 'function') {
         try {
           const rect = listItemDom.getBoundingClientRect()
-          if (rect && Number.isFinite(rect.top) && Number.isFinite(rect.bottom)) {
+          if (!attemptForce && rect && Number.isFinite(rect.top) && Number.isFinite(rect.bottom)) {
             const viewportHeight = window.innerHeight || 0
             shouldScroll = !(rect.bottom > 0 && rect.top < viewportHeight)
           }
@@ -144,10 +145,10 @@ function restoreCaretToListItem(editor, getPos, findListItemDepth) {
       if (typeof console !== 'undefined') console.warn('[status-toggle] caret restore failed', error)
     }
   }
-  run()
+  run(force)
   if (typeof window !== 'undefined') {
-    window.requestAnimationFrame(run)
-    window.setTimeout(run, 0)
+    window.requestAnimationFrame(() => run(false))
+    window.setTimeout(() => run(false), 0)
   }
 }
 
@@ -198,80 +199,29 @@ export function cycleStatus(
     try { event.currentTarget.blur() } catch {}
   }
 
-  const focusEditorSafely = () => {
-    const view = editor?.view
-    const dom = view?.dom
-    if (dom && typeof dom.focus === 'function') {
-      try {
-        dom.focus({ preventScroll: true })
-        return
-      } catch {}
-      dom.focus()
-      return
-    }
-    if (typeof editor?.commands?.focus === 'function') {
-      editor.commands.focus(undefined, { scrollIntoView: false })
-    }
-  }
+  if (readOnly || !editor || typeof getPos !== 'function') return
 
-  const datasetScroll = (() => {
-    if (!event || !event.currentTarget || !event.currentTarget.dataset) return null
-    const raw = event.currentTarget.dataset.scrollCapture
-    if (typeof raw === 'string' && raw.trim() !== '') {
-      const parsed = Number(raw)
-      if (Number.isFinite(parsed)) return parsed
-    }
-    return null
-  })()
-  const datasetRowTop = (() => {
-    if (!event || !event.currentTarget || !event.currentTarget.dataset) return null
-    const raw = event.currentTarget.dataset.rowOffsetCapture
-    if (typeof raw === 'string' && raw.trim() !== '') {
-      const parsed = Number(raw)
-      if (Number.isFinite(parsed)) return parsed
-    }
-    return null
-  })()
-  const initialScrollY = Number.isFinite(datasetScroll)
-    ? datasetScroll
-    : (typeof window !== 'undefined' && Number.isFinite(window.scrollY) ? window.scrollY : null)
-  if (typeof window !== 'undefined') {
-    window.__statusToggleInitialScroll = initialScrollY
-  }
-
-  const selectionInsideTarget = (() => {
-    if (!editor || typeof getPos !== 'function') return false
+  try {
+    const { state, view } = editor
+    const pos = getPos()
+    if (typeof pos !== 'number' || !view) return
+    const nodeAtPos = state.doc.nodeAt(pos)
+    const selectionInside = Boolean(
+      nodeAtPos &&
+      nodeAtPos.type?.name === 'listItem' &&
+      state.selection.from >= pos &&
+      state.selection.to <= (pos + nodeAtPos.nodeSize)
+    )
+    const forceMove = !selectionInside
+    restoreCaretToListItem(editor, getPos, findListItemDepth, { force: forceMove })
     try {
-      const pos = getPos()
-      if (typeof pos !== 'number') return false
-      const size = typeof node?.nodeSize === 'number' ? node.nodeSize : 0
-      if (size <= 0) return false
-      const { from, to } = editor.state.selection || {}
-      if (typeof from !== 'number' || typeof to !== 'number') return false
-      return from >= pos && to <= (pos + size)
+      if (forceMove) {
+        view.focus?.()
+      } else {
+        view.dom?.focus?.({ preventScroll: true })
+      }
     } catch {
-      return false
+      view.focus?.()
     }
-  })()
-
-  if (!readOnly) {
-    if (selectionInsideTarget) focusEditorSafely()
-    restoreCaretToListItem(editor, getPos, findListItemDepth)
-  } else if (allowStatusToggleInReadOnly && selectionInsideTarget) {
-    focusEditorSafely()
-  }
-
-  const scheduleScrollRecovery = () => {
-    if (typeof window === 'undefined') return
-    if (typeof window.setTimeout !== 'function') return
-    const recenterRow = () => {
-      const rowEl = rowRef?.current
-      if (!rowEl || typeof rowEl.scrollIntoView !== 'function') return
-      rowEl.scrollIntoView({ block: 'center', behavior: 'auto' })
-    }
-    const delays = [160, 360, 600, 900, 1200, 1500]
-    delays.forEach((delay) => window.setTimeout(recenterRow, delay))
-  }
-
-  scheduleScrollRecovery()
+  } catch {}
 }
