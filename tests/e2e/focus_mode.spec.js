@@ -109,6 +109,40 @@ const buildNestedOutline = () => [
   outlineNode('Sibling Task')
 ]
 
+function buildLinearFocusDoc(count = 40) {
+  return {
+    type: 'doc',
+    content: [
+      {
+        type: 'bulletList',
+        content: Array.from({ length: count }, (_, index) => ({
+          type: 'listItem',
+          attrs: {
+            dataId: `seed-focus-${index + 1}`,
+            status: '',
+            collapsed: false,
+            archivedSelf: false
+          },
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: `Task ${index + 1}` }] }
+          ]
+        }))
+      }
+    ]
+  }
+}
+
+async function expectTaskInViewport(page, dataId) {
+  await page.waitForFunction((targetId) => {
+    const el = document.querySelector(`li.li-node[data-id="${targetId}"]`)
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    const viewportHeight = window.innerHeight || 0
+    const margin = 4
+    return rect.top >= -margin && rect.bottom <= viewportHeight + margin
+  }, dataId)
+}
+
 test.beforeEach(async ({ request, app }) => {
   API_URL = app.apiUrl;
   await resetOutline(request)
@@ -241,3 +275,43 @@ test('modifier click focuses any nesting level', async ({ page }) => {
   await expect(page.locator('li.li-node[data-id="seed-grandchild"]').first()).toHaveAttribute('data-focus-role', 'root')
   await expectOutlineState(page, buildNestedOutline())
 })
+
+test('exiting focus restores scroll position and keyboard shortcuts exit focus', async ({ page }) => {
+  await openOutline(page)
+  await setOutline(page, buildLinearFocusDoc(60))
+
+  const targetId = 'seed-focus-40'
+  const targetParagraph = page.locator(`li.li-node[data-id="${targetId}"] .li-content p`).first()
+
+  await page.waitForFunction((id) => {
+    const el = document.querySelector(`li.li-node[data-id="${id}"]`)
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    const viewportHeight = window.innerHeight || 0
+    return rect.top > viewportHeight
+  }, targetId)
+
+  await targetParagraph.click({ modifiers: [modifierKey] })
+  await expect(page.locator('body')).toHaveClass(/focus-mode/)
+  await expect(page).toHaveURL(/focus=seed-focus-40/)
+
+  await targetParagraph.click()
+  await page.keyboard.press('Escape')
+
+  await expect(page.locator('body')).not.toHaveClass(/focus-mode/)
+  await expect(page).not.toHaveURL(/\?[^#]*focus=/)
+  await expectTaskInViewport(page, targetId)
+
+  await targetParagraph.click({ modifiers: [modifierKey] })
+  await expect(page.locator('body')).toHaveClass(/focus-mode/)
+  await expect(page).toHaveURL(/focus=seed-focus-40/)
+
+  await page.locator('.focus-banner').click()
+
+  await page.keyboard.press('Meta+[')
+
+  await expect(page.locator('body')).not.toHaveClass(/focus-mode/)
+  await expect(page).not.toHaveURL(/\?[^#]*focus=/)
+  await expectTaskInViewport(page, targetId)
+})
+

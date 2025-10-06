@@ -9,9 +9,10 @@ import { cssEscape } from '../../utils/cssEscape.js'
  */
 export function useFocusRootScroll(focusRootId, editor, pendingFocusScrollRef) {
   useEffect(() => {
-    if (!focusRootId) return
     if (!editor || !editor.view || !editor.view.dom) return
-    const targetId = focusRootId
+    const requestedId = pendingFocusScrollRef.current
+    const targetId = requestedId || focusRootId
+    if (!targetId) return
     const runScroll = () => {
       try {
         const rootEl = editor.view.dom
@@ -27,12 +28,9 @@ export function useFocusRootScroll(focusRootId, editor, pendingFocusScrollRef) {
         const desired = Math.max(0, (rect.top + window.scrollY) - Math.max(0, (viewportHeight / 2) - (rect.height / 2)))
         window.scrollTo({ top: desired, behavior: 'smooth' })
       } finally {
+        // Clear once consumed so future renders do not jump again
         pendingFocusScrollRef.current = null
       }
-    }
-    const requestedId = pendingFocusScrollRef.current
-    if (requestedId && requestedId !== focusRootId) {
-      pendingFocusScrollRef.current = focusRootId
     }
     requestAnimationFrame(() => {
       requestAnimationFrame(runScroll)

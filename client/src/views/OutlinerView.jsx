@@ -569,10 +569,37 @@ export default function OutlinerView({
   useModifierClickFocus(requestFocusRef)
 
   const exitFocus = useCallback(() => {
-    if (!focusRootRef.current) return
-    pendingFocusScrollRef.current = null
+    const currentId = focusRootRef.current
+    if (!currentId) return
+    // After we leave focus, scroll back to this task in the full outline
+    pendingFocusScrollRef.current = String(currentId)
     exitFocusUtil(setFocusRootId, suppressUrlSyncRef)
   }, [])
+
+  // Keyboard shortcuts to exit focus: Esc and Cmd+[
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!focusRootRef.current) return // only when actually focused
+
+      const t = e.target
+      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      if (inField && e.key !== 'Escape') return
+
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        exitFocus()
+        return
+      }
+      if (e.key === '[' && e.metaKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        exitFocus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [exitFocus])
 
   useFocusUrlSync(
     focusRootId,
