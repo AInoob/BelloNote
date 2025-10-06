@@ -1,13 +1,24 @@
-import { db } from '../lib/db.js'
+import { db, ensureSchema } from '../lib/db.js'
 import { ensureDefaultProject } from '../lib/projects.js'
 
 const TEST_PROJECT_NAME = 'Playwright E2E'
 
 async function ensureProjectByName(name) {
-  const existing = await db.get('SELECT id FROM projects WHERE name = $1', [name])
-  if (existing?.id) return existing.id
-  const created = await db.get('INSERT INTO projects (name) VALUES ($1) RETURNING id', [name])
-  return created.id
+  try {
+    const existing = await db.get('SELECT id FROM projects WHERE name = $1', [name])
+    if (existing?.id) return existing.id
+    const created = await db.get('INSERT INTO projects (name) VALUES ($1) RETURNING id', [name])
+    return created.id
+  } catch (err) {
+    if (err?.code === '42P01') {
+      await ensureSchema()
+      const retry = await db.get('SELECT id FROM projects WHERE name = $1', [name])
+      if (retry?.id) return retry.id
+      const created = await db.get('INSERT INTO projects (name) VALUES ($1) RETURNING id', [name])
+      return created.id
+    }
+    throw err
+  }
 }
 
 async function ensureProjectForTests(req) {

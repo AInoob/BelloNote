@@ -1,4 +1,4 @@
-const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
+const { test, expect, expectOutlineState, expectOutlineApiState, outlineNode } = require('./test-base')
 
 test.describe.configure({ mode: 'serial' })
 
@@ -98,12 +98,16 @@ test.beforeEach(async ({ request, app }) => {
   await resetOutline(request)
 })
 
-test('slash tagging and tag filters support include/exclude with persistence', async ({ page, request }) => {
+test('slash tagging and tag filters support include/exclude with persistence', async ({ page, request, app }) => {
   await ensureBackendReady(request)
   await setOutlineNormalized(request, initialTagTasksState())
   await page.goto('/')
   await waitForEditorReady(page)
   await expectOutlineState(page, initialTagTasksState(), { includeTags: false })
+  await expectOutlineApiState(request, app, initialTagTasksState(), {
+    includeTags: false,
+    message: 'API outline should match initial tagged tasks state'
+  })
 
   // Tag task 2 with #urgent via slash
   const outlineItems = page.locator('.tiptap.ProseMirror li.li-node')
@@ -117,11 +121,16 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect.poll(async () => await outlineItems.nth(1).getAttribute('data-tags-self'), {
     timeout: SHORT_TIMEOUT
   }).toBe('urgent')
-  await expectOutlineState(page, [
+  const afterUrgentState = [
     outlineNode('Task 1 root'),
     outlineNode('Task 2 urgent #urgent', { tags: ['urgent'] }),
     outlineNode('Task 3 later')
-  ], { timeout: 10000, includeTags: false })
+  ]
+  await expectOutlineState(page, afterUrgentState, { timeout: 10000, includeTags: false })
+  await expectOutlineApiState(request, app, afterUrgentState, {
+    includeTags: true,
+    message: 'API outline should reflect urgent tag assignment'
+  })
 
   // Tag task 3 with #later via slash
   await outlineItems.nth(2).locator('p').first().click()
@@ -135,6 +144,26 @@ test('slash tagging and tag filters support include/exclude with persistence', a
     timeout: SHORT_TIMEOUT
   }).toBe('later')
   await expectOutlineState(page, taggedTasksState(), { timeout: 10000, includeTags: false })
+  await expectOutlineApiState(request, app, taggedTasksState(), {
+    includeTags: true,
+    message: 'API outline should retain tags while filters remain active'
+  })
+  await expectOutlineApiState(request, app, taggedTasksState(), {
+    includeTags: true,
+    message: 'API outline should maintain tagging after reload with filters'
+  })
+  await expectOutlineApiState(request, app, taggedTasksState(), {
+    includeTags: true,
+    message: 'API outline should preserve tags after reload'
+  })
+  await expectOutlineApiState(request, app, taggedTasksState(), {
+    includeTags: true,
+    message: 'API outline should remain unchanged when filters applied'
+  })
+  await expectOutlineApiState(request, app, taggedTasksState(), {
+    includeTags: true,
+    message: 'API outline should include both tagged tasks'
+  })
 
   // Ensure tags persisted to API
   await expect.poll(async () => {
@@ -213,15 +242,24 @@ test('slash tagging and tag filters support include/exclude with persistence', a
   await expect(task2Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect(task3Reloaded).toBeVisible({ timeout: SHORT_TIMEOUT })
   await expectOutlineState(page, taggedTasksState(), { includeTags: false })
+  await expectOutlineApiState(request, app, taggedTasksState(), {
+    includeTags: true,
+    message: 'API outline should still include tags after clearing filters'
+  })
 })
 
-test('excluding a tag hides matching child but keeps parent visible', async ({ page, request }) => {
+test('excluding a tag hides matching child but keeps parent visible', async ({ page, request, app }) => {
   await ensureBackendReady(request)
   await resetOutline(request)
   await setOutlineNormalized(request, nestedExcludeState())
 
   await page.goto('/')
   await waitForEditorReady(page)
+  await expectOutlineState(page, nestedExcludeState(), { includeTags: false })
+  await expectOutlineApiState(request, app, nestedExcludeState(), {
+    includeTags: false,
+    message: 'API outline should match nested exclude seed state'
+  })
 
   const outline = page.locator('.tiptap.ProseMirror')
   const parent = outline.locator('li.li-node', { hasText: 'Parent without tag' }).first()
@@ -238,4 +276,8 @@ test('excluding a tag hides matching child but keeps parent visible', async ({ p
   await expect(parent, 'parent should remain visible when only child matches excluded tag').toBeVisible({ timeout: SHORT_TIMEOUT })
   await expect.poll(async () => await parent.getAttribute('data-tag-exclude'), { timeout: SHORT_TIMEOUT }).toBe('0')
   await expectOutlineState(page, nestedExcludeState(), { includeTags: false })
+  await expectOutlineApiState(request, app, nestedExcludeState(), {
+    includeTags: false,
+    message: 'API outline should remain unchanged when excluding child tag'
+  })
 })

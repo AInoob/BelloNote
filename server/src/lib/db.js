@@ -68,7 +68,7 @@ export async function transaction(callback) {
   }
 }
 
-const SCHEMA_STATEMENTS = [
+export const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS projects (
      id SERIAL PRIMARY KEY,
      name TEXT NOT NULL,
@@ -124,44 +124,31 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_versions_project ON outline_versions(project_id, id DESC);`
 ]
 
-async function initSchema() {
+export async function ensureSchema() {
   const client = await pool.connect()
   try {
-    for (const statement of SCHEMA_STATEMENTS) {
-      await client.query(statement)
+    await client.query('SELECT pg_advisory_lock(2147483647)')
+    try {
+      await client.query('DROP VIEW IF EXISTS work_logs')
+      await client.query('DROP TYPE IF EXISTS work_logs')
+      for (const statement of SCHEMA_STATEMENTS) {
+        await client.query(statement)
+      }
+      await client.query('DROP TABLE IF EXISTS work_logs CASCADE')
+      await client.query(`
+        CREATE OR REPLACE VIEW work_logs AS
+        SELECT
+          t.id::uuid              AS task_id,
+          (d.value)::date         AS date
+        FROM tasks t
+        CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(t.worked_dates, '[]'::jsonb)) AS d(value);
+      `)
+    } finally {
+      await client.query('SELECT pg_advisory_unlock(2147483647)')
     }
-    await client.query(`
-      DO $func$
-      BEGIN
-        IF EXISTS (
-          SELECT 1
-          FROM pg_views
-          WHERE schemaname = current_schema()
-            AND viewname = 'work_logs'
-        ) THEN
-          EXECUTE 'DROP VIEW work_logs';
-        ELSIF EXISTS (
-          SELECT 1
-          FROM pg_tables
-          WHERE schemaname = current_schema()
-            AND tablename = 'work_logs'
-        ) THEN
-          EXECUTE 'DROP TABLE work_logs CASCADE';
-        END IF;
-      END
-      $func$;
-    `)
-    await client.query(`
-      CREATE OR REPLACE VIEW work_logs AS
-      SELECT
-        t.id::uuid              AS task_id,
-        (d.value)::date         AS date
-      FROM tasks t
-      CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(t.worked_dates, '[]'::jsonb)) AS d(value);
-    `)
   } finally {
     client.release()
   }
 }
 
-await initSchema()
+await ensureSchema()

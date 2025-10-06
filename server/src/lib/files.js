@@ -8,7 +8,9 @@ import { db } from './db.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const uploadDir = path.join(__dirname, '../uploads')
+const uploadDir = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.join(__dirname, '../uploads')
 const DATA_URI_RE = /^data:([^;,]+);base64,(.*)$/i
 const EXTENSION_MAP = {
   'image/jpeg': 'jpg',
@@ -155,15 +157,26 @@ export async function storeBufferAsFile({ buffer, projectId, mimeType, originalN
   const extension = extensionFromMime(mimeType, sanitizedOriginal)
   const storedName = generateStoredName(extension)
   writeBufferToDisk(buffer, storedName)
-  const row = await insertFileRow({
-    projectId,
-    storedName,
-    originalName: sanitizedOriginal,
-    mimeType,
-    size,
-    hash
-  })
-  return row
+  try {
+    const row = await insertFileRow({
+      projectId,
+      storedName,
+      originalName: sanitizedOriginal,
+      mimeType,
+      size,
+      hash
+    })
+    return row
+  } catch (err) {
+    if (err?.code === '23505') {
+      const existingAfterCollision = await selectFileByHash(hash)
+      if (existingAfterCollision) {
+        ensureExistingFile(existingAfterCollision, buffer)
+        return existingAfterCollision
+      }
+    }
+    throw err
+  }
 }
 
 export async function storeDataUri(dataUri, { projectId, originalName } = {}) {
@@ -203,4 +216,3 @@ export function getDiskPathForFile(row) {
 export function isDataUri(value) {
   return DATA_URI_RE.test(String(value || ''))
 }
-

@@ -3,6 +3,7 @@ import path from 'path'
 import { Router } from 'express'
 
 import { transaction } from '../lib/db.js'
+import { ensureDefaultProject } from '../lib/projects.js'
 import { getUploadDir } from '../lib/files.js'
 
 const router = Router()
@@ -41,8 +42,9 @@ router.post('/reset', async (req, res) => {
       await tx.run('TRUNCATE TABLE tasks RESTART IDENTITY CASCADE')
       await tx.run('TRUNCATE TABLE projects RESTART IDENTITY CASCADE')
     })
+    const projectId = await ensureDefaultProject()
     clearUploadsDirectory()
-    return res.json({ ok: true })
+    return res.json({ ok: true, projectId })
   } catch (err) {
     console.error('[test-utils] reset failed', err)
     return res.status(500).json({ error: err.message || 'reset failed' })

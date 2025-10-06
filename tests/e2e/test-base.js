@@ -3,11 +3,12 @@ const path = require('path')
 const fs = require('fs')
 const net = require('net')
 const { spawn } = require('child_process')
+const { pathToFileURL } = require('url')
 const { Client } = require('pg')
 const { test: playwrightBase, expect } = require('@playwright/test')
 
-const CLIENT_PORT_RANGE = { start: 6000, end: 6999 }
-const SERVER_PORT_RANGE = { start: 7000, end: 7999 }
+const CLIENT_PORT_RANGE = { start: 5000, end: 5499 }
+const SERVER_PORT_RANGE = { start: 5500, end: 5999 }
 const PROJECT_ROOT = path.join(__dirname, '..', '..')
 const SERVER_ROOT = path.join(PROJECT_ROOT, 'server')
 const CLIENT_ROOT = path.join(PROJECT_ROOT, 'client')
@@ -16,8 +17,59 @@ const BASE_CLIENT_DIST = path.join(CLIENT_ROOT, 'dist')
 const WORKER_ROOT_PREFIX = '.playwright-data'
 const PLACEHOLDER_PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Yp8N40AAAAASUVORK5CYII=', 'base64')
 const NPM_CMD = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const DB_MODULE_URL = pathToFileURL(path.join(PROJECT_ROOT, 'server', 'src', 'lib', 'db.js')).href
+let schemaStatementsPromise = null
 
-const TEST_DATABASES = ['bello_note_test_1', 'bello_note_test_2', 'bello_note_test_3', 'bello_note_test_4']
+async function loadSchemaStatements() {
+  if (!schemaStatementsPromise) {
+    schemaStatementsPromise = import(DB_MODULE_URL).then((mod) => {
+      if (!mod.SCHEMA_STATEMENTS) {
+        throw new Error('SCHEMA_STATEMENTS export missing from server/src/lib/db.js')
+      }
+      return mod.SCHEMA_STATEMENTS
+    })
+  }
+  return schemaStatementsPromise
+}
+
+const PW_KEEP_WORKER_ROOT = process.env.PW_KEEP_WORKER_ROOT === '1'
+
+function parsePositiveInt(value) {
+  if (!value) return null
+  const result = Number.parseInt(String(value), 10)
+  if (!Number.isNaN(result) && result > 0) return result
+  return null
+}
+
+function detectWorkerCount() {
+  const envCandidates = [
+    process.env.PLAYWRIGHT_WORKERS,
+    process.env.PW_WORKER_COUNT,
+    process.env.PW_TEST_TOTAL_WORKERS,
+    process.env.CI_WORKERS
+  ].map(parsePositiveInt)
+  for (const value of envCandidates) {
+    if (value) return value
+  }
+
+  for (const arg of process.argv) {
+    if (arg.startsWith('--workers=')) {
+      const parsed = parsePositiveInt(arg.split('=')[1])
+      if (parsed) return parsed
+    }
+  }
+
+  const flagIndex = process.argv.indexOf('--workers')
+  if (flagIndex !== -1 && flagIndex + 1 < process.argv.length) {
+    const parsed = parsePositiveInt(process.argv[flagIndex + 1])
+    if (parsed) return parsed
+  }
+
+  return parsePositiveInt(process.env.PLAYWRIGHT_DEFAULT_WORKERS) || 4
+}
+
+const REQUESTED_WORKER_COUNT = detectWorkerCount()
+const TEST_DATABASES = Array.from({ length: REQUESTED_WORKER_COUNT }, (_, index) => `bello_note_test_${index + 1}`)
 const PG_SSL = (process.env.PGSSLMODE || '').toLowerCase() === 'require' ? { rejectUnauthorized: false } : undefined
 const BASE_PG_CONFIG = {
   host: process.env.PGHOST || '127.0.0.1',
@@ -28,62 +80,160 @@ const BASE_PG_CONFIG = {
 }
 const ADMIN_DATABASE = process.env.PGADMIN_DATABASE || process.env.PGDATABASE_ADMIN || 'postgres'
 
+async function ensureDatabaseExists(dbName) {
+  const adminClient = new Client({ ...BASE_PG_CONFIG, database: ADMIN_DATABASE })
+  await adminClient.connect()
+  try {
+    const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName])
+    if (exists.rowCount === 0) {
+      try {
+        await adminClient.query(`CREATE DATABASE "${dbName}" WITH ENCODING 'UTF8' TEMPLATE template0`)
+      } catch (err) {
+        if (err.code !== '42P04') throw err
+      }
+    }
+  } finally {
+    await adminClient.end()
+  }
+}
+
+let ensureAllTestDatabasesPromise = null
+
+function ensureAllTestDatabases() {
+  if (!ensureAllTestDatabasesPromise) {
+    ensureAllTestDatabasesPromise = (async () => {
+      for (const dbName of TEST_DATABASES) {
+        await ensureDatabaseExists(dbName)
+      }
+    })()
+  }
+  return ensureAllTestDatabasesPromise
+}
+
 function assertSafeIdentifier(value, label = 'identifier') {
   if (!/^[A-Za-z0-9_]+$/.test(String(value || ''))) {
     throw new Error(`${label} contains unsupported characters: ${value}`)
   }
 }
 
-function pickDatabaseForWorker(workerIndex) {
-  return TEST_DATABASES[workerIndex % TEST_DATABASES.length]
+function pickDatabaseForWorker(workerInfo) {
+  if (!TEST_DATABASES.length) throw new Error('TEST_DATABASES is empty')
+  const index = workerInfo.workerIndex % TEST_DATABASES.length
+  const name = TEST_DATABASES[index]
+  if (!name) {
+    throw new Error(`No database configured for worker index ${workerInfo.workerIndex}`)
+  }
+  return name
 }
 
 async function recreateDatabase(dbName) {
   assertSafeIdentifier(dbName, 'database name')
-  const adminClient = new Client({ ...BASE_PG_CONFIG, database: ADMIN_DATABASE })
-  await adminClient.connect()
-  try {
-    const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName])
-    if (exists.rowCount === 0) {
-      await adminClient.query(`CREATE DATABASE "${dbName}" WITH ENCODING 'UTF8' TEMPLATE template0`)
-    }
-  } finally {
-    await adminClient.end()
-  }
-
+  await ensureAllTestDatabases()
+  await ensureDatabaseExists(dbName)
   const dbClient = new Client({ ...BASE_PG_CONFIG, database: dbName })
   await dbClient.connect()
   try {
+    const schemaStatements = await loadSchemaStatements()
+    const { rows: [{ lock_key: lockKey }] } = await dbClient.query('SELECT hashtextextended($1, 0) AS lock_key', [dbName])
+    await dbClient.query('SELECT pg_advisory_lock($1)', [lockKey])
+    let inTransaction = false
     try {
-      await dbClient.query('DROP SCHEMA public CASCADE')
+      await dbClient.query('BEGIN')
+      inTransaction = true
+
+      await dbClient.query('CREATE SCHEMA IF NOT EXISTS public')
+      await dbClient.query('SET search_path TO public')
+      await dbClient.query('GRANT ALL ON SCHEMA public TO CURRENT_USER')
+      await dbClient.query('GRANT ALL ON SCHEMA public TO public')
+
+      await dbClient.query('DROP VIEW IF EXISTS work_logs CASCADE')
+
+      const { rows: tables } = await dbClient.query(`
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+        ORDER BY tablename
+      `)
+      for (const { tablename } of tables) {
+        assertSafeIdentifier(tablename, 'table name')
+        await dbClient.query(`DROP TABLE IF EXISTS "${tablename}" CASCADE`)
+      }
+
+      await dbClient.query('DROP TYPE IF EXISTS work_logs CASCADE')
+
+      for (const statement of schemaStatements) {
+        await dbClient.query(statement)
+      }
+
+      await dbClient.query(`
+        CREATE OR REPLACE VIEW work_logs AS
+        SELECT
+          t.id::uuid              AS task_id,
+          (d.value)::date         AS date
+        FROM tasks t
+        CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(t.worked_dates, '[]'::jsonb)) AS d(value);
+      `)
+
+      await dbClient.query('INSERT INTO projects (name) VALUES ($1)', ['Playwright E2E'])
+
+      await dbClient.query('COMMIT')
+      inTransaction = false
     } catch (err) {
-      if (err.code !== '3F000') throw err
+      if (inTransaction) {
+        try {
+          await dbClient.query('ROLLBACK')
+        } catch {}
+      }
+      throw err
+    } finally {
+      try {
+        await dbClient.query('SELECT pg_advisory_unlock($1)', [lockKey])
+      } catch {}
     }
-    await dbClient.query('CREATE SCHEMA public')
-    await dbClient.query('GRANT ALL ON SCHEMA public TO CURRENT_USER')
-    await dbClient.query('GRANT ALL ON SCHEMA public TO public')
   } finally {
     await dbClient.end()
   }
+}
+
+async function dropDatabase(dbName) {
+  if (!dbName) return
+  // No-op: databases are reset on acquisition.
+  return
 }
 
 function buildServerEnv({ serverPort, databaseName }) {
   const env = {
     ...process.env,
     PORT: String(serverPort),
-    NODE_ENV: 'test',
-    PGDATABASE: databaseName
+    NODE_ENV: 'test'
   }
-  if (BASE_PG_CONFIG.host) env.PGHOST = BASE_PG_CONFIG.host
-  if (BASE_PG_CONFIG.port) env.PGPORT = String(BASE_PG_CONFIG.port)
-  if (BASE_PG_CONFIG.user) env.PGUSER = BASE_PG_CONFIG.user
-  if (BASE_PG_CONFIG.password) env.PGPASSWORD = BASE_PG_CONFIG.password
+
+  delete env.DATABASE_URL
+  delete env.DB_NAME
+
+  const host = BASE_PG_CONFIG.host || '127.0.0.1'
+  const port = String(BASE_PG_CONFIG.port || 5432)
+  const user = BASE_PG_CONFIG.user || 'postgres'
+  const password = BASE_PG_CONFIG.password || ''
+  const auth = password
+    ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@`
+    : `${encodeURIComponent(user)}@`
+  env.DATABASE_URL = `postgresql://${auth}${host}:${port}/${databaseName}`
+
+  env.PGDATABASE = databaseName
+  env.PGHOST = host
+  env.PGPORT = port
+  env.PGUSER = user
+  if (password) env.PGPASSWORD = BASE_PG_CONFIG.password
   if (process.env.PGSSLMODE) env.PGSSLMODE = process.env.PGSSLMODE
+
+  env.UPLOAD_DIR = path.join(TEMP_ROOT, `uploads-${databaseName}`)
+
   return env
 }
 
 const reservedPorts = new Set()
-const UNSAFE_PORTS = new Set([6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697])
+const UNSAFE_PORTS = new Set([5000, 5500, 5566, 5665, 5666, 5667, 5668, 5669, 5697])
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
 function sanitizeSegment(segment) {
@@ -109,11 +259,27 @@ function buildWorkerRoot(workerInfo) {
   return path.join(TEMP_ROOT, `${WORKER_ROOT_PREFIX}-${suffix}`)
 }
 
-function attachLoggers(proc, label) {
+function attachLoggers(proc, label, logDir = null) {
   let buffer = ''
+  let fileStream = null
+  if (logDir && fs.existsSync(logDir)) {
+    try {
+      fileStream = fs.createWriteStream(path.join(logDir, `${label}.log`), { flags: 'a' })
+    } catch (err) {
+      console.error(`[test-base] failed to open log file for ${label}`, err)
+      fileStream = null
+    }
+  }
   const makeHandler = (stream) => (chunk) => {
     buffer += `[${label}:${stream}] ${chunk.toString()}`
     if (buffer.length > 8000) buffer = buffer.slice(buffer.length - 8000)
+    if (fileStream) {
+      try {
+        fileStream.write(chunk)
+      } catch (err) {
+        console.error(`[test-base] failed to write ${label} ${stream} logs`, err)
+      }
+    }
   }
   const stdoutHandler = makeHandler('stdout')
   const stderrHandler = makeHandler('stderr')
@@ -124,26 +290,27 @@ function attachLoggers(proc, label) {
     dispose: () => {
       proc.stdout?.off('data', stdoutHandler)
       proc.stderr?.off('data', stderrHandler)
+      if (fileStream) {
+        try { fileStream.end() } catch {}
+      }
     }
   }
 }
 
-async function checkPort(port) {
+async function canBindPort(port) {
   return new Promise((resolve) => {
-    const socket = new net.Socket()
-    const finalize = (available) => {
-      socket.removeAllListeners()
-      socket.destroy()
-      resolve(available)
-    }
-    socket.setTimeout(250)
-    socket.once('connect', () => finalize(false))
-    socket.once('timeout', () => finalize(false))
-    socket.once('error', (err) => {
-      if (err && (err.code === 'ECONNREFUSED' || err.code === 'EHOSTUNREACH' || err.code === 'ENOTFOUND')) finalize(true)
-      else finalize(false)
+    const tester = net.createServer()
+    tester.once('error', () => {
+      tester.close(() => resolve(false))
     })
-    socket.connect(port, '127.0.0.1')
+    tester.once('listening', () => {
+      tester.close(() => resolve(true))
+    })
+    try {
+      tester.listen(port, '127.0.0.1')
+    } catch (err) {
+      resolve(false)
+    }
   })
 }
 
@@ -159,7 +326,7 @@ async function findAvailablePort(rangeStart, rangeEnd) {
     let available = false
     try {
       // eslint-disable-next-line no-await-in-loop
-      const open = await checkPort(port)
+      const open = await canBindPort(port)
       if (open) {
         available = true
         return port
@@ -333,6 +500,7 @@ const test = playwrightBase.extend({
     let clientLogs
     let distDir
     let databaseName
+    let uploadDirPath
 
     try {
       serverPort = await allocatePort({
@@ -346,13 +514,14 @@ const test = playwrightBase.extend({
         preferred: null
       })
 
-      databaseName = pickDatabaseForWorker(workerInfo.workerIndex)
+      databaseName = pickDatabaseForWorker(workerInfo)
       await recreateDatabase(databaseName)
 
       const apiUrl = `http://127.0.0.1:${serverPort}`
       const clientUrl = `http://127.0.0.1:${clientPort}`
 
       const serverEnv = buildServerEnv({ serverPort, databaseName })
+      uploadDirPath = serverEnv.UPLOAD_DIR
 
       serverProc = spawn(NPM_CMD, ['start'], {
         cwd: SERVER_ROOT,
@@ -360,7 +529,7 @@ const test = playwrightBase.extend({
         stdio: 'pipe'
       })
       await waitForSpawn(serverProc, 'server')
-      serverLogs = attachLoggers(serverProc, 'server')
+      serverLogs = attachLoggers(serverProc, 'server', PW_KEEP_WORKER_ROOT ? workerRoot : null)
       await waitForReady({ url: `${apiUrl}/api/health`, label: 'server', process: serverProc, getLogs: serverLogs.getLogs })
 
       distDir = path.join(workerRoot, 'client-dist')
@@ -372,13 +541,13 @@ const test = playwrightBase.extend({
         stdio: 'pipe'
       })
       await waitForSpawn(clientProc, 'client')
-      clientLogs = attachLoggers(clientProc, 'client')
+      clientLogs = attachLoggers(clientProc, 'client', PW_KEEP_WORKER_ROOT ? workerRoot : null)
       await waitForReady({
         url: `${clientUrl}/`,
         label: 'client',
         process: clientProc,
         getLogs: clientLogs.getLogs,
-        verify: async () => !(await checkPort(clientPort))
+        verify: async () => !(await canBindPort(clientPort))
       })
 
       await resetServerState(apiUrl)
@@ -404,9 +573,13 @@ const test = playwrightBase.extend({
       serverLogs?.dispose?.()
       if (clientPort) releasePort(clientPort)
       if (serverPort) releasePort(serverPort)
-      if (distDir) fs.rmSync(distDir, { recursive: true, force: true })
-      if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true })
-      if (workerRoot) fs.rmSync(workerRoot, { recursive: true, force: true })
+      if (distDir && !PW_KEEP_WORKER_ROOT) fs.rmSync(distDir, { recursive: true, force: true })
+      if (dataDir && !PW_KEEP_WORKER_ROOT) fs.rmSync(dataDir, { recursive: true, force: true })
+      if (workerRoot && !PW_KEEP_WORKER_ROOT) fs.rmSync(workerRoot, { recursive: true, force: true })
+      if (uploadDirPath && !PW_KEEP_WORKER_ROOT) fs.rmSync(uploadDirPath, { recursive: true, force: true })
+      if (databaseName) {
+        await dropDatabase(databaseName)
+      }
     }
   }, { scope: 'worker' }],
   app: async ({ appServer }, use, testInfo) => {
@@ -439,7 +612,7 @@ const test = playwrightBase.extend({
     try {
       await use(appContext)
     } finally {
-      fs.rmSync(testDataDir, { recursive: true, force: true })
+      if (!PW_KEEP_WORKER_ROOT) fs.rmSync(testDataDir, { recursive: true, force: true })
     }
   },
   page: async ({ context, app }, use) => {
@@ -584,28 +757,49 @@ async function readOutlineState(page) {
   return snapshot
 }
 
-async function expectOutlineState(page, expected, { timeout = 5000, message = 'outline state mismatch', includeTags = true } = {}) {
-  const normalize = (nodes) => {
-    if (!Array.isArray(nodes)) return []
-    return nodes.map(node => {
-      const normalizedTags = Array.isArray(node?.tags)
-        ? node.tags.map(tag => String(tag || '').toLowerCase())
-        : []
-      const normalized = {
-        text: typeof node?.text === 'string' ? node.text : '',
-        status: typeof node?.status === 'string' ? node.status : '',
-        children: normalize(node?.children || [])
-      }
-      if (includeTags) normalized.tags = normalizedTags
-      return normalized
-    })
-  }
+function normalizeOutlineNodes(nodes, includeTags = true) {
+  if (!Array.isArray(nodes)) return []
+  return nodes.map(node => {
+    const normalizedTags = Array.isArray(node?.tags)
+      ? node.tags.map(tag => String(tag || '').toLowerCase())
+      : []
+    const normalized = {
+      text: typeof node?.text === 'string' ? node.text : '',
+      status: typeof node?.status === 'string' ? node.status : '',
+      children: normalizeOutlineNodes(node?.children || [], includeTags)
+    }
+    if (includeTags) normalized.tags = normalizedTags
+    return normalized
+  })
+}
 
-  const expectedNormalized = normalize(expected)
+function mapApiOutlineNodes(nodes) {
+  if (!Array.isArray(nodes)) return []
+  return nodes.map(node => ({
+    text: typeof node?.title === 'string' ? node.title : '',
+    status: typeof node?.status === 'string' ? node.status : '',
+    tags: Array.isArray(node?.tags) ? node.tags : [],
+    children: mapApiOutlineNodes(node?.children || [])
+  }))
+}
+
+async function expectOutlineState(page, expected, { timeout = 5000, message = 'outline state mismatch', includeTags = true } = {}) {
+  const expectedNormalized = normalizeOutlineNodes(expected, includeTags)
   await expect.poll(async () => {
     const state = await readOutlineState(page)
     if (state === null) return '__pending__'
-    return normalize(state)
+    return normalizeOutlineNodes(state, includeTags)
+  }, { timeout, message }).toEqual(expectedNormalized)
+}
+
+async function expectOutlineApiState(request, app, expected, { timeout = 10000, message = 'api outline state mismatch', includeTags = true } = {}) {
+  const expectedNormalized = normalizeOutlineNodes(expected, includeTags)
+  await expect.poll(async () => {
+    const response = await request.get(`${app.apiUrl}/api/outline`, { headers: { 'x-playwright-test': '1' } })
+    if (!response.ok()) return '__pending__'
+    const json = await response.json().catch(() => null)
+    if (!json || !Array.isArray(json.roots)) return '__pending__'
+    return normalizeOutlineNodes(mapApiOutlineNodes(json.roots), includeTags)
   }, { timeout, message }).toEqual(expectedNormalized)
 }
 
@@ -618,5 +812,4 @@ const outlineNode = (text, { status = '', tags, children = [] } = {}) => {
   if (Array.isArray(tags)) node.tags = tags
   return node
 }
-
-module.exports = { test, expect, readOutlineState, expectOutlineState, outlineNode }
+module.exports = { test, expect, readOutlineState, expectOutlineState, expectOutlineApiState, outlineNode }

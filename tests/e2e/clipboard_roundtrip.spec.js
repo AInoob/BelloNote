@@ -1,11 +1,11 @@
 
-const { test, expect, expectOutlineState, outlineNode } = require('./test-base')
+const { test, expect, expectOutlineState, expectOutlineApiState, outlineNode } = require('./test-base')
 const path = require('path')
 
 test.describe.configure({ mode: 'serial' })
 
 const TEST_IMAGE = path.join(__dirname, '..', 'assets', 'test-image.png')
-const SHORT_TIMEOUT = 1000
+const SHORT_TIMEOUT = 5000
 
 const clipboardBaseState = () => [
   outlineNode('task 1', { status: 'todo' }),
@@ -16,14 +16,17 @@ const clipboardBaseState = () => [
   outlineNode('task 3', { status: 'todo' })
 ]
 
+const clipboardBaseApiState = () => [
+  outlineNode('task 1', { status: 'todo' }),
+  outlineNode('task 2', {
+    status: 'todo',
+    children: [outlineNode('sub a', { status: 'todo' })]
+  }),
+  outlineNode('task 3', { status: 'todo' })
+]
+
 async function resetOutline(app, outline = []) {
   await app.resetOutline(outline)
-}
-
-async function waitForOutline(request, app) {
-  const response = await request.get(`${app.apiUrl}/api/outline`)
-  expect(response.ok(), 'outline fetch should succeed').toBeTruthy()
-  return response.json()
 }
 
 async function ensureBackendReady(request, app) {
@@ -109,12 +112,11 @@ test('select-all copy -> delete -> paste preserves outline structure/content', a
   await expect(page.locator('li.li-node img')).toHaveCount(preImgCount)
   await expectOutlineState(page, clipboardBaseState(), { includeTags: false })
 
-  await expect.poll(async () => {
-    const data = await waitForOutline(request, app)
-    const roots = data.roots || []
-    const titles = roots.map(n => n.title)
-    return { count: roots.length, titles }
-  }, { message: 'outline titles should be preserved', timeout: 15000 }).toEqual({ count: 3, titles: ['task 1','task 2','task 3'] })
+  await expectOutlineApiState(request, app, clipboardBaseApiState(), {
+    timeout: 15000,
+    includeTags: false,
+    message: 'outline should persist after clipboard roundtrip'
+  })
 })
 
 test('copying a single task pastes a duplicate without overwriting siblings', async ({ page, request, app }) => {

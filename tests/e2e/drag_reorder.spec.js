@@ -1,21 +1,8 @@
 
-const { test, expect } = require('./test-base')
+const { test, expect, expectOutlineState, expectOutlineApiState, outlineNode } = require('./test-base')
 
 async function resetOutline(app) {
   await app.resetOutline([])
-}
-
-async function waitForOutline(request, app) {
-  const response = await request.get(`${app.apiUrl}/api/outline`)
-  expect(response.ok()).toBeTruthy()
-  return response.json()
-}
-
-async function expectRootOrder(request, app, titles) {
-  await expect.poll(async () => {
-    const data = await waitForOutline(request, app)
-    return (data.roots || []).map(n => n.title)
-  }, { timeout: 10000, message: 'root order should match' }).toEqual(titles)
 }
 
 async function openOutline(page) {
@@ -37,10 +24,13 @@ async function seedParentWithChildren(app, request, parentTitle, childrenTitles)
   expect(response.ok()).toBeTruthy()
 }
 
-function childTitlesFromOutline(json, parentTitle) {
-  const parent = (json.roots || []).find(n => n.title === parentTitle)
-  return (parent?.children || []).map(n => n.title)
-}
+const buildFlatState = (titles) => titles.map(title => outlineNode(title))
+
+const buildNestedState = (childrenTitles) => [
+  outlineNode('Parent', {
+    children: childrenTitles.map(title => outlineNode(title))
+  })
+]
 
 async function primeDrag(handle) {
   await handle.evaluate(node => {
@@ -74,15 +64,19 @@ test('drag root items up and down reorders correctly', async ({ page, request, a
 
   const items = page.locator('li.li-node')
   await expect(items).toHaveCount(3)
+  const initialState = buildFlatState(['task 1', 'task 2', 'task 3'])
+  await expectOutlineState(page, initialState, { includeTags: false })
+  await expectOutlineApiState(request, app, initialState, { includeTags: false })
 
   await dndBefore(page, items.nth(2), items.nth(0))
-  await expect(items.nth(0)).toContainText('task 3')
-  await expectRootOrder(request, app, ['task 3', 'task 1', 'task 2'])
+  const reorderedState = buildFlatState(['task 3', 'task 1', 'task 2'])
+  await expectOutlineState(page, reorderedState, { includeTags: false })
+  await expectOutlineApiState(request, app, reorderedState, { includeTags: false })
 
-  const items2 = page.locator('li.li-node')
-  await dndAfter(page, items2.nth(0), items2.nth(2))
-  await expect(page.locator('li.li-node').nth(2)).toContainText('task 3')
-  await expectRootOrder(request, app, ['task 1', 'task 2', 'task 3'])
+  const refreshedItems = page.locator('li.li-node')
+  await dndAfter(page, refreshedItems.nth(0), refreshedItems.nth(2))
+  await expectOutlineState(page, initialState, { includeTags: false })
+  await expectOutlineApiState(request, app, initialState, { includeTags: false })
 })
 
 test('drag subtasks up and down within a parent', async ({ page, request, app }) => {
@@ -92,12 +86,18 @@ test('drag subtasks up and down within a parent', async ({ page, request, app })
   const parentLi = page.locator('li.li-node').filter({ hasText: 'Parent' }).first()
   const childLis = parentLi.locator('li.li-node')
   await expect(childLis).toHaveCount(3)
+  const initialNestedState = buildNestedState(['Child A', 'Child B', 'Child C'])
+  await expectOutlineState(page, initialNestedState, { includeTags: false })
+  await expectOutlineApiState(request, app, initialNestedState, { includeTags: false })
 
   await dndBefore(page, childLis.nth(2), childLis.nth(0))
-  await expect.poll(async () => childTitlesFromOutline(await waitForOutline(request, app), 'Parent')).toEqual(['Child C', 'Child A', 'Child B'])
+  const reorderedNested = buildNestedState(['Child C', 'Child A', 'Child B'])
+  await expectOutlineState(page, reorderedNested, { includeTags: false })
+  await expectOutlineApiState(request, app, reorderedNested, { includeTags: false })
 
   const childC = parentLi.locator('li.li-node', { hasText: 'Child C' }).first()
   const childB = parentLi.locator('li.li-node', { hasText: 'Child B' }).first()
   await dndAfter(page, childC, childB)
-  await expect.poll(async () => childTitlesFromOutline(await waitForOutline(request, app), 'Parent')).toEqual(['Child A', 'Child B', 'Child C'])
+  await expectOutlineState(page, initialNestedState, { includeTags: false })
+  await expectOutlineApiState(request, app, initialNestedState, { includeTags: false })
 })
