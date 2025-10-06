@@ -26,6 +26,7 @@ export function handleKeyDown(
   focusRootRef,
   pendingFocusScrollRef,
   setFocusRootId,
+  exitFocusCallback,
   computeActiveTask,
   onRequestTimelineFocus,
   editor,
@@ -38,12 +39,29 @@ export function handleKeyDown(
   const handledBySlash = slashHandlersRef.current.handleKeyDown(view, event)
   if (handledBySlash) return true
   
+  const exitViaKeyboard = () => {
+    pendingFocusScrollRef.current = null
+    if (typeof exitFocusCallback === 'function') {
+      exitFocusCallback('keyboard')
+    } else {
+      setFocusRootId(null)
+    }
+  }
+
   if (event.key === 'Escape') {
     if (focusRootRef.current) {
       event.preventDefault()
       event.stopPropagation()
-      pendingFocusScrollRef.current = null
-      setFocusRootId(null)
+      exitViaKeyboard()
+      return true
+    }
+  }
+
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key === '[') {
+    if (focusRootRef.current) {
+      event.preventDefault()
+      event.stopPropagation()
+      exitViaKeyboard()
       return true
     }
   }

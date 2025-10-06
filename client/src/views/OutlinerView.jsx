@@ -145,7 +145,7 @@ export default function OutlinerView({
   const filterScheduleRef = useRef(null)
   const lastFilterRunAtRef = useRef(0)
   const filterRunCounterRef = useRef(0)
-  const [focusRootId, setFocusRootId] = useState(() => {
+  const [focusRootIdState, setFocusRootIdState] = useState(() => {
     if (typeof window === 'undefined') return null
     try {
       const url = new URL(window.location.href)
@@ -154,15 +154,79 @@ export default function OutlinerView({
       return null
     }
   })
-  const focusRootRef = useRef(focusRootId)
-  useEffect(() => { focusRootRef.current = focusRootId }, [focusRootId])
+  const focusRootRef = useRef(focusRootIdState)
+  const focusRootId = focusRootIdState
+  const setFocusRootId = useCallback((value) => {
+    setFocusRootIdState((prev) => {
+      const next = typeof value === 'function' ? value(prev) : value
+      if (!prev && next && !preFocusCapturedRef.current) {
+        preFocusCaptureTriggerRef.current = true
+      }
+      if (prev && !next) {
+        lastFocusRootIdRef.current = prev
+      }
+      focusRootRef.current = next
+      if (typeof window !== 'undefined') {
+        if (!Array.isArray(window.__FOCUS_DEBUG_LOGS)) window.__FOCUS_DEBUG_LOGS = []
+        window.__FOCUS_DEBUG_LOGS.push({ type: 'setFocusRootId', prev, next })
+        window.__FOCUS_DEBUG_ID = next || null
+        window.__FOCUS_KEY_HANDLER_READY = next ? 1 : 0
+        window.__FOCUS_REF_DEBUG = next || null
+      }
+      return next
+    })
+  }, [])
+  useEffect(() => {
+    focusRootRef.current = focusRootId
+    if (typeof window !== 'undefined') {
+      window.__FOCUS_DEBUG_ID = focusRootRef.current || null
+      window.__FOCUS_KEY_HANDLER_READY = focusRootRef.current ? 1 : 0
+      window.__FOCUS_REF_DEBUG = focusRootRef.current || null
+    }
+  }, [focusRootId])
+
+  useEffect(() => {
+    if (!focusRootId) {
+      preFocusCaptureTriggerRef.current = false
+      return
+    }
+    if (!preFocusCaptureTriggerRef.current) return
+    capturePreFocusState({ force: true })
+    preFocusCaptureTriggerRef.current = false
+  }, [focusRootId, capturePreFocusState])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const body = document.body
+    if (!body) return undefined
+    const observer = new MutationObserver(() => {
+      if (!body.classList.contains('focus-mode')) return
+      if (preFocusCapturedRef.current) return
+      capturePreFocusState({ force: true })
+    })
+    observer.observe(body, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [capturePreFocusState])
   const [focusTitle, setFocusTitle] = useState('')
   const suppressUrlSyncRef = useRef(false)
   const initialFocusSyncRef = useRef(true)
   const pendingFocusScrollRef = useRef(null)
+  const preFocusStateRef = useRef({ scrollY: null, anchorId: null, selectionId: null })
+  const preFocusCapturedRef = useRef(false)
+  const preFocusCaptureTriggerRef = useRef(false)
+  const pendingFocusRestoreRef = useRef(false)
+  const lastFocusRootIdRef = useRef(null)
+  const editorRef = useRef(null)
   useFocusShortcut()
   const activeTaskInfoRef = useRef(null)
   const lastFocusTokenRef = useRef(null)
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (!Array.isArray(window.__FOCUS_DEBUG_LOGS)) window.__FOCUS_DEBUG_LOGS = []
+      window.__FOCUS_DEBUG_LOGS.push('outliner-mounted')
+    }
+  }, [])
 
   // Persist filters in localStorage
   useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
@@ -176,6 +240,55 @@ export default function OutlinerView({
   const pendingImageSrcRef = useRef(new Set())
   const includeFilterList = Array.isArray(tagFilters?.include) ? tagFilters.include : []
   const excludeFilterList = Array.isArray(tagFilters?.exclude) ? tagFilters.exclude : []
+
+  const capturePreFocusState = useCallback((options = {}) => {
+    const { force = false } = options
+    if (preFocusCapturedRef.current && !force) return
+    if (!force && focusRootRef.current) return
+    if (typeof window === 'undefined') return
+    const scrollY = window.scrollY
+    let anchorId = null
+    const editorInstance = editorRef.current
+    if (editorInstance?.view?.dom && typeof document !== 'undefined') {
+      const root = editorInstance.view.dom
+      try {
+        const viewportWidth = window.innerWidth || 0
+        const viewportHeight = window.innerHeight || 0
+        const sampleX = Math.max(0, Math.min(viewportWidth - 1, Math.floor(viewportWidth / 2)))
+        const sampleY = Math.max(0, Math.min(viewportHeight - 1, Math.floor(viewportHeight * 0.25)))
+        let candidate = document.elementFromPoint(sampleX, sampleY)
+        if (candidate && !root.contains(candidate)) candidate = null
+        if (candidate instanceof HTMLElement) {
+          const li = candidate.closest('li.li-node[data-id]')
+          if (li && root.contains(li)) anchorId = li.getAttribute('data-id')
+        }
+        if (!anchorId) {
+          const nodes = root.querySelectorAll('li.li-node[data-id]')
+          let bestId = null
+          let bestDistance = Number.POSITIVE_INFINITY
+          nodes.forEach((node) => {
+            if (!(node instanceof HTMLElement)) return
+            const rect = node.getBoundingClientRect()
+            if (rect.bottom < 0 || rect.top > (window.innerHeight || 0)) return
+            const distance = Math.abs(rect.top)
+            if (distance < bestDistance) {
+              bestDistance = distance
+              bestId = node.getAttribute('data-id')
+            }
+          })
+          anchorId = bestId
+        }
+      } catch {}
+    }
+    const selectionId = activeTaskInfoRef.current?.id ? String(activeTaskInfoRef.current.id) : null
+    preFocusStateRef.current = {
+      scrollY,
+      anchorId: anchorId || selectionId || null,
+      selectionId: selectionId || null
+    }
+    pendingFocusRestoreRef.current = true
+    preFocusCapturedRef.current = true
+  }, [focusRootRef, activeTaskInfoRef])
 
   const onStatusToggleStable = useCallback((...args) => {
     if (typeof onStatusToggle === 'function') {
@@ -315,6 +428,7 @@ export default function OutlinerView({
           focusRootRef,
           pendingFocusScrollRef,
           setFocusRootId,
+          exitFocus,
           computeActiveTask,
           onRequestTimelineFocus,
           editor,
@@ -324,6 +438,10 @@ export default function OutlinerView({
       }
     }
   })
+
+  useEffect(() => {
+    editorRef.current = editor
+  }, [editor])
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -539,8 +657,17 @@ export default function OutlinerView({
   }, [tagFilters, applyStatusFilter])
 
   const handleRequestFocus = useCallback((taskId) => {
+    if (typeof window !== 'undefined') {
+      window.__FOCUS_REQUEST_TOTAL = (window.__FOCUS_REQUEST_TOTAL || 0) + 1
+      window.__FOCUS_REQUEST_LAST = taskId ?? null
+    }
+    if (!taskId) return
+    if (typeof window !== 'undefined') {
+      window.__FOCUS_REQUEST_COUNT = (window.__FOCUS_REQUEST_COUNT || 0) + 1
+    }
+    capturePreFocusState()
     handleRequestFocusUtil(taskId, (val) => { pendingFocusScrollRef.current = val }, setFocusRootId)
-  }, [])
+  }, [capturePreFocusState, setFocusRootId])
 
   const focusTaskById = useCallback((taskId, { select = true } = {}) => {
     const result = focusTaskByIdUtil(editor, taskId, { select }, forceExpand, focusRootRef)
@@ -558,6 +685,7 @@ export default function OutlinerView({
     const token = focusRequest.token ?? `${focusRequest.taskId}:${focusRequest.remindAt ?? ''}`
     if (lastFocusTokenRef.current === token) return undefined
     lastFocusTokenRef.current = token
+    capturePreFocusState()
     const success = focusTaskById(focusRequest.taskId, { select: focusRequest.select !== false })
     if (success) {
       const info = computeActiveTask()
@@ -569,9 +697,41 @@ export default function OutlinerView({
   useModifierClickFocus(requestFocusRef)
 
   const exitFocus = useCallback(() => {
-    if (!focusRootRef.current) return
+    const activeFocusId = focusRootRef.current || focusRootId || (() => {
+      if (typeof document === 'undefined') return null
+      const el = document.querySelector('li.li-node.focus-root[data-id]')
+      return el ? el.getAttribute('data-id') : null
+    })()
+    if (activeFocusId) lastFocusRootIdRef.current = activeFocusId
+    if (!activeFocusId) {
+      lastFocusRootIdRef.current = null
+    }
     pendingFocusScrollRef.current = null
+    pendingFocusRestoreRef.current = true
     exitFocusUtil(setFocusRootId, suppressUrlSyncRef)
+  }, [focusRootId, setFocusRootId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    window.__WORKLOG_EXIT_FOCUS = exitFocus
+    return undefined
+  }, [exitFocus])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handleKeyDown = (event) => {
+      if (!event) return
+      const bodyHasFocus = typeof document !== 'undefined' && document.body?.classList?.contains('focus-mode')
+      if (!bodyHasFocus) return
+      const isEscape = event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+      const isNavShortcut = event.key === '[' && (event.metaKey || event.ctrlKey)
+      if (!isEscape && !isNavShortcut) return
+      event.preventDefault()
+      const exitHandler = typeof window !== 'undefined' ? window.__WORKLOG_EXIT_FOCUS : null
+      if (typeof exitHandler === 'function') exitHandler()
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [])
 
   useFocusUrlSync(
@@ -805,6 +965,55 @@ export default function OutlinerView({
   }, [focusRootId, applyCollapsedStateForRoot, applyStatusFilter])
 
   useFocusRootScroll(focusRootId, editor, pendingFocusScrollRef)
+
+  useEffect(() => {
+    if (focusRootId) return
+    if (!pendingFocusRestoreRef.current) return
+    if (typeof window === 'undefined') {
+      pendingFocusRestoreRef.current = false
+      return
+    }
+    const restoreState = preFocusStateRef.current || {}
+    const { scrollY } = restoreState
+    const anchorId = restoreState.anchorId ? String(restoreState.anchorId) : null
+    const selectionId = restoreState.selectionId ? String(restoreState.selectionId) : null
+    const focusFallbackId = lastFocusRootIdRef.current ? String(lastFocusRootIdRef.current) : null
+    const runRestore = () => {
+      try {
+        if (typeof scrollY === 'number') {
+          window.scrollTo({ top: scrollY, behavior: 'auto' })
+        }
+        if (anchorId && editor?.view?.dom) {
+          let target = null
+          try {
+            target = editor.view.dom.querySelector(`li.li-node[data-id="${cssEscape(anchorId)}"]`)
+          } catch {
+            target = null
+          }
+          if (target instanceof HTMLElement) {
+            const rect = target.getBoundingClientRect()
+            const viewportHeight = window.innerHeight || 0
+            if (rect.bottom < 0 || rect.top > viewportHeight) {
+              target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' })
+            }
+          }
+        }
+        const focusTargetId = anchorId || selectionId || focusFallbackId
+        if (focusTargetId) {
+          focusTaskById(focusTargetId, { select: true })
+        }
+      } finally {
+        pendingFocusRestoreRef.current = false
+        preFocusStateRef.current = { scrollY: null, anchorId: null, selectionId: null }
+        preFocusCapturedRef.current = false
+        preFocusCaptureTriggerRef.current = false
+        lastFocusRootIdRef.current = null
+      }
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(runRestore)
+    })
+  }, [focusRootId, editor, focusTaskById])
 
   useFocusTitleUpdater(editor, updateFocusTitle)
 
