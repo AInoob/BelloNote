@@ -33,6 +33,7 @@ import {
   handleStatusKeyDown as handleStatusKeyDownUtil,
   cycleStatus as cycleStatusUtil
 } from './reminderActionHandlers.js'
+import { getTaskActionArgs } from './taskActionArgs.js'
 import {
   handleDragStart as handleDragStartUtil,
   handleDragEnd as handleDragEndUtil
@@ -233,22 +234,31 @@ function ListItemView({
     [ensurePersistentTaskId, closeReminderMenu, reminderControlsEnabled, setReminderError]
   )
 
+  const statusActionArgs = useMemo(() => getTaskActionArgs({
+    readOnly,
+    allowStatusToggleInReadOnly,
+    getPos,
+    editor,
+    findListItemDepth,
+    runSplitListItemWithSelection,
+    applySplitStatusAdjustments
+  }), [
+    readOnly,
+    allowStatusToggleInReadOnly,
+    getPos,
+    editor,
+    findListItemDepth,
+    runSplitListItemWithSelection,
+    applySplitStatusAdjustments
+  ])
+
   const handleStatusKeyDown = useCallback((event) => {
-    handleStatusKeyDownUtil(event, {
-      readOnly,
-      allowStatusToggleInReadOnly,
-      getPos,
-      editor,
-      findListItemDepth,
-      runSplitListItemWithSelection,
-      applySplitStatusAdjustments
-    })
-  }, [allowStatusToggleInReadOnly, editor, getPos, readOnly])
+    handleStatusKeyDownUtil(event, statusActionArgs)
+  }, [statusActionArgs])
 
   const cycle = (event) => {
     cycleStatusUtil(event, {
-      readOnly,
-      allowStatusToggleInReadOnly,
+      ...statusActionArgs,
       rowRef,
       node,
       statusOrder: STATUS_ORDER,
@@ -256,10 +266,7 @@ function ListItemView({
       updateAttributes,
       onStatusToggle,
       id,
-      fallbackIdRef,
-      editor,
-      getPos,
-      findListItemDepth
+      fallbackIdRef
     })
   }
 

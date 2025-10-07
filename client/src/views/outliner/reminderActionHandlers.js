@@ -10,6 +10,7 @@
  * @returns {Function} Handler function
  */
 import { TextSelection } from 'prosemirror-state'
+import { getTaskActionArgs } from './taskActionArgs.js'
 
 export function dispatchReminderAction(detail) {
   if (typeof window === 'undefined') return
@@ -80,25 +81,17 @@ export function buildReminderActionSet({
  * @param {Function} applySplitStatusAdjustments - Function to apply split status adjustments
  */
 export function handleStatusKeyDown(event, context) {
-  const {
-    readOnly,
-    allowStatusToggleInReadOnly,
-    getPos,
-    editor,
-    findListItemDepth,
-    runSplitListItemWithSelection,
-    applySplitStatusAdjustments
-  } = context
+  const base = getTaskActionArgs(context)
   if (event.key !== 'Enter') return
-  if (readOnly && !allowStatusToggleInReadOnly) return
+  if (base.readOnly && !base.allowStatusToggleInReadOnly) return
   event.preventDefault()
   event.stopPropagation()
   try {
-    const pos = typeof getPos === 'function' ? getPos() : null
-    if (typeof pos !== 'number' || !editor) return
-    const { state, view } = editor
+    const pos = typeof base.getPos === 'function' ? base.getPos() : null
+    if (typeof pos !== 'number' || !base.editor) return
+    const { state, view } = base.editor
     const resolved = state.doc.resolve(pos)
-    const listItemDepth = findListItemDepth(resolved)
+    const listItemDepth = base.findListItemDepth(resolved)
     if (listItemDepth === -1) return
     const listItemPos = resolved.before(listItemDepth)
     const listItemNode = state.doc.nodeAt(listItemPos)
@@ -109,14 +102,14 @@ export function handleStatusKeyDown(event, context) {
     const parentPos = parentDepth !== null ? resolved.before(parentDepth) : null
     const originalIndex = resolved.index(listItemDepth)
     const originalAttrs = { ...(listItemNode.attrs || {}) }
-    editor.commands.focus()
+    base.editor.commands.focus()
     const paragraphStart = pos + 1
     const paragraphEnd = paragraphStart + paragraphNode.nodeSize - 1
     const tr = state.tr.setSelection(TextSelection.create(state.doc, paragraphEnd))
     view.dispatch(tr)
-    const didSplit = runSplitListItemWithSelection(editor, { splitAtStart: false })
+    const didSplit = base.runSplitListItemWithSelection(base.editor, { splitAtStart: false })
     if (didSplit) {
-      applySplitStatusAdjustments(editor, {
+      base.applySplitStatusAdjustments(base.editor, {
         parentPos,
         originalIndex,
         newIndex: originalIndex + 1,
@@ -193,9 +186,8 @@ function restoreCaretToListItem(editor, getPos, findListItemDepth, options = {})
  * @param {Object} editor - TipTap editor instance
  */
 export function cycleStatus(event, context) {
+  const base = getTaskActionArgs(context)
   const {
-    readOnly,
-    allowStatusToggleInReadOnly,
     rowRef,
     node,
     statusOrder,
@@ -203,12 +195,9 @@ export function cycleStatus(event, context) {
     updateAttributes,
     onStatusToggle,
     id,
-    fallbackIdRef,
-    editor,
-    getPos,
-    findListItemDepth
+    fallbackIdRef
   } = context
-  if (readOnly && !allowStatusToggleInReadOnly) return
+  if (base.readOnly && !base.allowStatusToggleInReadOnly) return
   const li = rowRef.current?.closest('li.li-node')
   const liveStatus = li?.getAttribute('data-status')
   const currentStatus = typeof liveStatus === 'string' ? liveStatus : node?.attrs?.status ?? statusEmpty
@@ -216,7 +205,7 @@ export function cycleStatus(event, context) {
   const idx = currentIndex >= 0 ? currentIndex : 0
   const next = statusOrder[(idx + 1) % statusOrder.length]
   updateAttributes({ status: next })
-  if (readOnly && allowStatusToggleInReadOnly && typeof onStatusToggle === 'function') {
+  if (base.readOnly && base.allowStatusToggleInReadOnly && typeof onStatusToggle === 'function') {
     const realId = id || fallbackIdRef.current
     if (realId) onStatusToggle(String(realId), next)
   }
@@ -224,11 +213,11 @@ export function cycleStatus(event, context) {
     try { event.currentTarget.blur() } catch {}
   }
 
-  if (readOnly || !editor || typeof getPos !== 'function') return
+  if (base.readOnly || !base.editor || typeof base.getPos !== 'function') return
 
   try {
-    const { state, view } = editor
-    const pos = getPos()
+    const { state, view } = base.editor
+    const pos = base.getPos()
     if (typeof pos !== 'number' || !view) return
     const nodeAtPos = state.doc.nodeAt(pos)
     const selectionInside = Boolean(
@@ -238,7 +227,7 @@ export function cycleStatus(event, context) {
       state.selection.to <= (pos + nodeAtPos.nodeSize)
     )
     const forceMove = !selectionInside
-    restoreCaretToListItem(editor, getPos, findListItemDepth, { force: forceMove })
+    restoreCaretToListItem(base.editor, base.getPos, base.findListItemDepth, { force: forceMove })
     try {
       if (forceMove) {
         view.focus?.()
