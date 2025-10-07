@@ -8,6 +8,7 @@ import {
   encodeReminderDisplayTokens
 } from '../utils/reminderTokens.js'
 import { clamp, collectChangedTextblockRanges } from '../utils/range.js'
+import { buildBlockDecorationSet, patchBlockDecorationSet } from './utils/blockDecorations.js'
 
 function createReminderChip({ token, reminder, taskId }) {
   const display = computeReminderDisplay(reminder)
@@ -106,41 +107,23 @@ function collectReminderDecorations(node, pos, doc, cache) {
 }
 
 function buildDecos(doc, cache) {
-  const decorations = []
-  doc.descendants((node, pos) => {
-    if (!node.isTextblock) return
-    const blockDecorations = collectReminderDecorations(node, pos, doc, cache)
-    if (blockDecorations.length) decorations.push(...blockDecorations)
-  })
-  return decorations.length ? DecorationSet.create(doc, decorations) : DecorationSet.empty
+  return buildBlockDecorationSet(doc, (node, pos) => collectReminderDecorations(node, pos, doc, cache))
 }
 
 function patchDecos(decoSet, doc, ranges, cache) {
-  if (!ranges.length) return decoSet
-  let next = decoSet
-  const processed = new Set()
-  const docSize = doc.content.size
-  ranges.forEach(([from, to]) => {
-    const start = clamp(Math.min(from, to), 0, docSize)
-    const end = clamp(Math.max(from, to), 0, docSize)
-    doc.nodesBetween(Math.max(0, start - 1), Math.min(docSize, end + 1), (node, pos) => {
-      if (!node.isTextblock) return
-      if (node.type?.name !== 'paragraph') return
-      if (processed.has(pos)) return false
-      processed.add(pos)
+  return patchBlockDecorationSet({
+    decoSet,
+    doc,
+    ranges,
+    collect: (node, pos) => collectReminderDecorations(node, pos, doc, cache),
+    beforeCollect: (node) => {
+      if (node.type?.name !== 'paragraph') return false
       node.forEach((child) => {
         if (child.isText) cache.delete(child)
       })
-      const blockFrom = pos
-      const blockTo = pos + node.nodeSize
-      const existing = next.find(blockFrom, blockTo)
-      if (existing.length) next = next.remove(existing)
-      const blockDecorations = collectReminderDecorations(node, pos, doc, cache)
-      if (blockDecorations.length) next = next.add(doc, blockDecorations)
-      return false
-    })
+      return true
+    }
   })
-  return next
 }
 
 export const ReminderTokenInline = Extension.create({

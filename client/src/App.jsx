@@ -38,14 +38,8 @@ export default function App() {
   const { pendingReminders } = useReminders()
   const hasPendingReminders = pendingReminders.length > 0
 
-  const {
-    timelineFocusRequest,
-    outlineFocusRequest,
-    requestTimelineFocus,
-    requestOutlineFocus,
-    handleTimelineFocusHandled,
-    handleOutlineFocusHandled
-  } = useFocusRouter(setActiveTab)
+  const focusRouter = useFocusRouter(setActiveTab)
+  const { timelineFocusRequest, outlineFocusRequest } = focusRouter
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -115,16 +109,16 @@ export default function App() {
           <OutlinerView
             onSaveStateChange={setSaveState}
             focusRequest={outlineFocusRequest}
-            onFocusHandled={handleOutlineFocusHandled}
-            onRequestTimelineFocus={requestTimelineFocus}
+            onFocusHandled={focusRouter.handleOutlineFocusHandled}
+            onRequestTimelineFocus={focusRouter.requestTimelineFocus}
           />
         </TabPanel>
         <TabPanel active={activeTab === TAB_IDS.TIMELINE}>
           <Suspense fallback={<div className="loading">Loading…</div>}>
             <TimelineView
               focusRequest={timelineFocusRequest}
-              onFocusHandled={handleTimelineFocusHandled}
-              onNavigateOutline={requestOutlineFocus}
+              onFocusHandled={focusRouter.handleTimelineFocusHandled}
+              onNavigateOutline={focusRouter.requestOutlineFocus}
             />
           </Suspense>
         </TabPanel>
@@ -136,7 +130,7 @@ export default function App() {
       </main>
       <ReminderNotificationBar
         visible={hasPendingReminders}
-        onNavigateOutline={requestOutlineFocus}
+        onNavigateOutline={focusRouter.requestOutlineFocus}
       />
       {isHistoryOpen && (
         <Suspense fallback={<div className="loading">Loading…</div>}>

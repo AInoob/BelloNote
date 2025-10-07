@@ -1,6 +1,7 @@
 import { STATUS_EMPTY, STARTER_PLACEHOLDER_TITLE } from './constants.js'
 import { parseBodyContent, defaultBody } from './outlineParser.js'
 import { loadCollapsedSetForRoot } from './collapsedState.js'
+import { visitNodeTexts } from '../../utils/nodeTraversal.js'
 
 /**
  * Inspect a body node tree for archived tag markers without expensive stringification.
@@ -9,38 +10,14 @@ import { loadCollapsedSetForRoot } from './collapsedState.js'
  */
 function detectBodyTokens(nodes) {
   const flags = { archived: false }
-  if (!nodes?.length) return flags
-  const stack = []
-  for (let i = 0; i < nodes.length; i++) stack.push(nodes[i])
-  while (stack.length && !flags.archived) {
-    const current = stack.pop()
-    if (current == null) continue
-    if (typeof current === 'string') {
-      if (!current.includes('@archived')) continue
-      const lower = current.toLowerCase()
-      if (lower.includes('@archived')) {
-        flags.archived = true
-        break
-      }
-      continue
+  visitNodeTexts(nodes, (text) => {
+    if (typeof text !== 'string') return false
+    if (text.toLowerCase().includes('@archived')) {
+      flags.archived = true
+      return true
     }
-    if (Array.isArray(current)) {
-      for (let i = 0; i < current.length; i++) stack.push(current[i])
-      continue
-    }
-    if (typeof current === 'object') {
-      if (typeof current.text === 'string' && current.text.includes('@archived')) {
-        if (current.text.toLowerCase().includes('@archived')) {
-          flags.archived = true
-          break
-        }
-      }
-      const content = current.content
-      if (Array.isArray(content)) {
-        for (let i = 0; i < content.length; i++) stack.push(content[i])
-      }
-    }
-  }
+    return false
+  })
   return flags
 }
 

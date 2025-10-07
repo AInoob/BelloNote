@@ -696,12 +696,16 @@ export default function OutlinerView({
           const tolerance = 12
           const attemptRestore = (attempt = 0) => {
             if (restoredScrollRef.current) return
-            if (!editor || !editor.view || !editor.view.dom) {
+            const scheduleRetry = () => {
               if (attempt + 1 < maxAttempts) {
                 requestAnimationFrame(() => attemptRestore(attempt + 1))
-                return
+                return true
               }
               restoredScrollRef.current = true
+              return false
+            }
+            if (!editor || !editor.view || !editor.view.dom) {
+              scheduleRetry()
               return
             }
             let targetEl = null
@@ -711,21 +715,13 @@ export default function OutlinerView({
               targetEl = null
             }
             if (!targetEl) {
-              if (attempt + 1 < maxAttempts) {
-                requestAnimationFrame(() => attemptRestore(attempt + 1))
-                return
-              }
-              restoredScrollRef.current = true
+              scheduleRetry()
               return
             }
 
             const rect = targetEl.getBoundingClientRect()
             if (!rect || !Number.isFinite(rect.top)) {
-              if (attempt + 1 < maxAttempts) {
-                requestAnimationFrame(() => attemptRestore(attempt + 1))
-                return
-              }
-              restoredScrollRef.current = true
+              scheduleRetry()
               return
             }
 
@@ -740,10 +736,8 @@ export default function OutlinerView({
               const diff = (actualOffset === null || !Number.isFinite(expectedOffset))
                 ? null
                 : Math.abs(actualOffset - expectedOffset)
-              const meta = { attempt, topTaskId, actualOffset, diff, expectedOffset }
-              if (diff !== null && diff > tolerance && attempt + 1 < maxAttempts) {
-                requestAnimationFrame(() => attemptRestore(attempt + 1))
-                return
+              if (diff !== null && diff > tolerance) {
+                if (scheduleRetry()) return
               }
               restoredScrollRef.current = true
             })

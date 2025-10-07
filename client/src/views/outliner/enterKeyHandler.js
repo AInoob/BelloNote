@@ -10,6 +10,17 @@ import {
 
 const noop = () => {}
 
+function buildEnterContext({ event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef }) {
+  return {
+    event,
+    editor,
+    now: typeof now === 'function' ? now : defaultNow,
+    logCursorTiming: logCursorTiming || noop,
+    pushDebug: pushDebug || noop,
+    pendingEmptyCaretRef
+  }
+}
+
 function defaultNow() {
   return (typeof performance !== 'undefined' && typeof performance.now === 'function')
     ? performance.now()
@@ -19,25 +30,21 @@ function defaultNow() {
 function coerceEnterArgs(args) {
   const fallbackPendingRef = { current: false }
   if (args.length === 1 && args[0] && typeof args[0] === 'object' && 'event' in args[0]) {
-    const { event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef } = args[0]
-    return {
-      event,
-      editor,
-      now: typeof now === 'function' ? now : defaultNow,
-      logCursorTiming: logCursorTiming || noop,
-      pushDebug: pushDebug || noop,
+    const { pendingEmptyCaretRef, ...rest } = args[0]
+    return buildEnterContext({
+      ...rest,
       pendingEmptyCaretRef: pendingEmptyCaretRef || fallbackPendingRef
-    }
+    })
   }
   const [event, editor, now, logCursorTiming, pushDebug, pendingEmptyCaretRef] = args
-  return {
+  return buildEnterContext({
     event,
     editor,
-    now: typeof now === 'function' ? now : defaultNow,
-    logCursorTiming: logCursorTiming || noop,
-    pushDebug: pushDebug || noop,
+    now,
+    logCursorTiming,
+    pushDebug,
     pendingEmptyCaretRef: pendingEmptyCaretRef || fallbackPendingRef
-  }
+  })
 }
 
 function isEffectivelyEmptyListItem(listItemNode) {

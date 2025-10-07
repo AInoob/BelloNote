@@ -1,6 +1,25 @@
 import { cssEscape } from '../../utils/cssEscape.js'
 import { extractTagsFromText } from './tagUtils.js'
 
+function traverseWithParent(nodes, parentMap, { reverse = false } = {}, handler) {
+  if (!Array.isArray(nodes) || typeof handler !== 'function') return
+  if (reverse) {
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i]
+      const parent = parentMap.get(node)
+      if (!parent) continue
+      handler(node, parent)
+    }
+  } else {
+    for (let i = 0; i < nodes.length; i += 1) {
+      const node = nodes[i]
+      const parent = parentMap.get(node)
+      if (!parent) continue
+      handler(node, parent)
+    }
+  }
+}
+
 const DEFAULT_TAG_FILTER = { include: [], exclude: [] }
 const LAST_VISIBILITY = new WeakMap()
 
@@ -150,26 +169,20 @@ export function applyStatusFilter(
     })
   }
 
-  for (let i = liNodes.length - 1; i >= 0; i--) {
-    const li = liNodes[i]
-    const parent = parentMap.get(li)
-    if (!parent) continue
+  traverseWithParent(liNodes, parentMap, { reverse: true }, (li, parent) => {
     const info = infoMap.get(li)
     const parentInfo = infoMap.get(parent)
-    if (!info || !parentInfo) continue
+    if (!info || !parentInfo) return
     if (info.includeSelf || info.includeDescendant) parentInfo.includeDescendant = true
-  }
+  })
 
-  for (let i = 0; i < liNodes.length; i++) {
-    const li = liNodes[i]
-    const parent = parentMap.get(li)
-    if (!parent) continue
+  traverseWithParent(liNodes, parentMap, {}, (li, parent) => {
     const info = infoMap.get(li)
     const parentInfo = infoMap.get(parent)
-    if (!info || !parentInfo) continue
+    if (!info || !parentInfo) return
     if (parentInfo.includeSelf || parentInfo.includeAncestor) info.includeAncestor = true
     if (parentInfo.excludeSelf || parentInfo.excludeAncestor) info.excludeAncestor = true
-  }
+  })
 
   for (let i = 0; i < liNodes.length; i++) {
     const li = liNodes[i]

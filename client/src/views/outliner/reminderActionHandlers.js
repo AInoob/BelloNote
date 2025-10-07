@@ -10,6 +10,12 @@
  * @returns {Function} Handler function
  */
 import { TextSelection } from 'prosemirror-state'
+
+export function dispatchReminderAction(detail) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail }))
+}
+
 export function createReminderActionHandler(
   action,
   ensurePersistentTaskId,
@@ -28,7 +34,7 @@ export function createReminderActionHandler(
         detail.remindAt = options.customDate
       }
       
-      window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail }))
+      dispatchReminderAction(detail)
       closeReminderMenu()
     } catch (err) {
       const errorMessages = {
@@ -73,16 +79,16 @@ export function buildReminderActionSet({
  * @param {Function} runSplitListItemWithSelection - Function to split list item
  * @param {Function} applySplitStatusAdjustments - Function to apply split status adjustments
  */
-export function handleStatusKeyDown(
-  event,
-  readOnly,
-  allowStatusToggleInReadOnly,
-  getPos,
-  editor,
-  findListItemDepth,
-  runSplitListItemWithSelection,
-  applySplitStatusAdjustments
-) {
+export function handleStatusKeyDown(event, context) {
+  const {
+    readOnly,
+    allowStatusToggleInReadOnly,
+    getPos,
+    editor,
+    findListItemDepth,
+    runSplitListItemWithSelection,
+    applySplitStatusAdjustments
+  } = context
   if (event.key !== 'Enter') return
   if (readOnly && !allowStatusToggleInReadOnly) return
   event.preventDefault()
@@ -178,37 +184,37 @@ function restoreCaretToListItem(editor, getPos, findListItemDepth, options = {})
  * @param {boolean} allowStatusToggleInReadOnly - Whether status toggle is allowed in read-only mode
  * @param {Object} rowRef - Ref to row element
  * @param {Object} node - ProseMirror node
- * @param {Array} STATUS_ORDER - Array of status values in order
- * @param {string} STATUS_EMPTY - Empty status value
+ * @param {Array} statusOrder - Array of status values in order
+ * @param {string} statusEmpty - Empty status value
  * @param {Function} updateAttributes - Function to update node attributes
  * @param {Function} onStatusToggle - Callback for status toggle
  * @param {string} id - Task ID
  * @param {Object} fallbackIdRef - Ref to fallback ID
  * @param {Object} editor - TipTap editor instance
  */
-export function cycleStatus(
-  event,
-  readOnly,
-  allowStatusToggleInReadOnly,
-  rowRef,
-  node,
-  STATUS_ORDER,
-  STATUS_EMPTY,
-  updateAttributes,
-  onStatusToggle,
-  id,
-  fallbackIdRef,
-  editor,
-  getPos,
-  findListItemDepth
-) {
+export function cycleStatus(event, context) {
+  const {
+    readOnly,
+    allowStatusToggleInReadOnly,
+    rowRef,
+    node,
+    statusOrder,
+    statusEmpty,
+    updateAttributes,
+    onStatusToggle,
+    id,
+    fallbackIdRef,
+    editor,
+    getPos,
+    findListItemDepth
+  } = context
   if (readOnly && !allowStatusToggleInReadOnly) return
   const li = rowRef.current?.closest('li.li-node')
   const liveStatus = li?.getAttribute('data-status')
-  const currentStatus = typeof liveStatus === 'string' ? liveStatus : node?.attrs?.status ?? STATUS_EMPTY
-  const currentIndex = STATUS_ORDER.indexOf(currentStatus)
+  const currentStatus = typeof liveStatus === 'string' ? liveStatus : node?.attrs?.status ?? statusEmpty
+  const currentIndex = statusOrder.indexOf(currentStatus)
   const idx = currentIndex >= 0 ? currentIndex : 0
-  const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
+  const next = statusOrder[(idx + 1) % statusOrder.length]
   updateAttributes({ status: next })
   if (readOnly && allowStatusToggleInReadOnly && typeof onStatusToggle === 'function') {
     const realId = id || fallbackIdRef.current

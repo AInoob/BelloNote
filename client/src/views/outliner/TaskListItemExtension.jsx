@@ -29,6 +29,7 @@ import {
 import { gatherOwnListItemText } from './listItemUtils.js'
 import {
   buildReminderActionSet,
+  dispatchReminderAction,
   handleStatusKeyDown as handleStatusKeyDownUtil,
   cycleStatus as cycleStatusUtil
 } from './reminderActionHandlers.js'
@@ -36,6 +37,22 @@ import {
   handleDragStart as handleDragStartUtil,
   handleDragEnd as handleDragEndUtil
 } from './taskItemDragHandlers.js'
+
+function computeInlineRect(element) {
+  if (!element || typeof document === 'undefined' || !document.createRange) return null
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  const rects = range.getClientRects()
+  let result = null
+  if (rects.length > 0) {
+    result = Array.from(rects).reduce((acc, rect) => (!acc || rect.right > acc.right ? rect : acc), null)
+  } else {
+    const rect = range.getBoundingClientRect()
+    if (rect && rect.width) result = rect
+  }
+  range.detach?.()
+  return result
+}
 
 function ListItemView({
   node,
@@ -180,9 +197,7 @@ function ListItemView({
       setReminderError('')
       const realId = await ensurePersistentTaskId()
       const remindAt = dayjs().add(minutes, 'minute').toDate().toISOString()
-      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
-        detail: { action: 'schedule', taskId: String(realId), remindAt }
-      }))
+      dispatchReminderAction({ action: 'schedule', taskId: String(realId), remindAt })
       closeReminderMenu()
     } catch (err) {
       setReminderError(err?.message || 'Failed to schedule reminder')
@@ -201,9 +216,7 @@ function ListItemView({
       const dateValue = new Date(customDate)
       if (Number.isNaN(dateValue.valueOf())) throw new Error('Invalid date')
       const remindAt = dateValue.toISOString()
-      window.dispatchEvent(new CustomEvent('worklog:reminder-action', {
-        detail: { action: 'schedule', taskId: String(realId), remindAt }
-      }))
+      dispatchReminderAction({ action: 'schedule', taskId: String(realId), remindAt })
       closeReminderMenu()
     } catch (err) {
       setReminderError(err?.message || 'Failed to schedule reminder')
@@ -221,8 +234,7 @@ function ListItemView({
   )
 
   const handleStatusKeyDown = useCallback((event) => {
-    handleStatusKeyDownUtil(
-      event,
+    handleStatusKeyDownUtil(event, {
       readOnly,
       allowStatusToggleInReadOnly,
       getPos,
@@ -230,18 +242,17 @@ function ListItemView({
       findListItemDepth,
       runSplitListItemWithSelection,
       applySplitStatusAdjustments
-    )
+    })
   }, [allowStatusToggleInReadOnly, editor, getPos, readOnly])
 
   const cycle = (event) => {
-    cycleStatusUtil(
-      event,
+    cycleStatusUtil(event, {
       readOnly,
       allowStatusToggleInReadOnly,
       rowRef,
       node,
-      STATUS_ORDER,
-      STATUS_EMPTY,
+      statusOrder: STATUS_ORDER,
+      statusEmpty: STATUS_EMPTY,
       updateAttributes,
       onStatusToggle,
       id,
@@ -249,7 +260,7 @@ function ListItemView({
       editor,
       getPos,
       findListItemDepth
-    )
+    })
   }
 
   const handleDragStart = (event) => {
@@ -313,36 +324,10 @@ function ListItemView({
       let firstRect = null
       if (contentEl) {
         const paragraph = contentEl.querySelector('p')
-        if (paragraph) {
-          const range = document.createRange()
-          range.selectNodeContents(paragraph)
-          const rects = range.getClientRects()
-          if (rects.length > 0) {
-            firstRect = Array.from(rects).reduce((acc, rect) => (
-              !acc || rect.right > acc.right ? rect : acc
-            ), null)
-          } else {
-            const rect = range.getBoundingClientRect()
-            if (rect && rect.width) firstRect = rect
-          }
-          range.detach?.()
-        }
+        firstRect = computeInlineRect(paragraph)
         if (!firstRect) {
           const fallbackCandidate = contentEl.querySelector(':scope > *:not(ul):not(ol)')
-          if (fallbackCandidate) {
-            const range = document.createRange()
-            range.selectNodeContents(fallbackCandidate)
-            const rects = range.getClientRects()
-            if (rects.length > 0) {
-              firstRect = Array.from(rects).reduce((acc, rect) => (
-                !acc || rect.right > acc.right ? rect : acc
-              ), null)
-            } else {
-              const rect = range.getBoundingClientRect()
-              if (rect && rect.width) firstRect = rect
-            }
-            range.detach?.()
-          }
+          firstRect = computeInlineRect(fallbackCandidate)
         }
         if (!firstRect) {
           const fallbackRect = contentEl.getBoundingClientRect()

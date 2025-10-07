@@ -26,27 +26,22 @@ export function useFocusRouter(setTab) {
   const [timelineFocusRequest, setTimelineFocusRequest] = useState(null)
   const [outlineFocusRequest, setOutlineFocusRequest] = useState(null)
 
-  const requestTimelineFocus = useCallback((payload) => {
+  const makeRequest = (tabId, setter) => useCallback((payload) => {
     const normalized = normalizePayload(payload)
     if (!normalized) return
-    setTab(TAB_IDS.TIMELINE)
-    setTimelineFocusRequest(normalized)
-  }, [setTab])
+    setTab(tabId)
+    setter(normalized)
+  }, [setTab, setter, tabId])
 
-  const handleTimelineFocusHandled = useCallback((success) => {
-    if (success) setTimelineFocusRequest(null)
-  }, [])
+  const makeHandled = (setter) => useCallback((success) => {
+    if (success) setter(null)
+  }, [setter])
 
-  const requestOutlineFocus = useCallback((payload) => {
-    const normalized = normalizePayload(payload)
-    if (!normalized) return
-    setTab(TAB_IDS.OUTLINE)
-    setOutlineFocusRequest(normalized)
-  }, [setTab])
+  const requestTimelineFocus = makeRequest(TAB_IDS.TIMELINE, setTimelineFocusRequest)
+  const handleTimelineFocusHandled = makeHandled(setTimelineFocusRequest)
 
-  const handleOutlineFocusHandled = useCallback((success) => {
-    if (success) setOutlineFocusRequest(null)
-  }, [])
+  const requestOutlineFocus = makeRequest(TAB_IDS.OUTLINE, setOutlineFocusRequest)
+  const handleOutlineFocusHandled = makeHandled(setOutlineFocusRequest)
 
   return {
     timelineFocusRequest,

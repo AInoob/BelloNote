@@ -3,35 +3,10 @@
  */
 
 import { DATE_RE } from './constants.js'
+import { visitNodeTexts } from '../../utils/nodeTraversal.js'
 
 function contentTextIncludes(nodes, predicate) {
-  if (!nodes) return false
-  const stack = []
-  if (Array.isArray(nodes)) {
-    for (let i = 0; i < nodes.length; i++) stack.push(nodes[i])
-  } else {
-    stack.push(nodes)
-  }
-  while (stack.length) {
-    const current = stack.pop()
-    if (current == null) continue
-    if (typeof current === 'string') {
-      if (predicate(current)) return true
-      continue
-    }
-    if (Array.isArray(current)) {
-      for (let i = 0; i < current.length; i++) stack.push(current[i])
-      continue
-    }
-    if (typeof current === 'object') {
-      if (typeof current.text === 'string' && predicate(current.text)) return true
-      const content = current.content
-      if (Array.isArray(content)) {
-        for (let i = 0; i < content.length; i++) stack.push(content[i])
-      }
-    }
-  }
-  return false
+  return visitNodeTexts(nodes, (text) => predicate(text))
 }
 
 function analyzeNodeMarkers(node) {
