@@ -9,6 +9,21 @@ import {
 
 const isTextNode = (node) => node?.type?.name === 'text'
 
+function appendTextWithSpace(nodes, schema, text) {
+  if (typeof text !== 'string' || !text.length) return
+  if (nodes.length) {
+    const last = nodes[nodes.length - 1]
+    if (isTextNode(last) && typeof last.text === 'string' && last.text.length) {
+      if (!/\s$/u.test(last.text)) {
+        nodes[nodes.length - 1] = schema.text(`${last.text} `, last.marks)
+      }
+    } else {
+      nodes.push(schema.text(' '))
+    }
+  }
+  nodes.push(schema.text(text))
+}
+
 export function findReminderTarget(doc, taskId) {
   if (!doc || taskId == null) return null
   let result = null
@@ -110,33 +125,13 @@ export function buildReminderParagraph({ schema, paragraphNode, action, reminder
     const todayTag = `@${todayIso || dayjs().format('YYYY-MM-DD')}`
     const hasTodayTag = processedChildren.some(node => isTextNode(node) && typeof node.text === 'string' && node.text.includes(todayTag))
     if (!hasTodayTag) {
-      if (processedChildren.length) {
-        const last = processedChildren[processedChildren.length - 1]
-        if (isTextNode(last) && typeof last.text === 'string' && last.text.length) {
-          if (!/\s$/u.test(last.text)) {
-            processedChildren[processedChildren.length - 1] = schema.text(`${last.text} `, last.marks)
-          }
-        } else {
-          processedChildren.push(schema.text(' '))
-        }
-      }
-      processedChildren.push(schema.text(todayTag))
+      appendTextWithSpace(processedChildren, schema, todayTag)
       addedTodayTag = true
     }
   }
 
   if (tokenText) {
-    if (processedChildren.length) {
-      const last = processedChildren[processedChildren.length - 1]
-      if (isTextNode(last) && typeof last.text === 'string' && last.text.length) {
-        if (!/\s$/u.test(last.text)) {
-          processedChildren[processedChildren.length - 1] = schema.text(`${last.text} `, last.marks)
-        }
-      } else {
-        processedChildren.push(schema.text(' '))
-      }
-    }
-    processedChildren.push(schema.text(encodeReminderDisplayTokens(tokenText)))
+    appendTextWithSpace(processedChildren, schema, encodeReminderDisplayTokens(tokenText))
   }
 
   const paragraph = paragraphType.create(paragraphNode.attrs, processedChildren)

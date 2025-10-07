@@ -409,24 +409,8 @@ export default function OutlinerView({
     }
   }, [editor, isReadOnly])
 
-  const {
-    slashOpen,
-    slashPos,
-    slashQuery,
-    setSlashQuery,
-    slashActiveIndex,
-    updateSlashActive,
-    slashInputRef,
-    filteredCommands,
-    closeSlash,
-    menuRef,
-    datePickerOpen,
-    setDatePickerOpen,
-    datePickerValueRef,
-    applyPickedDate,
-    handleKeyDown: slashHandleKeyDown,
-    openSlashAt
-  } = useSlashCommands({ editor, isReadOnly, pushDebug })
+  const slash = useSlashCommands({ editor, isReadOnly, pushDebug })
+  const { handleKeyDown: slashHandleKeyDown, openSlashAt } = slash
 
   slashHandlersRef.current.handleKeyDown = slashHandleKeyDown
   slashHandlersRef.current.openAt = openSlashAt
@@ -897,30 +881,30 @@ export default function OutlinerView({
           </div>
         </div>
       )}
-      {slashOpen && (
+      {slash.slashOpen && (
         <SlashMenu
-          menuRef={menuRef}
-          slashPos={slashPos}
-          slashQuery={slashQuery}
-          setSlashQuery={setSlashQuery}
-          updateSlashActive={updateSlashActive}
-          filteredCommands={filteredCommands}
-          slashActiveIndex={slashActiveIndex}
-          closeSlash={closeSlash}
-          slashInputRef={slashInputRef}
+          menuRef={slash.menuRef}
+          slashPos={slash.slashPos}
+          slashQuery={slash.slashQuery}
+          setSlashQuery={slash.setSlashQuery}
+          updateSlashActive={slash.updateSlashActive}
+          filteredCommands={slash.filteredCommands}
+          slashActiveIndex={slash.slashActiveIndex}
+          closeSlash={slash.closeSlash}
+          slashInputRef={slash.slashInputRef}
         />
       )}
-      {datePickerOpen && (
-        <div className="date-picker-pop" style={{ left: slashPos.x, top: slashPos.y }} role="dialog" aria-modal="true">
+      {slash.datePickerOpen && (
+        <div className="date-picker-pop" style={{ left: slash.slashPos.x, top: slash.slashPos.y }} role="dialog" aria-modal="true">
           <div className="date-picker-title">Pick a date</div>
           <input
             type="date"
-            defaultValue={datePickerValueRef.current}
-            onChange={(e) => { datePickerValueRef.current = e.target.value }}
+            defaultValue={slash.datePickerValueRef.current}
+            onChange={(e) => { slash.datePickerValueRef.current = e.target.value }}
           />
           <div className="date-picker-actions">
-            <button className="btn" type="button" onClick={applyPickedDate}>Insert</button>
-            <button className="btn ghost" type="button" onClick={() => setDatePickerOpen(false)}>Cancel</button>
+            <button className="btn" type="button" onClick={slash.applyPickedDate}>Insert</button>
+            <button className="btn ghost" type="button" onClick={() => slash.setDatePickerOpen(false)}>Cancel</button>
           </div>
         </div>
       )}

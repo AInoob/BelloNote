@@ -1,5 +1,5 @@
-import { TextSelection } from 'prosemirror-state'
 import { handleEnterKey } from './enterKeyHandler.js'
+import { setCaretSelection } from './editorSelectionUtils.js'
 import { runListIndentCommand } from './listCommands.js'
 import { moveIntoFirstChild } from './editorNavigation.js'
 import { now, logCursorTiming } from './performanceUtils.js'
@@ -99,11 +99,7 @@ export function handleKeyDown(
           })
           if (targetPos != null) {
             const caretPos = targetPos + 1
-            const chainResult = editor.chain().focus().setTextSelection({ from: caretPos, to: caretPos }).run()
-            if (!chainResult) {
-              const tr = curState.tr.setSelection(TextSelection.create(curState.doc, caretPos)).scrollIntoView()
-              curView.dispatch(tr)
-            }
+            setCaretSelection({ editor, view: curView, pos: caretPos })
           }
         } catch (error) {
           if (typeof console !== 'undefined') console.warn('[split-adjust] focus empty failed', error)

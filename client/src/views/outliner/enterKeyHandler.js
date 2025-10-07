@@ -1,5 +1,6 @@
 import { TextSelection } from 'prosemirror-state'
 import { STATUS_EMPTY } from './constants.js'
+import { setCaretSelection } from './editorSelectionUtils.js'
 import {
   applySplitStatusAdjustments,
   runSplitListItemWithSelection,
@@ -50,17 +51,6 @@ function isEffectivelyEmptyListItem(listItemNode) {
     if (child.content.size > 0) return false
   }
   return sawParagraph
-}
-
-function ensureSelection(view, editor, caretPos) {
-  if (caretPos == null) return
-  const latest = view.state
-  const clamped = Math.max(0, Math.min(caretPos, latest.doc.content.size))
-  const chainResult = editor?.chain?.().focus().setTextSelection({ from: clamped, to: clamped }).run()
-  if (!chainResult) {
-    const tr = latest.tr.setSelection(TextSelection.create(latest.doc, clamped)).scrollIntoView()
-    view.dispatch(tr)
-  }
 }
 
 /**
@@ -171,10 +161,7 @@ export function handleEnterKey(...rawArgs) {
 
     const applyCaretSelection = () => {
       try {
-        const refreshed = view.state
-        const clamped = Math.max(0, Math.min(caretPos, refreshed.doc.content.size))
-        const targetSelection = TextSelection.create(refreshed.doc, clamped)
-        view.dispatch(refreshed.tr.setSelection(targetSelection).scrollIntoView())
+        setCaretSelection({ editor, view, pos: caretPos })
       } catch (error) {
         if (typeof console !== 'undefined') console.warn('[enter-empty] caret apply failed', error)
       }
@@ -301,7 +288,7 @@ export function handleEnterKey(...rawArgs) {
       const para = newNode.childCount > 0 ? newNode.child(0) : null
       const caretPos = para ? targetPos + 1 + para.content.size : targetPos + Math.max(1, newNode.nodeSize - 1)
       pendingEmptyCaretRef.current = true
-      ensureSelection(view, editor, caretPos)
+      setCaretSelection({ editor, view, pos: caretPos })
       view.focus()
       requestAnimationFrame(() => view.focus())
       logCursorTiming('split-list-item', enterStartedAt)

@@ -42,6 +42,26 @@ export function createReminderActionHandler(
   }
 }
 
+export function buildReminderActionSet({
+  ensurePersistentTaskId,
+  closeReminderMenu,
+  setReminderError,
+  reminderControlsEnabled
+}) {
+  const factory = (action) => createReminderActionHandler(
+    action,
+    ensurePersistentTaskId,
+    closeReminderMenu,
+    setReminderError,
+    reminderControlsEnabled
+  )
+  return {
+    dismiss: factory('dismiss'),
+    complete: factory('complete'),
+    remove: factory('remove')
+  }
+}
+
 /**
  * Handle status key down event (Enter key to create new task)
  * @param {Event} event - Keyboard event
@@ -86,7 +106,6 @@ export function handleStatusKeyDown(
     editor.commands.focus()
     const paragraphStart = pos + 1
     const paragraphEnd = paragraphStart + paragraphNode.nodeSize - 1
-    const { TextSelection } = require('prosemirror-state')
     const tr = state.tr.setSelection(TextSelection.create(state.doc, paragraphEnd))
     view.dispatch(tr)
     const didSplit = runSplitListItemWithSelection(editor, { splitAtStart: false })

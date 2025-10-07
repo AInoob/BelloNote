@@ -28,7 +28,7 @@ import {
 } from './listCommands.js'
 import { gatherOwnListItemText } from './listItemUtils.js'
 import {
-  createReminderActionHandler,
+  buildReminderActionSet,
   handleStatusKeyDown as handleStatusKeyDownUtil,
   cycleStatus as cycleStatusUtil
 } from './reminderActionHandlers.js'
@@ -210,19 +210,14 @@ function ListItemView({
     }
   }, [closeReminderMenu, customDate, ensurePersistentTaskId, reminderControlsEnabled])
 
-  const handleDismissReminder = useCallback(
-    createReminderActionHandler('dismiss', ensurePersistentTaskId, closeReminderMenu, setReminderError, reminderControlsEnabled),
-    [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled]
-  )
-
-  const handleCompleteReminder = useCallback(
-    createReminderActionHandler('complete', ensurePersistentTaskId, closeReminderMenu, setReminderError, reminderControlsEnabled),
-    [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled]
-  )
-
-  const handleRemoveReminder = useCallback(
-    createReminderActionHandler('remove', ensurePersistentTaskId, closeReminderMenu, setReminderError, reminderControlsEnabled),
-    [closeReminderMenu, ensurePersistentTaskId, reminderControlsEnabled]
+  const { dismiss: handleDismissReminder, complete: handleCompleteReminder, remove: handleRemoveReminder } = useMemo(
+    () => buildReminderActionSet({
+      ensurePersistentTaskId,
+      closeReminderMenu,
+      setReminderError,
+      reminderControlsEnabled
+    }),
+    [ensurePersistentTaskId, closeReminderMenu, reminderControlsEnabled, setReminderError]
   )
 
   const handleStatusKeyDown = useCallback((event) => {

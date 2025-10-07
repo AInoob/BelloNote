@@ -76,17 +76,20 @@ export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrol
     }
     const debouncedSave = debouncedSaveRef.current
 
-    const performSave = () => {
-      if (typeof window === 'undefined') return
-      if (!restoredScrollRef.current) return
+    const buildPayload = () => {
       const { topTaskId, topTaskOffset } = captureTopTaskState()
-      const payload = {
+      return {
         topTaskId,
         topTaskOffset,
         scrollY: window.scrollY,
         selectionFrom: editor?.state?.selection?.from ?? null,
         timestamp: Date.now()
       }
+    }
+    const performSave = () => {
+      if (typeof window === 'undefined') return
+      if (!restoredScrollRef.current) return
+      const payload = buildPayload()
       debouncedSave(payload)
     }
     const scheduleSave = (reason) => {
@@ -95,14 +98,7 @@ export function useScrollStateSaver(editor, isReadOnly, restoredScrollRef, scrol
     }
     const handleBeforeUnload = () => {
       if (!restoredScrollRef.current) return
-      const { topTaskId, topTaskOffset } = captureTopTaskState()
-      const payload = {
-        topTaskId,
-        topTaskOffset,
-        scrollY: window.scrollY,
-        selectionFrom: editor?.state?.selection?.from ?? null,
-        timestamp: Date.now()
-      }
+      const payload = buildPayload()
       debouncedSave.flush(payload)
     }
     const handleScroll = () => scheduleSave('scroll')
