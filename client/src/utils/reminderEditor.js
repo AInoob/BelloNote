@@ -4,10 +4,27 @@ import {
   buildReminderToken,
   encodeReminderDisplayTokens,
   parseReminderTokenFromText,
-  upsertReminderTokenInText
+  upsertReminderTokenInText,
+  decodeReminderDisplayTokens
 } from './reminderTokens.js'
 
 const isTextNode = (node) => node?.type?.name === 'text'
+const REMINDER_TOKEN_GLOBAL_REGEX = new RegExp(REMINDER_TOKEN_REGEX.source, 'gi')
+
+function stripReminderTokensPreserveSpacing(text = '') {
+  if (typeof text !== 'string' || !text.length) return text
+  REMINDER_TOKEN_GLOBAL_REGEX.lastIndex = 0
+  if (!REMINDER_TOKEN_GLOBAL_REGEX.test(text)) {
+    REMINDER_TOKEN_GLOBAL_REGEX.lastIndex = 0
+    return text
+  }
+  REMINDER_TOKEN_GLOBAL_REGEX.lastIndex = 0
+  const canonical = decodeReminderDisplayTokens(text)
+  REMINDER_TOKEN_GLOBAL_REGEX.lastIndex = 0
+  const replaced = canonical.replace(REMINDER_TOKEN_GLOBAL_REGEX, ' ')
+  REMINDER_TOKEN_GLOBAL_REGEX.lastIndex = 0
+  return replaced.replace(/\s{2,}/g, ' ')
+}
 
 function appendTextWithSpace(nodes, schema, text) {
   if (typeof text !== 'string' || !text.length) return
@@ -78,11 +95,29 @@ export function buildReminderParagraph({ schema, paragraphNode, action, reminder
 
   const newChildren = []
   let tokenHandled = false
+  let tokenInserted = false
   paragraphNode.content?.forEach((child) => {
     if (isTextNode(child) && typeof child.text === 'string') {
-      if (REMINDER_TOKEN_REGEX.test(child.text)) tokenHandled = true
-      const updated = upsertReminderTokenInText(child.text, token)
-      if (updated) newChildren.push(schema.text(updated, child.marks))
+      const containsToken = REMINDER_TOKEN_REGEX.test(child.text)
+      if (containsToken) tokenHandled = true
+      let updated = child.text
+      if (token) {
+        if (!tokenInserted) {
+          updated = upsertReminderTokenInText(updated, token)
+          if (!containsToken && REMINDER_TOKEN_REGEX.test(updated)) {
+            tokenInserted = true
+          } else if (containsToken) {
+            tokenInserted = true
+          }
+        } else {
+          updated = stripReminderTokensPreserveSpacing(updated)
+        }
+      } else {
+        updated = stripReminderTokensPreserveSpacing(updated)
+      }
+      if (typeof updated === 'string' && updated.length) {
+        newChildren.push(schema.text(updated, child.marks))
+      }
     } else {
       newChildren.push(child)
     }

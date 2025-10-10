@@ -231,6 +231,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
                   forceExpand
                   initialOutline={{ roots }}
                   broadcastSnapshots={false}
+                  filtersDisabled
                   allowStatusToggleInReadOnly
                   reminderActionsEnabled
                   onStatusToggle={handleStatusToggle}

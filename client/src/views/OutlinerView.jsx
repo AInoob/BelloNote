@@ -80,7 +80,9 @@ import {
   loadArchivedVisible,
   saveArchivedVisible,
   loadTagFilters,
-  saveTagFilters
+  saveTagFilters,
+  DEFAULT_STATUS_FILTER,
+  DEFAULT_TAG_FILTER
 } from './outliner/filterUtils.js'
 import { CodeBlockView } from './outliner/CodeBlockView.jsx'
 import { createTaskListItemExtension } from './outliner/TaskListItemExtension.jsx'
@@ -116,6 +118,7 @@ export default function OutlinerView({
   broadcastSnapshots = true,
   initialOutline = null,
   forceExpand = false,
+  filtersDisabled = false,
   allowStatusToggleInReadOnly = false,
   onStatusToggle = null,
   reminderActionsEnabled: reminderActionsEnabledProp,
@@ -130,9 +133,25 @@ export default function OutlinerView({
   const [saving, setSaving] = useState(false)
   const slashHandlersRef = useRef({ handleKeyDown: () => false, openAt: () => {} })
   const [imagePreview, setImagePreview] = useState(null)
-  const [statusFilter, setStatusFilter] = useState(() => loadStatusFilter())
-  const [showArchived, setShowArchived] = useState(() => loadArchivedVisible())
-  const [tagFilters, setTagFilters] = useState(() => loadTagFilters())
+  const [statusFilter, setStatusFilter] = useState(() => (
+    filtersDisabled
+      ? { ...DEFAULT_STATUS_FILTER }
+      : loadStatusFilter()
+  ))
+  const [showArchived, setShowArchived] = useState(() => (
+    filtersDisabled
+      ? true
+      : loadArchivedVisible()
+  ))
+  const [tagFilters, setTagFilters] = useState(() => {
+    if (filtersDisabled) {
+      return {
+        include: [...(DEFAULT_TAG_FILTER.include || [])],
+        exclude: [...(DEFAULT_TAG_FILTER.exclude || [])]
+      }
+    }
+    return loadTagFilters()
+  })
   const [includeTagInput, setIncludeTagInput] = useState('')
   const [excludeTagInput, setExcludeTagInput] = useState('')
   const showArchivedRef = useRef(showArchived)
@@ -165,8 +184,14 @@ export default function OutlinerView({
   const lastFocusTokenRef = useRef(null)
 
   // Persist filters in localStorage
-  useEffect(() => { saveStatusFilter(statusFilter) }, [statusFilter])
-  useEffect(() => { saveArchivedVisible(showArchived) }, [showArchived])
+  useEffect(() => {
+    if (filtersDisabled) return
+    saveStatusFilter(statusFilter)
+  }, [statusFilter, filtersDisabled])
+  useEffect(() => {
+    if (filtersDisabled) return
+    saveArchivedVisible(showArchived)
+  }, [showArchived, filtersDisabled])
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
   useEffect(() => { showArchivedRef.current = showArchived }, [showArchived])
   const draggingRef = useRef(null)
@@ -492,6 +517,7 @@ export default function OutlinerView({
   }, [addTagFilter])
 
   const applyStatusFilter = useCallback(() => {
+    if (filtersDisabled) return
     applyStatusFilterUtil(
       editor,
       statusFilterRef,
@@ -499,7 +525,7 @@ export default function OutlinerView({
       tagFiltersRef,
       focusRootRef
     )
-  }, [editor, statusFilter, showArchived, tagFilters])
+  }, [editor, filtersDisabled, statusFilter, showArchived, tagFilters])
 
   const { scheduleApplyStatusFilter } = useFilterScheduler(
     applyStatusFilter,
@@ -518,9 +544,10 @@ export default function OutlinerView({
 
   useEffect(() => {
     tagFiltersRef.current = tagFilters
+    if (filtersDisabled) return
     saveTagFilters(tagFilters)
     applyStatusFilter()
-  }, [tagFilters, applyStatusFilter])
+  }, [tagFilters, applyStatusFilter, filtersDisabled])
 
   const handleRequestFocus = useCallback((taskId) => {
     handleRequestFocusUtil(taskId, (val) => { pendingFocusScrollRef.current = val }, setFocusRootId)

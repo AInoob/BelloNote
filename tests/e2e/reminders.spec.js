@@ -92,6 +92,46 @@ test('schedule reminder from outline and remove it', async ({ page, request }) =
   await expect(remindersOutline.locator('li.li-node', { hasText: 'Task A' })).toHaveCount(0, { timeout: SHORT_TIMEOUT * 5 })
 })
 
+test('rescheduling reminder does not duplicate inline chips', async ({ page, request }) => {
+  await resetOutline(request, [
+    { title: 'Duplication check', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Duplication check' }] }] }
+  ])
+
+  await page.goto('/')
+  const node = page.locator('li.li-node', { hasText: 'Duplication check' }).first()
+  await expect(node).toBeVisible({ timeout: SHORT_TIMEOUT })
+  const toggle = node.locator('.li-reminder-area .reminder-toggle').first()
+  const chips = node.locator('.reminder-inline-chip')
+  const schedulePreset = async (label) => {
+    await toggle.click()
+    const menu = page.locator('.reminder-menu')
+    await expect(menu).toBeVisible({ timeout: SHORT_TIMEOUT })
+    await menu.getByRole('button', { name: label, exact: true }).click()
+    await expect(menu).toHaveCount(0, { timeout: SHORT_TIMEOUT })
+  }
+  const assertSingleChip = async () => {
+    await expect(chips).toHaveCount(1, { timeout: SHORT_TIMEOUT * 5 })
+    await expect(chips.first()).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
+  }
+
+  await schedulePreset('30 minutes')
+  await assertSingleChip()
+
+  await schedulePreset('1 hour')
+  await assertSingleChip()
+
+  await schedulePreset('3 hours')
+  await assertSingleChip()
+
+  const tokenCount = await node.evaluate((el) => {
+    if (!el) return 0
+    const text = el.innerText || ''
+    const matches = text.match(/\[\[(?:\u200B)?reminder\|/gi)
+    return matches ? matches.length : 0
+  })
+  expect(tokenCount).toBe(0)
+})
+
 test('due reminder surfaces notification and completes task', async ({ page, request }) => {
   await resetOutline(request, [
     { title: 'Follow up item', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Follow up item' }] }] }

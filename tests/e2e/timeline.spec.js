@@ -176,3 +176,44 @@ test('timeline lazy mounts offscreen day editors until scrolled into view', asyn
   await expect(proseMirror, 'expected timeline section to mount once scrolled into view').toHaveCount(1)
   await expect(preview).toContainText(`Lazy timeline child ${farIndex}`)
 })
+
+test('timeline shows archived tasks even when outline hides them', async ({ page, request }) => {
+  await resetOutline(request)
+  const today = todayStr()
+
+  await seedOutline(request, [
+    {
+      title: `Archived timeline parent @archived`,
+      status: 'done',
+      dates: [today],
+      children: [
+        { title: 'Timeline archived child', status: 'done' }
+      ]
+    }
+  ])
+
+  await page.goto('/')
+
+  const outlineArchivedRow = page.locator('li.li-node', { hasText: 'Archived timeline parent' }).first()
+  await expect(outlineArchivedRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+
+  const archivedToggle = page.locator('.archive-toggle .btn.pill')
+  await expect(archivedToggle).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const currentLabel = (await archivedToggle.textContent())?.trim()
+  if (currentLabel === 'Shown') {
+    await archivedToggle.click()
+  }
+  await expect.poll(async () => (await archivedToggle.textContent())?.trim(), { timeout: SHORT_TIMEOUT * 5 })
+    .toBe('Hidden')
+
+  await expect(outlineArchivedRow).toBeHidden({ timeout: SHORT_TIMEOUT * 5 })
+
+  await page.getByRole('button', { name: 'Timeline' }).click()
+
+  const todaySection = sectionByDate(page, today)
+  await expect(todaySection).toHaveCount(1, { timeout: SHORT_TIMEOUT * 5 })
+  const preview = todaySection.locator('.history-inline-preview')
+  await expect(preview.locator('.ProseMirror')).toHaveCount(1, { timeout: SHORT_TIMEOUT * 5 })
+  await expect(preview).toContainText('Archived timeline parent', { timeout: SHORT_TIMEOUT * 5 })
+  await expect(preview).toContainText('Timeline archived child', { timeout: SHORT_TIMEOUT * 5 })
+})
