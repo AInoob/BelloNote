@@ -1,8 +1,40 @@
 import { handleEnterKey } from './enterKeyHandler.js'
 import { setCaretSelection } from './editorSelectionUtils.js'
-import { runListIndentCommand } from './listCommands.js'
+import { runListIndentCommand, findListItemDepth } from './listCommands.js'
 import { moveIntoFirstChild } from './editorNavigation.js'
 import { now, logCursorTiming } from './performanceUtils.js'
+import { STATUS_EMPTY, STATUS_ORDER } from './constants.js'
+
+function cycleActiveTaskStatus(editor) {
+  if (!editor) return false
+  const { state, view } = editor
+  if (!state || !view) return false
+  const { $from } = state.selection
+  const listItemDepth = findListItemDepth($from)
+  if (listItemDepth <= 0) return false
+  const listItemPos = $from.before(listItemDepth)
+  if (typeof listItemPos !== 'number') return false
+  const listItemNode = state.doc.nodeAt(listItemPos)
+  if (!listItemNode) return false
+  const currentStatus = typeof listItemNode.attrs?.status === 'string'
+    ? listItemNode.attrs.status
+    : STATUS_EMPTY
+  const currentIndex = STATUS_ORDER.indexOf(currentStatus)
+  const safeIndex = currentIndex >= 0 ? currentIndex : 0
+  const nextStatus = STATUS_ORDER[(safeIndex + 1) % STATUS_ORDER.length]
+  const tr = state.tr.setNodeMarkup(
+    listItemPos,
+    undefined,
+    { ...listItemNode.attrs, status: nextStatus }
+  )
+  view.dispatch(tr)
+  try {
+    view.dom?.focus?.({ preventScroll: true })
+  } catch {
+    view.focus?.()
+  }
+  return true
+}
 
 /**
  * Handle key down event in the editor
@@ -63,6 +95,14 @@ export function handleKeyDown(
       })
     }
     return true
+  }
+
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && (event.key === 't' || event.key === 'T')) {
+    event.preventDefault()
+    event.stopPropagation()
+    const changed = cycleActiveTaskStatus(editor)
+    pushDebug(changed ? 'status-cycle:cmd-t' : 'status-cycle:cmd-t-failed')
+    return changed
   }
   
   if (event.key === 'Enter') {
