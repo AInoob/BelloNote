@@ -133,6 +133,16 @@ export default function OutlinerView({
   const [saving, setSaving] = useState(false)
   const slashHandlersRef = useRef({ handleKeyDown: () => false, openAt: () => {} })
   const [imagePreview, setImagePreview] = useState(null)
+  // --- Link menu state ---
+  const [linkMenu, setLinkMenu] = useState({
+    open: false,
+    href: '',
+    x: 0,
+    y: 0,
+    range: null
+  })
+  const [linkCopied, setLinkCopied] = useState(false)
+  const linkMenuRef = useRef(null)
   const [statusFilter, setStatusFilter] = useState(() => (
     filtersDisabled
       ? { ...DEFAULT_STATUS_FILTER }
@@ -201,6 +211,28 @@ export default function OutlinerView({
   const pendingImageSrcRef = useRef(new Set())
   const includeFilterList = Array.isArray(tagFilters?.include) ? tagFilters.include : []
   const excludeFilterList = Array.isArray(tagFilters?.exclude) ? tagFilters.exclude : []
+
+  useEffect(() => {
+    if (!linkMenu.open) return
+    const onDocMouseDown = (e) => {
+      if (linkMenuRef.current && !linkMenuRef.current.contains(e.target)) {
+        setLinkMenu((m) => ({ ...m, open: false }))
+        setLinkCopied(false)
+      }
+    }
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setLinkMenu((m) => ({ ...m, open: false }))
+        setLinkCopied(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown, true)
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown, true)
+      document.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [linkMenu.open])
 
   const onStatusToggleStable = useCallback((...args) => {
     if (typeof onStatusToggle === 'function') {
@@ -325,6 +357,44 @@ export default function OutlinerView({
             return false
           }
           return false
+        },
+        click: (view, event) => {
+          const target = event.target
+          if (!target) return false
+
+          const anchor = target.closest && target.closest('a[href]')
+          if (!anchor) return false
+
+          event.preventDefault()
+          event.stopPropagation()
+
+          const href = anchor.getAttribute('href') || ''
+
+          const posInfo = view.posAtCoords({ left: event.clientX, top: event.clientY })
+          if (posInfo && typeof posInfo.pos === 'number' && editor) {
+            editor
+              .chain()
+              .setTextSelection({ from: posInfo.pos, to: posInfo.pos })
+              .extendMarkRange('link')
+              .run()
+          }
+
+          if (!editor) return false
+
+          const { from, to } = editor.state.selection
+          const attrsHref = editor.getAttributes('link')?.href
+          const effectiveHref = attrsHref || href
+
+          setLinkMenu({
+            open: true,
+            href: effectiveHref || '',
+            x: event.clientX + 8,
+            y: event.clientY + 12,
+            range: { from, to }
+          })
+          setLinkCopied(false)
+
+          return true
         }
       },
       handlePaste(view, event) {
@@ -450,6 +520,53 @@ export default function OutlinerView({
     if (isReadOnly) return
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => doSave(), delay)
+  }
+
+  const closeLinkMenu = () => setLinkMenu((m) => ({ ...m, open: false }))
+
+  const removeLink = () => {
+    if (isReadOnly || !linkMenu.range || !editor) return
+    editor
+      .chain()
+      .focus()
+      .setTextSelection(linkMenu.range)
+      .unsetLink()
+      .run()
+    closeLinkMenu()
+  }
+
+  const openLinkInNewTab = () => {
+    if (!linkMenu.href) return
+    if (typeof window === 'undefined') return
+    window.open(linkMenu.href, '_blank', 'noopener,noreferrer')
+    closeLinkMenu()
+  }
+
+  const copyLink = async () => {
+    if (!linkMenu.href) return
+    try {
+      const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : null
+      if (clipboard?.writeText) {
+        await clipboard.writeText(linkMenu.href)
+      } else {
+        throw new Error('Clipboard API unavailable')
+      }
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 1200)
+    } catch {
+      if (typeof document === 'undefined') return
+      const el = document.createElement('textarea')
+      el.value = linkMenu.href
+      el.setAttribute('readonly', '')
+      el.style.position = 'fixed'
+      el.style.top = '-1000px'
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 1200)
+    }
   }
 
   const notifyOutlineSnapshot = useCallback((outline) => {
@@ -894,6 +1011,35 @@ export default function OutlinerView({
       <FocusContext.Provider value={focusContextValue}>
         <EditorContent editor={editor} className="tiptap" />
       </FocusContext.Provider>
+      {linkMenu.open && (
+        <div
+          ref={linkMenuRef}
+          className="slash-menu"
+          style={{ left: linkMenu.x, top: linkMenu.y }}
+          role="menu"
+          aria-label="Link options"
+        >
+          <button
+            type="button"
+            onClick={removeLink}
+            disabled={isReadOnly}
+            title={isReadOnly ? 'Read-only' : 'Remove the link'}
+          >
+            <span className="cmd-label">Remove link</span>
+            <span className="cmd-hint">Unset the link mark</span>
+          </button>
+
+          <button type="button" onClick={openLinkInNewTab}>
+            <span className="cmd-label">Open link in new tab</span>
+            <span className="cmd-hint">{linkMenu.href}</span>
+          </button>
+
+          <button type="button" onClick={copyLink}>
+            <span className="cmd-label">{linkCopied ? 'Copied!' : 'Copy link'}</span>
+            <span className="cmd-hint">{linkMenu.href}</span>
+          </button>
+        </div>
+      )}
       {imagePreview && (
         <div className="overlay" onClick={() => setImagePreview(null)}>
           <div className="image-modal" onClick={e => e.stopPropagation()}>
