@@ -590,12 +590,21 @@ const test = playwrightBase.extend({
     await appServer.resetState()
 
     const apiUrl = appServer.apiUrl
+    const pgConfig = {
+      host: BASE_PG_CONFIG.host,
+      port: BASE_PG_CONFIG.port,
+      user: BASE_PG_CONFIG.user,
+      password: BASE_PG_CONFIG.password,
+      ssl: BASE_PG_CONFIG.ssl
+    }
     const appContext = {
       apiUrl,
       clientUrl: appServer.clientUrl,
       dataDir: testDataDir,
       clientPort: appServer.clientPort,
       serverPort: appServer.serverPort,
+      databaseName: appServer.databaseName,
+      pgConfig,
       async resetOutline(outline = []) {
         const response = await fetch(`${apiUrl}/api/outline`, {
           method: 'POST',

@@ -220,7 +220,9 @@ test('reminder banner supports custom schedule from notification', async ({ page
   await bannerInput.fill(nowPlusMinutes(90))
   await bannerForm.getByRole('button', { name: 'Set' }).click()
 
-  await expect(banner).toHaveCount(0)
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect(banner).toContainText('No reminders due', { timeout: SHORT_TIMEOUT * 5 })
+  await expect(banner.getByRole('button', { name: /Show upcoming/i })).toBeVisible({ timeout: SHORT_TIMEOUT })
 
   const reminderChip = page.locator('li.li-node').first().locator('.reminder-inline-chip')
   await expect(reminderChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
@@ -256,6 +258,42 @@ test('reminder banner custom defaults to roughly 30 minutes ahead', async ({ pag
   const originalTime = new Date(pastTarget)
   const diffMinutes = Math.abs((scheduledTime.getTime() - originalTime.getTime()) / (60 * 1000))
   expect(diffMinutes).toBeLessThan(2)
+})
+
+test('reminder banner can reveal upcoming reminders', async ({ page, request }) => {
+  await resetOutline(request, [
+    { title: 'Upcoming reminder', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Upcoming reminder' }] }] }
+  ])
+
+  await page.goto('/')
+  const reminderToggle = page.locator('li.li-node').first().locator('.li-reminder-area .reminder-toggle')
+  await expect(reminderToggle).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await reminderToggle.click()
+  await page.locator('.reminder-menu').getByRole('button', { name: '30 minutes' }).click()
+
+  await expect.poll(async () => {
+    const reminders = await page.evaluate(() => window.__WORKLOG_REMINDERS || [])
+    return Array.isArray(reminders) ? reminders.length : 0
+  }, { timeout: SHORT_TIMEOUT * 5 }).toBeGreaterThan(0)
+
+  const banner = page.locator('.reminder-banner')
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect(banner).toContainText('No reminders due', { timeout: SHORT_TIMEOUT * 5 })
+
+  const showUpcomingButton = banner.getByRole('button', { name: /Show upcoming \(1\)/i })
+  await expect(showUpcomingButton).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await showUpcomingButton.click()
+
+  const hideUpcomingButton = banner.getByRole('button', { name: /Hide upcoming/i })
+  await expect(hideUpcomingButton).toBeVisible({ timeout: SHORT_TIMEOUT })
+
+  const upcomingRow = banner.locator('.reminder-item', { hasText: 'Upcoming reminder' }).first()
+  await expect(upcomingRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect(upcomingRow.locator('.reminder-relative')).toContainText(/Reminds/i, { timeout: SHORT_TIMEOUT * 5 })
+
+  await hideUpcomingButton.click()
+  await expect(banner.locator('.reminder-item')).toHaveCount(0, { timeout: SHORT_TIMEOUT })
+  await expect(banner).toContainText('No reminders due right now.', { timeout: SHORT_TIMEOUT })
 })
 
 test('tasks seeded with inline reminder token render correctly', async ({ page, request }) => {

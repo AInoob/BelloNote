@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useMemo, useState } from 'react'
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import { useReminders } from '../context/ReminderContext.jsx'
 import { usePendingReminderCount } from '../context/ReminderSelectors.js'
@@ -92,11 +92,23 @@ const ReminderItemRow = memo(function ReminderItemRow({
 ReminderItemRow.displayName = 'ReminderItemRow'
 
 function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
-  const { pendingReminders, dismissReminder, completeReminder, scheduleReminder } = useReminders()
+  const {
+    pendingReminders,
+    upcomingReminders,
+    dismissReminder,
+    completeReminder,
+    scheduleReminder
+  } = useReminders()
   const pendingCount = usePendingReminderCount()
+  const hasUpcoming = upcomingReminders.length > 0
+  const [showUpcoming, setShowUpcoming] = useState(false)
   const [customEditingId, setCustomEditingId] = useState(null)
   const [customDateTime, setCustomDateTime] = useState('')
   const [customError, setCustomError] = useState('')
+
+  useEffect(() => {
+    if (!hasUpcoming && showUpcoming) setShowUpcoming(false)
+  }, [hasUpcoming, showUpcoming])
 
   const resetCustomState = useCallback(() => {
     setCustomEditingId(null)
@@ -190,7 +202,32 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
     if (customEditingId === String(targetId)) resetCustomState()
   }, [dismissReminder, customEditingId, resetCustomState])
 
-  const remindersWithLabels = useMemo(() => pendingReminders.map((reminder) => {
+  const displayedReminders = useMemo(() => {
+    if (!showUpcoming) return pendingReminders
+    const combined = [...pendingReminders, ...upcomingReminders]
+    const seen = new Set()
+    const unique = []
+    combined.forEach((reminder) => {
+      if (!reminder) return
+      const key = String(reminder?.taskId ?? reminder?.id ?? '')
+      if (!key || seen.has(key)) return
+      seen.add(key)
+      unique.push(reminder)
+    })
+    unique.sort((a, b) => {
+      const aDue = isReminderDue(a)
+      const bDue = isReminderDue(b)
+      if (aDue !== bDue) return aDue ? -1 : 1
+      const aTime = dayjs(a?.remindAt)
+      const bTime = dayjs(b?.remindAt)
+      const aValue = aTime?.isValid?.() ? aTime.valueOf() : Number.MAX_SAFE_INTEGER
+      const bValue = bTime?.isValid?.() ? bTime.valueOf() : Number.MAX_SAFE_INTEGER
+      return aValue - bValue
+    })
+    return unique
+  }, [pendingReminders, upcomingReminders, showUpcoming])
+
+  const remindersWithLabels = useMemo(() => displayedReminders.map((reminder) => {
     const status = reminder?.status || 'incomplete'
     const due = isReminderDue(reminder)
     const relative = describeTimeUntil(reminder)
@@ -212,37 +249,59 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
       relativeLabel,
       absoluteLabel: formatReminderAbsolute(reminder)
     }
-  }), [pendingReminders])
+  }), [displayedReminders])
 
-  if (!visible || pendingCount === 0) return null
+  const bannerTitle = useMemo(() => {
+    if (showUpcoming) {
+      return pendingCount > 0 ? 'Reminders due & upcoming' : 'Upcoming reminders'
+    }
+    if (pendingCount === 0) return 'No reminders due'
+    return pendingCount === 1 ? 'Reminder due' : `${pendingCount} reminders due`
+  }, [pendingCount, showUpcoming])
+
+  if (!visible) return null
+  if (pendingCount === 0 && !hasUpcoming) return null
 
   return (
     <div className="reminder-banner">
       <div className="reminder-banner-inner">
-        <strong>
-          {pendingCount === 1 ? 'Reminder due' : `${pendingCount} reminders due`}
-        </strong>
+        <div className="reminder-banner-header">
+          <strong>{bannerTitle}</strong>
+          {hasUpcoming && (
+            <button
+              type="button"
+              className="btn small ghost"
+              onClick={() => setShowUpcoming((value) => !value)}
+            >
+              {showUpcoming ? 'Hide upcoming' : `Show upcoming (${upcomingReminders.length})`}
+            </button>
+          )}
+        </div>
         <div className="reminder-items">
-          {remindersWithLabels.map(({ reminder, key, relativeLabel, absoluteLabel }) => (
-            <ReminderItemRow
-              key={key}
-              reminder={reminder}
-              relativeLabel={relativeLabel}
-              absoluteLabel={absoluteLabel}
-              isEditing={customEditingId === key}
-              customDateTime={customDateTime}
-              customError={customError}
-              onOpen={openInOutline}
-              onKeyDown={handleReminderKeyDown}
-              onOpenCustom={openCustomPicker}
-              onDateChange={handleCustomDateChange}
-              onSubmitCustom={handleCustomSubmit}
-              onCancelCustom={resetCustomState}
-              onReschedule={reschedule}
-              onComplete={handleComplete}
-              onDismiss={handleDismiss}
-            />
-          ))}
+          {remindersWithLabels.length === 0 ? (
+            <div className="reminder-empty">No reminders due right now.</div>
+          ) : (
+            remindersWithLabels.map(({ reminder, key, relativeLabel, absoluteLabel }) => (
+              <ReminderItemRow
+                key={key}
+                reminder={reminder}
+                relativeLabel={relativeLabel}
+                absoluteLabel={absoluteLabel}
+                isEditing={customEditingId === key}
+                customDateTime={customDateTime}
+                customError={customError}
+                onOpen={openInOutline}
+                onKeyDown={handleReminderKeyDown}
+                onOpenCustom={openCustomPicker}
+                onDateChange={handleCustomDateChange}
+                onSubmitCustom={handleCustomSubmit}
+                onCancelCustom={resetCustomState}
+                onReschedule={reschedule}
+                onComplete={handleComplete}
+                onDismiss={handleDismiss}
+              />
+            ))
+          )}
         </div>
       </div>
     </div>

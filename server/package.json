@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node --max-old-space-size=1024 src/index.js",
     "dev": "nodemon src/index.js",
-    "seed": "node src/seed.js"
+    "seed": "node src/seed.js",
+    "export:timeline": "node src/scripts/export-timeline-html.js --out dist/timeline.html",
+    "export:timeline:range": "node src/scripts/export-timeline-html.js --from 2025-01-01 --to 2025-10-11 --out dist/timeline.html"
   },
   "dependencies": {
     "ajv": "^8.17.1",

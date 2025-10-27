@@ -10,6 +10,7 @@ import Link from '@tiptap/extension-link'
 import { lowlight } from 'lowlight/lib/core.js'
 import { absoluteUrl, getOutline } from '../api.js'
 import { WorkDateHighlighter } from '../extensions/workDateHighlighter'
+import { TagHighlighter } from '../extensions/tagHighlighter.js'
 import { ReminderTokenInline } from '../extensions/reminderTokenInline.js'
 import { DetailsBlock } from '../extensions/detailsBlock.jsx'
 import { safeReactNodeViewRenderer } from '../tiptap/safeReactNodeViewRenderer.js'
@@ -298,6 +299,7 @@ export default function OutlinerView({
     imageExtension,
     CodeBlockWithCopy,
     WorkDateHighlighter,
+    TagHighlighter,
     ReminderTokenInline,
     DetailsBlock
   ], [enterHighPriority, taskListItemExtension, CodeBlockWithCopy, imageExtension])

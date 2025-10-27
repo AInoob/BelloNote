@@ -252,3 +252,35 @@ test('insert today date inline via slash command', async ({ page, request, app }
     message: 'API outline should preserve task structure with inline date content'
   })
 })
+
+test('inline tags render as highlighted badges', async ({ page, request }) => {
+  await createThreeTasks(page, request)
+
+  const firstItem = page.locator('li.li-node').first()
+  await expect.poll(async () => {
+    const extensions = await page.evaluate(() => window.__OUTLINER_EXTENSIONS || [])
+    return extensions.includes('tagHighlighter')
+  }, { message: 'tagHighlighter extension should be registered' }).toBe(true)
+
+  await firstItem.locator('p').first().click()
+  await placeCaretAtTaskEnd(page, 0)
+
+  await page.keyboard.type(' #Important ')
+
+  const badge = firstItem.locator('.tag-inline-badge').first()
+  await expect(badge).toHaveText('#Important', { timeout: 4000 })
+  await expect(badge).toHaveAttribute('data-tag', 'important')
+
+  const badgeStyles = await badge.evaluate((el) => {
+    const style = window.getComputedStyle(el)
+    return {
+      display: style.display,
+      borderRadius: style.borderRadius,
+      backgroundColor: style.backgroundColor
+    }
+  })
+
+  expect(badgeStyles.display).toBe('inline-flex')
+  expect(Number.parseFloat(badgeStyles.borderRadius)).toBeGreaterThan(0)
+  expect(badgeStyles.backgroundColor).toBe('rgba(59, 130, 246, 0.12)')
+})

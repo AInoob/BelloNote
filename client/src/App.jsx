@@ -35,8 +35,10 @@ export default function App() {
 
   const { serverBuildTime, healthFetchedAt } = useBuildInfo()
 
-  const { pendingReminders } = useReminders()
+  const { pendingReminders, upcomingReminders } = useReminders()
   const hasPendingReminders = pendingReminders.length > 0
+  const hasUpcomingReminders = upcomingReminders.length > 0
+  const shouldShowReminderBar = hasPendingReminders || hasUpcomingReminders
 
   const focusRouter = useFocusRouter(setActiveTab)
   const { timelineFocusRequest, outlineFocusRequest } = focusRouter
@@ -129,7 +131,7 @@ export default function App() {
         </TabPanel>
       </main>
       <ReminderNotificationBar
-        visible={hasPendingReminders}
+        visible={shouldShowReminderBar}
         onNavigateOutline={focusRouter.requestOutlineFocus}
       />
       {isHistoryOpen && (
