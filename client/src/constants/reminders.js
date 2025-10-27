@@ -4,6 +4,7 @@
 
 // Default snooze durations in minutes
 export const SNOOZE_DURATIONS = [
+  { minutes: 0, label: 'Now' },
   { minutes: 10, label: '+10m' },
   { minutes: 30, label: '+30m' },
   { minutes: 60, label: '+1h' },

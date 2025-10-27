@@ -466,6 +466,7 @@ function ListItemView({
                   <div className="reminder-menu-section">
                     <div className="menu-heading">Remind me in</div>
                     <div className="menu-buttons">
+                      <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(0)}>Now</button>
                       <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(30)}>30 minutes</button>
                       <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(60)}>1 hour</button>
                       <button type="button" className="btn small" onClick={() => scheduleAfterMinutes(180)}>3 hours</button>
