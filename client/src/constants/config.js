@@ -35,8 +35,7 @@ export const APP_VERSION = '0.1.0'
 // Tab identifiers
 export const TAB_IDS = {
   OUTLINE: 'outline',
-  TIMELINE: 'timeline',
-  REMINDERS: 'reminders'
+  TIMELINE: 'timeline'
 }
 
 // Default values

@@ -14,7 +14,6 @@ import { CLIENT_BUILD_TIME, TAB_IDS, APP_NAME, APP_VERSION } from './constants/c
 
 // Lazy-load secondary views
 const TimelineView = lazy(() => import('./views/TimelineView.jsx'))
-const RemindersView = lazy(() => import('./views/RemindersView.jsx'))
 const HistoryModal = lazy(() => import('./views/HistoryModal.jsx'))
 
 export default function App() {
@@ -123,11 +122,6 @@ export default function App() {
               onFocusHandled={focusRouter.handleTimelineFocusHandled}
               onNavigateOutline={focusRouter.requestOutlineFocus}
             />
-          </Suspense>
-        </TabPanel>
-        <TabPanel active={activeTab === TAB_IDS.REMINDERS}>
-          <Suspense fallback={<div className="loading">Loading…</div>}>
-            <RemindersView />
           </Suspense>
         </TabPanel>
       </main>

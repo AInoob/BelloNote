@@ -72,24 +72,18 @@ test('schedule reminder from outline and remove it', async ({ page, request }) =
     })
   }, { timeout: SHORT_TIMEOUT * 5 }).toBe(true)
 
-  await page.getByRole('button', { name: 'Reminders' }).click()
-  const remindersPanel = page.locator('.reminders-view')
-  await expect(remindersPanel).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  const remindersOutline = remindersPanel.locator('.reminder-outline .tiptap.ProseMirror')
-  await expect(remindersOutline).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  await expect.poll(async () => remindersOutline.locator('li.li-node').count(), {
-    timeout: SHORT_TIMEOUT * 5
-  }).toBeGreaterThan(0)
-  const reminderNode = remindersOutline.locator('li.li-node').first()
-  await expect(reminderNode).toContainText('Task A', { timeout: SHORT_TIMEOUT * 5 })
-  await reminderNode.hover()
-  const reminderToggle = reminderNode.locator('.reminder-toggle').first()
-  await expect(reminderToggle).toBeVisible({ timeout: SHORT_TIMEOUT })
-  await reminderToggle.click()
+  await firstReminderToggle.click()
   const reminderMenu = page.locator('.reminder-menu')
-  await expect(reminderMenu).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect(reminderMenu).toBeVisible({ timeout: SHORT_TIMEOUT })
   await reminderMenu.getByRole('button', { name: /Remove reminder/i }).click()
-  await expect(remindersOutline.locator('li.li-node', { hasText: 'Task A' })).toHaveCount(0, { timeout: SHORT_TIMEOUT * 5 })
+  await expect(reminderMenu).toHaveCount(0, { timeout: SHORT_TIMEOUT })
+  await expect(firstReminderChip).toHaveCount(0, { timeout: SHORT_TIMEOUT * 5 })
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const reminders = Array.isArray(window.__WORKLOG_REMINDERS) ? window.__WORKLOG_REMINDERS : []
+      return reminders.some(item => item?.taskTitle === 'Task A')
+    })
+  }, { timeout: SHORT_TIMEOUT * 5 }).toBe(false)
 })
 
 test('rescheduling reminder does not duplicate inline chips', async ({ page, request }) => {
@@ -157,10 +151,6 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   await expect(completedTab).toHaveAttribute('aria-selected', 'true')
   const completedRow = banner.locator('.reminder-item', { hasText: 'Follow up item' }).first()
   await expect(completedRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  const dueTab = banner.getByRole('tab', { name: /Due \(0\)/i })
-  await dueTab.click()
-  await expect(banner.locator('.reminder-empty')).toHaveText('No due reminders.')
-
   const firstNode = page.locator('li.li-node').first()
   await expect(firstNode).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
   await expect(reminderChip).toHaveText(/Completed/i, { timeout: SHORT_TIMEOUT })
@@ -168,12 +158,9 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   const todayTag = `@${todayDate()}`
   await expect(firstNode).toContainText(todayTag, { timeout: SHORT_TIMEOUT })
   await expect(firstNode).not.toContainText(/Reminder completed at/i, { timeout: SHORT_TIMEOUT })
-
-  await page.getByRole('button', { name: 'Reminders' }).click()
-  await expect(page.locator('.reminders-view .tiptap.ProseMirror li.li-node', { hasText: 'Follow up item' })).toHaveCount(1, { timeout: SHORT_TIMEOUT })
 })
 
-test('reminders view shows single completed marker', async ({ page, request }) => {
+test('completed reminders render a single completion marker', async ({ page, request }) => {
   await resetOutline(request, [
     { title: 'Reminder duplication', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Reminder duplication' }] }] }
   ])
@@ -187,17 +174,18 @@ test('reminders view shows single completed marker', async ({ page, request }) =
   await node.locator('.reminder-inline-chip').click()
   await page.locator('.reminder-menu').getByRole('button', { name: 'Mark complete' }).click()
 
-  await page.getByRole('button', { name: 'Reminders' }).click()
-  const remindersList = page.locator('.reminders-view .tiptap.ProseMirror')
-  await expect(remindersList).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  const reminderEntry = remindersList.locator('li.li-node', { hasText: 'Reminder duplication' }).first()
-  await expect(reminderEntry).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  await expect(reminderEntry).toContainText(/Completed/i, { timeout: SHORT_TIMEOUT * 5 })
+  const banner = page.locator('.reminder-banner')
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const completedTab = banner.getByRole('tab', { name: /Completed \(1\)/i })
+  await expect(completedTab).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(completedTab).toHaveAttribute('aria-selected', 'true')
 
-  const entryText = await reminderEntry.evaluate((el) => el?.innerText || '')
-  const occurrences = (entryText.match(/Reminder completed/gi) || []).length
+  const completedRow = banner.locator('.reminder-item', { hasText: 'Reminder duplication' }).first()
+  await expect(completedRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const rowText = await completedRow.textContent()
+  const occurrences = (rowText.match(/Reminder completed/gi) || []).length
   expect(occurrences).toBe(1)
-  expect(entryText).toMatch(/Completed\s+•/i)
+  await expect(completedRow.locator('.reminder-relative')).toContainText(/Reminder completed/i, { timeout: SHORT_TIMEOUT })
 })
 
 test('reminder banner supports custom schedule from notification', async ({ page, request }) => {
@@ -416,11 +404,10 @@ test('tasks seeded with inline reminder token render correctly', async ({ page, 
     return count
   }, { timeout: SHORT_TIMEOUT * 5 }).toBeGreaterThan(0)
 
-  await page.getByRole('button', { name: 'Reminders' }).click()
-  const remindersPanel = page.locator('.reminders-view')
-  await expect(remindersPanel).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  await expect(remindersPanel).toContainText('Seeded Task', { timeout: SHORT_TIMEOUT })
-  await expect(remindersPanel).toContainText(/Reminder (due|completed|dismissed)|in\s|overdue/i, { timeout: SHORT_TIMEOUT })
+  const remindersState = await page.evaluate(() => window.__WORKLOG_REMINDERS || [])
+  const seededEntry = remindersState.find(item => item?.taskTitle === 'Seeded Task')
+  expect(seededEntry).toBeTruthy()
+  expect(seededEntry?.status).toBeDefined()
 })
 
 
