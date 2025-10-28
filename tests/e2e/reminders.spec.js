@@ -152,7 +152,14 @@ test('due reminder surfaces notification and completes task', async ({ page, req
   const banner = page.locator('.reminder-banner')
   await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT })
   await banner.getByRole('button', { name: 'Mark complete' }).click()
-  await expect(banner).toHaveCount(0)
+  const completedTab = banner.getByRole('tab', { name: /Completed \(1\)/i })
+  await expect(completedTab).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(completedTab).toHaveAttribute('aria-selected', 'true')
+  const completedRow = banner.locator('.reminder-item', { hasText: 'Follow up item' }).first()
+  await expect(completedRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const dueTab = banner.getByRole('tab', { name: /Due \(0\)/i })
+  await dueTab.click()
+  await expect(banner.locator('.reminder-empty')).toHaveText('No due reminders.')
 
   const firstNode = page.locator('li.li-node').first()
   await expect(firstNode).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
@@ -221,8 +228,15 @@ test('reminder banner supports custom schedule from notification', async ({ page
   await bannerForm.getByRole('button', { name: 'Set' }).click()
 
   await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  await expect(banner).toContainText('No reminders due', { timeout: SHORT_TIMEOUT * 5 })
-  await expect(banner.getByRole('button', { name: /Show upcoming/i })).toBeVisible({ timeout: SHORT_TIMEOUT })
+  const upcomingTab = banner.getByRole('tab', { name: /Upcoming \(1\)/i })
+  await expect(upcomingTab).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(upcomingTab).toHaveAttribute('aria-selected', 'true')
+  const upcomingRow = banner.locator('.reminder-item', { hasText: 'Banner reminder' }).first()
+  await expect(upcomingRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const dueTab = banner.getByRole('tab', { name: /Due \(0\)/i })
+  await dueTab.click()
+  await expect(banner.locator('.reminder-empty')).toHaveText('No due reminders.')
+  await upcomingTab.click()
 
   const reminderChip = page.locator('li.li-node').first().locator('.reminder-inline-chip')
   await expect(reminderChip).toHaveText(REMINDER_PILL_PATTERN, { timeout: SHORT_TIMEOUT })
@@ -278,22 +292,89 @@ test('reminder banner can reveal upcoming reminders', async ({ page, request }) 
 
   const banner = page.locator('.reminder-banner')
   await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
-  await expect(banner).toContainText('No reminders due', { timeout: SHORT_TIMEOUT * 5 })
-
-  const showUpcomingButton = banner.getByRole('button', { name: /Show upcoming \(1\)/i })
-  await expect(showUpcomingButton).toBeVisible({ timeout: SHORT_TIMEOUT })
-  await showUpcomingButton.click()
-
-  const hideUpcomingButton = banner.getByRole('button', { name: /Hide upcoming/i })
-  await expect(hideUpcomingButton).toBeVisible({ timeout: SHORT_TIMEOUT })
-
+  const upcomingTab = banner.getByRole('tab', { name: /Upcoming \(1\)/i })
+  await expect(upcomingTab).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(upcomingTab).toHaveAttribute('aria-selected', 'true')
   const upcomingRow = banner.locator('.reminder-item', { hasText: 'Upcoming reminder' }).first()
   await expect(upcomingRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
   await expect(upcomingRow.locator('.reminder-relative')).toContainText(/Reminds/i, { timeout: SHORT_TIMEOUT * 5 })
+  const dueTab = banner.getByRole('tab', { name: /Due \(0\)/i })
+  await dueTab.click()
+  await expect(banner.locator('.reminder-empty')).toHaveText('No due reminders.')
+})
 
-  await hideUpcomingButton.click()
-  await expect(banner.locator('.reminder-item')).toHaveCount(0, { timeout: SHORT_TIMEOUT })
-  await expect(banner).toContainText('No reminders due right now.', { timeout: SHORT_TIMEOUT })
+test('reminder banner can reveal completed reminders', async ({ page, request }) => {
+  await resetOutline(request, [
+    { title: 'Complete check', status: 'todo', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Complete check' }] }] }
+  ])
+
+  await page.goto('/')
+  const reminderToggle = page.locator('li.li-node').first().locator('.li-reminder-area .reminder-toggle')
+  await reminderToggle.click()
+  await page.locator('.reminder-menu').getByRole('button', { name: 'Custom…' }).click()
+  const input = page.locator('.reminder-menu input[type="datetime-local"]')
+  await input.fill(nowMinusMinutes(2))
+  await page.locator('.reminder-menu form').getByRole('button', { name: 'Set reminder' }).click()
+
+  const banner = page.locator('.reminder-banner')
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await banner.getByRole('button', { name: 'Mark complete' }).click()
+
+  await expect.poll(async () => page.evaluate(() => {
+    const reminders = Array.isArray(window.__WORKLOG_REMINDERS) ? window.__WORKLOG_REMINDERS : []
+    return reminders.filter(item => item?.status === 'completed').length
+  }), { timeout: SHORT_TIMEOUT * 5 }).toBeGreaterThan(0)
+
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const completedTab = banner.getByRole('tab', { name: /Completed \(1\)/i })
+  await expect(completedTab).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expect(completedTab).toHaveAttribute('aria-selected', 'true')
+  const completedRow = banner.locator('.reminder-item', { hasText: 'Complete check' }).first()
+  await expect(completedRow).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  await expect(completedRow.locator('.reminder-relative')).toContainText(/completed/i, { timeout: SHORT_TIMEOUT * 5 })
+  const dueTab = banner.getByRole('tab', { name: /Due \(0\)/i })
+  await dueTab.click()
+  await expect(banner.locator('.reminder-empty')).toHaveText('No due reminders.')
+})
+
+test('reminder banner list scrolls when many due reminders', async ({ page, request }) => {
+  const outline = Array.from({ length: 12 }).map((_, index) => {
+    const remindAt = new Date(Date.now() - ((index + 1) * 60 * 1000)).toISOString()
+    const token = `[[reminder|incomplete|${remindAt}|]]`
+    return {
+      title: `Due task ${index + 1}`,
+      status: 'todo',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: `Due task ${index + 1} ${token}` }] }
+      ]
+    }
+  })
+
+  await resetOutline(request, outline)
+  await page.goto('/')
+
+  const banner = page.locator('.reminder-banner')
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const dueTab = banner.getByRole('tab', { name: /Due \(12\)/i })
+  await expect(dueTab).toHaveAttribute('aria-selected', 'true')
+  const reminderRows = banner.locator('.reminder-item')
+  await expect(reminderRows).toHaveCount(outline.length, { timeout: SHORT_TIMEOUT * 5 })
+
+  const scrollMetrics = await banner.locator('.reminder-items').evaluate((el) => {
+    if (!el) return null
+    const style = window.getComputedStyle(el)
+    return {
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      overflowY: style.overflowY,
+      maxHeight: style.maxHeight
+    }
+  })
+
+  expect(scrollMetrics).not.toBeNull()
+  expect(scrollMetrics.overflowY === 'auto' || scrollMetrics.overflowY === 'scroll').toBeTruthy()
+  expect(parseFloat(scrollMetrics.maxHeight)).toBeGreaterThan(0)
+  expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight)
 })
 
 test('tasks seeded with inline reminder token render correctly', async ({ page, request }) => {

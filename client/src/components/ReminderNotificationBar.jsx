@@ -32,6 +32,8 @@ const ReminderItemRow = memo(function ReminderItemRow({
   onDismiss
 }) {
   const key = String(reminder?.taskId ?? reminder?.id ?? '')
+  const status = reminder?.status || 'incomplete'
+  const isIncomplete = status === 'incomplete'
   const handleSubmit = useCallback((event) => onSubmitCustom(event, reminder), [onSubmitCustom, reminder])
   return (
     <div className="reminder-item" key={key}>
@@ -81,10 +83,12 @@ const ReminderItemRow = memo(function ReminderItemRow({
             {customError && <span className="reminder-custom-error">{customError}</span>}
           </form>
         )}
-        <div className="reminder-complete-dismiss">
-          <button className="btn small" onClick={() => onComplete(reminder)}>Mark complete</button>
-          <button className="btn small ghost" onClick={() => onDismiss(reminder)}>Dismiss</button>
-        </div>
+        {isIncomplete && (
+          <div className="reminder-complete-dismiss">
+            <button className="btn small" onClick={() => onComplete(reminder)}>Mark complete</button>
+            <button className="btn small ghost" onClick={() => onDismiss(reminder)}>Dismiss</button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -95,20 +99,38 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
   const {
     pendingReminders,
     upcomingReminders,
+    completedReminders,
     dismissReminder,
     completeReminder,
     scheduleReminder
   } = useReminders()
   const pendingCount = usePendingReminderCount()
   const hasUpcoming = upcomingReminders.length > 0
-  const [showUpcoming, setShowUpcoming] = useState(false)
+  const hasCompleted = completedReminders.length > 0
+  const [activeTab, setActiveTab] = useState(() => {
+    if (pendingReminders.length > 0) return 'due'
+    if (upcomingReminders.length > 0) return 'upcoming'
+    if (completedReminders.length > 0) return 'completed'
+    return 'due'
+  })
   const [customEditingId, setCustomEditingId] = useState(null)
   const [customDateTime, setCustomDateTime] = useState('')
   const [customError, setCustomError] = useState('')
 
   useEffect(() => {
-    if (!hasUpcoming && showUpcoming) setShowUpcoming(false)
-  }, [hasUpcoming, showUpcoming])
+    setActiveTab((prev) => {
+      const counts = {
+        due: pendingReminders.length,
+        upcoming: upcomingReminders.length,
+        completed: completedReminders.length
+      }
+      if (counts[prev] > 0) return prev
+      if (counts.due > 0) return 'due'
+      if (counts.upcoming > 0) return 'upcoming'
+      if (counts.completed > 0) return 'completed'
+      return 'due'
+    })
+  }, [pendingReminders.length, upcomingReminders.length, completedReminders.length])
 
   const resetCustomState = useCallback(() => {
     setCustomEditingId(null)
@@ -203,29 +225,27 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
   }, [dismissReminder, customEditingId, resetCustomState])
 
   const displayedReminders = useMemo(() => {
-    if (!showUpcoming) return pendingReminders
-    const combined = [...pendingReminders, ...upcomingReminders]
-    const seen = new Set()
-    const unique = []
-    combined.forEach((reminder) => {
-      if (!reminder) return
-      const key = String(reminder?.taskId ?? reminder?.id ?? '')
-      if (!key || seen.has(key)) return
-      seen.add(key)
-      unique.push(reminder)
+    const source = activeTab === 'due'
+      ? pendingReminders
+      : (activeTab === 'upcoming' ? upcomingReminders : completedReminders)
+
+    const getTimeValue = (reminder) => {
+      if (!reminder?.remindAt) return null
+      const parsed = dayjs(reminder.remindAt)
+      if (!parsed.isValid()) return null
+      return parsed.valueOf()
+    }
+
+    const list = Array.isArray(source) ? source.slice() : []
+    return list.sort((a, b) => {
+      const aValue = getTimeValue(a)
+      const bValue = getTimeValue(b)
+      if (activeTab === 'completed') {
+        return (bValue ?? Number.MIN_SAFE_INTEGER) - (aValue ?? Number.MIN_SAFE_INTEGER)
+      }
+      return (aValue ?? Number.MAX_SAFE_INTEGER) - (bValue ?? Number.MAX_SAFE_INTEGER)
     })
-    unique.sort((a, b) => {
-      const aDue = isReminderDue(a)
-      const bDue = isReminderDue(b)
-      if (aDue !== bDue) return aDue ? -1 : 1
-      const aTime = dayjs(a?.remindAt)
-      const bTime = dayjs(b?.remindAt)
-      const aValue = aTime?.isValid?.() ? aTime.valueOf() : Number.MAX_SAFE_INTEGER
-      const bValue = bTime?.isValid?.() ? bTime.valueOf() : Number.MAX_SAFE_INTEGER
-      return aValue - bValue
-    })
-    return unique
-  }, [pendingReminders, upcomingReminders, showUpcoming])
+  }, [activeTab, pendingReminders, upcomingReminders, completedReminders])
 
   const remindersWithLabels = useMemo(() => displayedReminders.map((reminder) => {
     const status = reminder?.status || 'incomplete'
@@ -251,35 +271,57 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
     }
   }), [displayedReminders])
 
-  const bannerTitle = useMemo(() => {
-    if (showUpcoming) {
-      return pendingCount > 0 ? 'Reminders due & upcoming' : 'Upcoming reminders'
-    }
-    if (pendingCount === 0) return 'No reminders due'
-    return pendingCount === 1 ? 'Reminder due' : `${pendingCount} reminders due`
-  }, [pendingCount, showUpcoming])
+  const tabCounts = {
+    due: pendingReminders.length,
+    upcoming: upcomingReminders.length,
+    completed: completedReminders.length
+  }
+
+  const tabConfig = [
+    { key: 'due', label: 'Due', count: tabCounts.due },
+    { key: 'upcoming', label: 'Upcoming', count: tabCounts.upcoming },
+    { key: 'completed', label: 'Completed', count: tabCounts.completed }
+  ]
+
+  const emptyMessages = {
+    due: 'No due reminders.',
+    upcoming: 'No upcoming reminders.',
+    completed: 'No completed reminders.'
+  }
+
+  const bannerTitle = 'Reminders'
+  const activeEmptyMessage = emptyMessages[activeTab] || 'No reminders to display.'
 
   if (!visible) return null
-  if (pendingCount === 0 && !hasUpcoming) return null
+  if (pendingCount === 0 && !hasUpcoming && !hasCompleted) return null
 
   return (
     <div className="reminder-banner">
       <div className="reminder-banner-inner">
         <div className="reminder-banner-header">
           <strong>{bannerTitle}</strong>
-          {hasUpcoming && (
-            <button
-              type="button"
-              className="btn small ghost"
-              onClick={() => setShowUpcoming((value) => !value)}
-            >
-              {showUpcoming ? 'Hide upcoming' : `Show upcoming (${upcomingReminders.length})`}
-            </button>
-          )}
+          <div className="reminder-banner-tabs" role="tablist" aria-label="Reminder categories">
+            {tabConfig.map(({ key, label, count }) => {
+              const isActive = activeTab === key
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`reminder-tab ${isActive ? 'active' : ''}`}
+                  role="tab"
+                  aria-selected={isActive ? 'true' : 'false'}
+                  tabIndex={isActive ? 0 : -1}
+                  onClick={() => setActiveTab(key)}
+                >
+                  {`${label} (${count})`}
+                </button>
+              )
+            })}
+          </div>
         </div>
         <div className="reminder-items">
           {remindersWithLabels.length === 0 ? (
-            <div className="reminder-empty">No reminders due right now.</div>
+            <div className="reminder-empty">{activeEmptyMessage}</div>
           ) : (
             remindersWithLabels.map(({ reminder, key, relativeLabel, absoluteLabel }) => (
               <ReminderItemRow
@@ -309,3 +351,4 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
 }
 
 export const ReminderNotificationBar = memo(ReminderNotificationBarComponent)
+

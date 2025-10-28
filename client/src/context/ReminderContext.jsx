@@ -9,6 +9,7 @@ const ReminderContext = createContext({
   remindersByTask: new Map(),
   pendingReminders: [],
   upcomingReminders: [],
+  completedReminders: [],
   refreshReminders: () => {},
   scheduleReminder: () => {},
   dismissReminder: () => {},
@@ -410,6 +411,11 @@ export function ReminderProvider({ children }) {
     return !reminderIsDue(reminder)
   }), [reminders])
 
+  const completedReminders = useMemo(() => reminders.filter(reminder => {
+    if (!reminder) return false
+    return (reminder.status || '') === 'completed'
+  }), [reminders])
+
   const dispatch = useCallback((action, payload) => {
     if (typeof window === 'undefined') return
     window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail: { action, ...payload } }))
@@ -445,12 +451,13 @@ export function ReminderProvider({ children }) {
     remindersByTask,
     pendingReminders,
     upcomingReminders,
+    completedReminders,
     refreshReminders,
     scheduleReminder,
     dismissReminder,
     completeReminder,
     removeReminder
-  }), [loading, reminders, remindersByTask, pendingReminders, upcomingReminders, refreshReminders, scheduleReminder, dismissReminder, completeReminder, removeReminder])
+  }), [loading, reminders, remindersByTask, pendingReminders, upcomingReminders, completedReminders, refreshReminders, scheduleReminder, dismissReminder, completeReminder, removeReminder])
 
   return (
     <ReminderContext.Provider value={value}>

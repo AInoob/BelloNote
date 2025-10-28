@@ -35,10 +35,11 @@ export default function App() {
 
   const { serverBuildTime, healthFetchedAt } = useBuildInfo()
 
-  const { pendingReminders, upcomingReminders } = useReminders()
+  const { pendingReminders, upcomingReminders, completedReminders } = useReminders()
   const hasPendingReminders = pendingReminders.length > 0
   const hasUpcomingReminders = upcomingReminders.length > 0
-  const shouldShowReminderBar = hasPendingReminders || hasUpcomingReminders
+  const hasCompletedReminders = completedReminders.length > 0
+  const shouldShowReminderBar = hasPendingReminders || hasUpcomingReminders || hasCompletedReminders
 
   const focusRouter = useFocusRouter(setActiveTab)
   const { timelineFocusRequest, outlineFocusRequest } = focusRouter
