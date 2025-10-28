@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { getOutline } from '../api.js'
 import { parseReminderFromNodeContent, reminderIsDue, REMINDER_DISPLAY_BREAK } from '../utils/reminderTokens.js'
+import { deriveReminderUpdate } from '../utils/reminderEditor.js'
 import { REMINDER_POLL_INTERVAL_MS, PLAYWRIGHT_TEST_HOSTS } from '../constants/config.js'
 
 const ReminderContext = createContext({
@@ -203,19 +204,29 @@ export function ReminderProvider({ children }) {
 
   const isE2EEnvironment = useMemo(() => detectE2EEnvironment(), [])
 
+  const updateSnapshotKey = useCallback((list) => {
+    const key = JSON.stringify((list || []).map(item => `${item.taskId}|${item.status}|${item.remindAt}`))
+    lastSnapshotRef.current = key
+  }, [])
+
+  const synchronizeWindowSnapshots = useCallback((list, outlineRoots) => {
+    if (typeof window === 'undefined') return
+    window.__WORKLOG_REMINDERS = list
+    if (outlineRoots !== undefined) {
+      window.__WORKLOG_REMINDER_OUTLINE = outlineRoots
+    }
+  }, [])
+
   const finalizeReminders = useCallback((order, roots) => {
     const next = order
       .map(entry => entry.reminder)
       .filter(Boolean)
     const key = JSON.stringify((next || []).map(item => `${item.taskId}|${item.status}|${item.remindAt}`))
     if (lastSnapshotRef.current === key) return
-    lastSnapshotRef.current = key
+    updateSnapshotKey(next)
     setReminders(next)
-    if (typeof window !== 'undefined') {
-      window.__WORKLOG_REMINDERS = next
-      window.__WORKLOG_REMINDER_OUTLINE = roots
-    }
-  }, [])
+    synchronizeWindowSnapshots(next, roots)
+  }, [synchronizeWindowSnapshots, updateSnapshotKey])
 
   const handleWorkerMessage = useCallback((event) => {
     const { data } = event || {}
@@ -416,10 +427,50 @@ export function ReminderProvider({ children }) {
     return (reminder.status || '') === 'completed'
   }), [reminders])
 
+  const applyLocalReminderAction = useCallback((detail) => {
+    if (!detail?.taskId) return
+    const targetId = String(detail.taskId)
+    let shouldRefresh = false
+    setReminders((prev) => {
+      const index = prev.findIndex(reminder => String(reminder?.taskId ?? reminder?.id ?? '') === targetId)
+      if (index === -1) {
+        if (detail.action !== 'remove') shouldRefresh = true
+        return prev
+      }
+      const existing = prev[index]
+      const nextData = deriveReminderUpdate(existing, detail.action, {
+        remindAt: detail.remindAt,
+        message: detail.message
+      })
+      let nextList
+      if (!nextData) {
+        nextList = prev.filter((_, idx) => idx !== index)
+        REMINDER_CACHE.set(targetId, null)
+      } else {
+        const due = reminderIsDue(nextData)
+        const nextEntry = {
+          ...existing,
+          ...nextData,
+          due
+        }
+        nextList = [...prev]
+        nextList[index] = nextEntry
+        REMINDER_CACHE.set(targetId, nextEntry)
+      }
+      const nextSnapshot = nextList
+      updateSnapshotKey(nextSnapshot)
+      synchronizeWindowSnapshots(nextSnapshot)
+      return nextSnapshot
+    })
+    if (shouldRefresh) refreshReminders()
+  }, [refreshReminders, synchronizeWindowSnapshots, updateSnapshotKey])
+
   const dispatch = useCallback((action, payload) => {
     if (typeof window === 'undefined') return
-    window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail: { action, ...payload } }))
-  }, [])
+    const detail = { action, ...payload, __origin: 'context' }
+    applyLocalReminderAction(detail)
+    window.dispatchEvent(new CustomEvent('worklog:reminder-action', { detail }))
+  }, [applyLocalReminderAction])
 
   const scheduleReminder = useCallback(({ taskId, remindAt, message }) => {
     if (!taskId || !remindAt) return Promise.resolve()
@@ -444,6 +495,17 @@ export function ReminderProvider({ children }) {
     dispatch('remove', { taskId: String(taskId) })
     return Promise.resolve()
   }, [dispatch])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handler = (event) => {
+      const detail = event?.detail
+      if (!detail || detail.__origin === 'context') return
+      applyLocalReminderAction(detail)
+    }
+    window.addEventListener('worklog:reminder-action', handler)
+    return () => window.removeEventListener('worklog:reminder-action', handler)
+  }, [applyLocalReminderAction])
 
   const value = useMemo(() => ({
     loading,
