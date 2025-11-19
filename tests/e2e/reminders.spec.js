@@ -365,6 +365,44 @@ test('reminder banner list scrolls when many due reminders', async ({ page, requ
   expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight)
 })
 
+test('reminder banner can be minimized and expanded', async ({ page, request }) => {
+  const outline = Array.from({ length: 6 }).map((_, index) => {
+    const remindAt = new Date(Date.now() - ((index + 1) * 60 * 1000)).toISOString()
+    const token = `[[reminder|incomplete|${remindAt}|]]`
+    return {
+      title: `Toggle task ${index + 1}`,
+      status: 'todo',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: `Toggle task ${index + 1} ${token}` }] }
+      ]
+    }
+  })
+
+  await resetOutline(request, outline)
+  await page.goto('/')
+
+  const banner = page.locator('.reminder-banner')
+  await expect(banner).toBeVisible({ timeout: SHORT_TIMEOUT * 5 })
+  const reminderList = banner.locator('.reminder-items')
+
+  const initialMaxHeight = await reminderList.evaluate((el) => window.getComputedStyle(el).maxHeight)
+  expect(initialMaxHeight).toMatch(/320px$/)
+
+  const toggleButton = banner.getByRole('button', { name: 'Minimize' })
+  await expect(toggleButton).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await toggleButton.click()
+
+  const minimizedHeight = await reminderList.evaluate((el) => window.getComputedStyle(el).maxHeight)
+  expect(minimizedHeight).toMatch(/233px$/)
+
+  const expandButton = banner.getByRole('button', { name: 'Expand' })
+  await expect(expandButton).toBeVisible({ timeout: SHORT_TIMEOUT })
+  await expandButton.click()
+
+  const expandedHeight = await reminderList.evaluate((el) => window.getComputedStyle(el).maxHeight)
+  expect(expandedHeight).toMatch(/320px$/)
+})
+
 test('tasks seeded with inline reminder token render correctly', async ({ page, request }) => {
   const remindAt = nowPlusMinutes(45)
   const message = 'Follow up soon'

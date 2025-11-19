@@ -116,6 +116,7 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
   const [customEditingId, setCustomEditingId] = useState(null)
   const [customDateTime, setCustomDateTime] = useState('')
   const [customError, setCustomError] = useState('')
+  const [isMinimized, setIsMinimized] = useState(false)
 
   useEffect(() => {
     setActiveTab((prev) => {
@@ -292,6 +293,10 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
   const bannerTitle = 'Reminders'
   const activeEmptyMessage = emptyMessages[activeTab] || 'No reminders to display.'
 
+  const reminderListStyle = useMemo(() => ({
+    '--reminder-max-height': isMinimized ? '233px' : '320px'
+  }), [isMinimized])
+
   if (!visible) return null
   if (pendingCount === 0 && !hasUpcoming && !hasCompleted) return null
 
@@ -300,12 +305,13 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
       <div className="reminder-banner-inner">
         <div className="reminder-banner-header">
           <strong>{bannerTitle}</strong>
-          <div className="reminder-banner-tabs" role="tablist" aria-label="Reminder categories">
-            {tabConfig.map(({ key, label, count }) => {
-              const isActive = activeTab === key
-              return (
-                <button
-                  key={key}
+          <div className="reminder-banner-controls">
+            <div className="reminder-banner-tabs" role="tablist" aria-label="Reminder categories">
+              {tabConfig.map(({ key, label, count }) => {
+                const isActive = activeTab === key
+                return (
+                  <button
+                    key={key}
                   type="button"
                   className={`reminder-tab ${isActive ? 'active' : ''}`}
                   role="tab"
@@ -313,13 +319,21 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
                   tabIndex={isActive ? 0 : -1}
                   onClick={() => setActiveTab(key)}
                 >
-                  {`${label} (${count})`}
-                </button>
-              )
-            })}
+                    {`${label} (${count})`}
+                  </button>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              className="reminder-size-toggle"
+              onClick={() => setIsMinimized((value) => !value)}
+            >
+              {isMinimized ? 'Expand' : 'Minimize'}
+            </button>
           </div>
         </div>
-        <div className="reminder-items">
+        <div className="reminder-items" style={reminderListStyle}>
           {remindersWithLabels.length === 0 ? (
             <div className="reminder-empty">{activeEmptyMessage}</div>
           ) : (
@@ -351,4 +365,3 @@ function ReminderNotificationBarComponent({ visible, onNavigateOutline }) {
 }
 
 export const ReminderNotificationBar = memo(ReminderNotificationBarComponent)
-

@@ -128,7 +128,10 @@
       .reminder-tab { border:1px solid rgba(148,163,184,.6); border-radius:999px; background:rgba(99,102,241,.08); color:#312E81; font-size:.78rem; padding:0.32rem 0.75rem; cursor:pointer; transition:background .15s ease, color .15s ease, border-color .15s ease; }
       .reminder-tab:hover { background:rgba(99,102,241,.2); border-color:rgba(99,102,241,.6); }
       .reminder-tab.active { background:#6366f1; color:#fff; border-color:#4f46e5; }
-      .reminder-items { display:flex; flex-direction:column; gap:6px; max-height:320px; overflow-y:auto; padding-right:6px; margin-right:-6px; scrollbar-color:rgba(79,70,229,.35) transparent; }
+      .reminder-banner-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-left:auto; }
+      .reminder-size-toggle { border:1px solid rgba(148,163,184,.6); border-radius:8px; background:#fff; color:#1f2937; font-size:.78rem; padding:0.28rem 0.65rem; cursor:pointer; transition:background .15s ease, border-color .15s ease, color .15s ease; }
+      .reminder-size-toggle:hover { border-color:#6366f1; color:#312E81; background:rgba(99,102,241,.08); }
+      .reminder-items { display:flex; flex-direction:column; gap:6px; max-height:var(--reminder-max-height, 320px); overflow-y:auto; padding-right:6px; margin-right:-6px; scrollbar-color:rgba(79,70,229,.35) transparent; }
       .reminder-items::-webkit-scrollbar { width:6px; }
       .reminder-items::-webkit-scrollbar-thumb { background:rgba(79,70,229,.35); border-radius:999px; }
       .reminder-item { display:flex; align-items:center; gap:10px; font-size:.82rem; }
