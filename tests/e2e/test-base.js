@@ -7,6 +7,13 @@ const { pathToFileURL } = require('url')
 const { Client } = require('pg')
 const { test: playwrightBase, expect } = require('@playwright/test')
 
+if (!process.env.VITE_SLACK_TEAM_ID) {
+  process.env.VITE_SLACK_TEAM_ID = 'T0SEVS2SG'
+}
+if (!process.env.VITE_REMINDER_POLL_INTERVAL_MS) {
+  process.env.VITE_REMINDER_POLL_INTERVAL_MS = '750'
+}
+
 const CLIENT_PORT_RANGE = { start: 5000, end: 5499 }
 const SERVER_PORT_RANGE = { start: 5500, end: 5999 }
 const PROJECT_ROOT = path.join(__dirname, '..', '..')
@@ -367,11 +374,11 @@ function copyDirectory(source, destination) {
   }
 }
 
-function injectRuntimeConfig(distDir, apiUrl) {
+function injectRuntimeConfig(distDir, apiUrl, slackTeamId, reminderPollIntervalMs) {
   const indexPath = path.join(distDir, 'index.html')
   if (!fs.existsSync(indexPath)) throw new Error(`index.html missing in ${distDir}`)
   const original = fs.readFileSync(indexPath, 'utf8')
-  const configScript = `<script>window.__BELLO_RUNTIME_CONFIG__ = ${JSON.stringify({ apiUrl })};</script>`
+  const configScript = `<script>window.__BELLO_RUNTIME_CONFIG__ = ${JSON.stringify({ apiUrl, slackTeamId, reminderPollIntervalMs })};</script>`
   const cleaned = original.replace(/\s*<script>window.__BELLO_RUNTIME_CONFIG__.*?<\/script>/s, '')
   if (cleaned.includes('</head>')) {
     const updated = cleaned.replace('</head>', `  ${configScript}\n</head>`)
@@ -707,7 +714,12 @@ async function buildClientBundle({ apiUrl, distDir }) {
   await ensureClientBuild()
   fs.rmSync(distDir, { recursive: true, force: true })
   copyDirectory(BASE_CLIENT_DIST, distDir)
-  injectRuntimeConfig(distDir, apiUrl)
+  injectRuntimeConfig(
+    distDir,
+    apiUrl,
+    process.env.VITE_SLACK_TEAM_ID || '',
+    process.env.VITE_REMINDER_POLL_INTERVAL_MS || ''
+  )
 }
 
 async function readOutlineState(page) {

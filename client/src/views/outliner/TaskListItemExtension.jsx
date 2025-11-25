@@ -38,6 +38,7 @@ import {
   handleDragStart as handleDragStartUtil,
   handleDragEnd as handleDragEndUtil
 } from './taskItemDragHandlers.js'
+import { useReminderEntry } from '../../context/reminderBridge.js'
 
 function computeInlineRect(element) {
   if (!element || typeof document === 'undefined' || !document.createRange) return null
@@ -81,15 +82,19 @@ function ListItemView({
   const reminderControlsEnabled = reminderActionsEnabledProp
   const ownBodyText = useMemo(() => gatherOwnListItemText(node), [node])
   const ownBodyTextAttr = useMemo(() => (ownBodyText || '').replace(/\s+/g, ' ').trim(), [ownBodyText])
-  const reminder = useMemo(() => parseReminderTokenFromText(ownBodyText), [ownBodyText])
+  const parsedReminder = useMemo(() => parseReminderTokenFromText(ownBodyText), [ownBodyText])
+  const persistentId = id ? String(id) : null
+  const reminderSubscriptionKey = persistentId || null
+  const syncedReminder = useReminderEntry(reminderSubscriptionKey)
+  const displayReminder = syncedReminder || parsedReminder
   const [reminderMenuOpen, setReminderMenuOpen] = useState(false)
-  const defaultCustomDate = () => {
-    const base = reminder?.remindAt ? dayjs(reminder.remindAt) : dayjs().add(30, 'minute')
+  const computeDefaultCustomDate = () => {
+    const base = displayReminder?.remindAt ? dayjs(displayReminder.remindAt) : dayjs().add(30, 'minute')
     if (!base || !base.isValid?.()) return dayjs().add(30, 'minute').format('YYYY-MM-DDTHH:mm')
     return base.format('YYYY-MM-DDTHH:mm')
   }
   const [customMode, setCustomMode] = useState(false)
-  const [customDate, setCustomDate] = useState(defaultCustomDate)
+  const [customDate, setCustomDate] = useState(computeDefaultCustomDate)
   const [reminderError, setReminderError] = useState('')
   const reminderMenuRef = useRef(null)
   const rowRef = useRef(null)
@@ -296,11 +301,12 @@ function ListItemView({
     toggleCollapse()
   }
 
-  const reminderDismissed = reminder?.status === 'dismissed'
-  const reminderCompleted = reminder?.status === 'completed'
-  const activeReminder = reminder?.status === 'incomplete'
-  const reminderDue = reminderIsDue(reminder)
-  const reminderDisplay = useMemo(() => computeReminderDisplay(reminder), [reminder])
+  const reminderDismissed = displayReminder?.status === 'dismissed'
+  const reminderCompleted = displayReminder?.status === 'completed'
+  const activeReminder = displayReminder?.status === 'incomplete'
+  const reminderDue = reminderIsDue(displayReminder)
+  const reminderDisplay = useMemo(() => computeReminderDisplay(displayReminder), [displayReminder])
+  const hasReminder = Boolean(displayReminder)
   const reminderSummary = reminderDisplay.summary
   const reminderButtonLabel = reminderSummary
     ? `Reminder options (${reminderSummary})`
@@ -440,7 +446,7 @@ function ListItemView({
           {reminderControlsEnabled && (
             <div
               ref={reminderAreaRef}
-              className={`li-reminder-area ${reminderOffset !== null ? 'floating' : ''} ${activeReminder ? 'has-reminder' : ''} ${reminderDue ? 'due' : ''} ${reminderDismissed ? 'dismissed' : ''}`}
+              className={`li-reminder-area ${reminderOffset !== null ? 'floating' : ''} ${hasReminder ? 'has-reminder' : ''} ${reminderDue ? 'due' : ''} ${reminderDismissed ? 'dismissed' : ''}`}
               style={reminderOffset !== null ? { left: `${reminderOffset}px`, top: `${reminderTop}px` } : undefined}
               contentEditable={false}
               onMouseDown={(event) => event.stopPropagation()}
@@ -455,7 +461,7 @@ function ListItemView({
                   event.stopPropagation()
                   setReminderError('')
                   setCustomMode(false)
-                  setCustomDate(defaultCustomDate())
+                  setCustomDate(computeDefaultCustomDate())
                   setReminderMenuOpen((value) => !value)
                 }}
               >
@@ -479,7 +485,7 @@ function ListItemView({
                       onClick={() => {
                         setCustomMode((value) => !value)
                         setReminderError('')
-                        setCustomDate(defaultCustomDate())
+                        setCustomDate(computeDefaultCustomDate())
                       }}
                     >Custom…</button>
                     {customMode && (
@@ -496,7 +502,7 @@ function ListItemView({
                       </form>
                     )}
                   </div>
-                  {reminder && (
+                  {hasReminder && (
                     <div className="reminder-menu-section">
                       <div className="menu-heading">Actions</div>
                       {activeReminder && (

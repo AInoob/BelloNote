@@ -92,6 +92,8 @@ import {
   extractTitle,
   extractDates
 } from './outliner/outlineManipulation.js'
+import { getSlackLinkInfo } from '../utils/slackLinks.js'
+import { SLACK_TEAM_ID } from '../constants/config.js'
 
 const EnterHighPriority = Extension.create({
   name: 'enterHighPriority',
@@ -143,7 +145,9 @@ export default function OutlinerView({
     range: null
   })
   const [linkCopied, setLinkCopied] = useState(false)
+  const [slackThreadCopied, setSlackThreadCopied] = useState(false)
   const linkMenuRef = useRef(null)
+  const editorRef = useRef(null)
   const [statusFilter, setStatusFilter] = useState(() => (
     filtersDisabled
       ? { ...DEFAULT_STATUS_FILTER }
@@ -213,18 +217,125 @@ export default function OutlinerView({
   const includeFilterList = Array.isArray(tagFilters?.include) ? tagFilters.include : []
   const excludeFilterList = Array.isArray(tagFilters?.exclude) ? tagFilters.exclude : []
 
+  const computeLinkMenuCoords = useCallback((rect) => {
+    if (!rect || typeof window === 'undefined') return null
+    const margin = 12
+    const menuWidth = 260
+    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0
+    const anchorLeft = rect.left ?? rect.right ?? 0
+    const anchorRight = rect.right ?? rect.left ?? anchorLeft
+    const anchorBottom = rect.bottom ?? rect.top ?? 0
+    const xBase = (anchorLeft + anchorRight) / 2
+    const maxX = Math.max(margin, viewportWidth - menuWidth - margin)
+    const clampedX = Math.max(margin, Math.min(xBase, maxX))
+    const clampedY = anchorBottom + margin
+    return { x: clampedX, y: clampedY }
+  }, [])
+
+  const getSelectionRect = useCallback(() => {
+    if (!linkMenu.range) return null
+    try {
+      const view = editorRef.current?.view
+      if (!view) return null
+      const { to } = linkMenu.range
+      const resolvedPos = Math.max(1, Math.min(to, view.state.doc.content.size))
+      const coords = view.coordsAtPos(resolvedPos)
+      if (!coords) return null
+      return {
+        left: coords.left ?? coords.right ?? 0,
+        right: coords.right ?? coords.left ?? 0,
+        bottom: coords.bottom ?? coords.top ?? 0
+      }
+    } catch {
+      return null
+    }
+  }, [linkMenu.range])
+
+  const getLinkAnchorElement = useCallback(() => {
+    if (!linkMenu.range) return null
+    try {
+      const view = editorRef.current?.view
+      if (!view) return null
+      const { from } = linkMenu.range
+      const resolvedPos = Math.max(1, Math.min(from, view.state.doc.content.size))
+      const domResult = view.domAtPos(resolvedPos)
+      if (!domResult) return null
+      const baseNode = domResult.node
+      if (!baseNode) return null
+      const isTextNode = typeof Node !== 'undefined' ? baseNode.nodeType === Node.TEXT_NODE : baseNode.nodeType === 3
+      const element = isTextNode ? baseNode.parentElement : baseNode
+      if (!element || typeof element.closest !== 'function') return null
+      return element.closest('a[href]')
+    } catch {
+      return null
+    }
+  }, [linkMenu.range])
+
+  const updateLinkMenuPosition = useCallback(() => {
+    let coords = null
+    const anchorEl = getLinkAnchorElement()
+    if (anchorEl?.getBoundingClientRect) {
+      const rect = anchorEl.getBoundingClientRect()
+      coords = computeLinkMenuCoords(rect)
+    }
+    if (!coords) {
+      const fallbackRect = getSelectionRect()
+      if (fallbackRect) coords = computeLinkMenuCoords(fallbackRect)
+    }
+    if (!coords) return
+    setLinkMenu((prev) => {
+      if (!prev.open) return prev
+      if (Math.abs(prev.x - coords.x) < 0.5 && Math.abs(prev.y - coords.y) < 0.5) return prev
+      return { ...prev, x: coords.x, y: coords.y }
+    })
+  }, [computeLinkMenuCoords, getLinkAnchorElement, getSelectionRect])
+
+  const slackLinkInfo = useMemo(() => getSlackLinkInfo(linkMenu.href, { teamId: SLACK_TEAM_ID }), [linkMenu.href])
+
+  const copyToClipboard = useCallback(async (value) => {
+    if (!value) return false
+    try {
+      const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : null
+      if (clipboard?.writeText) {
+        await clipboard.writeText(value)
+        return true
+      }
+    } catch {
+      // ignore and fall back
+    }
+    if (typeof document === 'undefined') return false
+    try {
+      const el = document.createElement('textarea')
+      el.value = value
+      el.setAttribute('readonly', '')
+      el.style.position = 'fixed'
+      el.style.top = '-1000px'
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  const closeLinkMenu = useCallback(() => {
+    setLinkMenu((m) => (m.open ? { ...m, open: false } : m))
+    setLinkCopied(false)
+    setSlackThreadCopied(false)
+  }, [])
+
   useEffect(() => {
     if (!linkMenu.open) return
     const onDocMouseDown = (e) => {
       if (linkMenuRef.current && !linkMenuRef.current.contains(e.target)) {
-        setLinkMenu((m) => ({ ...m, open: false }))
-        setLinkCopied(false)
+        closeLinkMenu()
       }
     }
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
-        setLinkMenu((m) => ({ ...m, open: false }))
-        setLinkCopied(false)
+        closeLinkMenu()
       }
     }
     document.addEventListener('mousedown', onDocMouseDown, true)
@@ -233,7 +344,20 @@ export default function OutlinerView({
       document.removeEventListener('mousedown', onDocMouseDown, true)
       document.removeEventListener('keydown', onKeyDown, true)
     }
-  }, [linkMenu.open])
+  }, [linkMenu.open, closeLinkMenu])
+
+  useEffect(() => {
+    if (!linkMenu.open || typeof window === 'undefined') return undefined
+    let rafId = null
+    const syncPosition = () => {
+      updateLinkMenuPosition()
+      rafId = window.requestAnimationFrame(syncPosition)
+    }
+    syncPosition()
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId)
+    }
+  }, [linkMenu.open, updateLinkMenuPosition])
 
   const onStatusToggleStable = useCallback((...args) => {
     if (typeof onStatusToggle === 'function') {
@@ -386,15 +510,20 @@ export default function OutlinerView({
           const { from, to } = editor.state.selection
           const attrsHref = editor.getAttributes('link')?.href
           const effectiveHref = attrsHref || href
+          const anchorRect = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null
+          const coords = anchorRect
+            ? computeLinkMenuCoords(anchorRect)
+            : computeLinkMenuCoords({ left: event.clientX, right: event.clientX, bottom: event.clientY })
 
           setLinkMenu({
             open: true,
             href: effectiveHref || '',
-            x: event.clientX + 8,
-            y: event.clientY + 12,
+            x: coords?.x ?? (event.clientX + 8),
+            y: coords?.y ?? (event.clientY + 12),
             range: { from, to }
           })
           setLinkCopied(false)
+          setSlackThreadCopied(false)
 
           return true
         }
@@ -421,6 +550,10 @@ export default function OutlinerView({
       }
     }
   })
+
+  useEffect(() => {
+    editorRef.current = editor
+  }, [editor])
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -524,8 +657,6 @@ export default function OutlinerView({
     saveTimer.current = setTimeout(() => doSave(), delay)
   }
 
-  const closeLinkMenu = () => setLinkMenu((m) => ({ ...m, open: false }))
-
   const removeLink = () => {
     if (isReadOnly || !linkMenu.range || !editor) return
     editor
@@ -546,30 +677,43 @@ export default function OutlinerView({
 
   const copyLink = async () => {
     if (!linkMenu.href) return
-    try {
-      const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : null
-      if (clipboard?.writeText) {
-        await clipboard.writeText(linkMenu.href)
-      } else {
-        throw new Error('Clipboard API unavailable')
-      }
-      setLinkCopied(true)
-      setTimeout(() => setLinkCopied(false), 1200)
-    } catch {
-      if (typeof document === 'undefined') return
-      const el = document.createElement('textarea')
-      el.value = linkMenu.href
-      el.setAttribute('readonly', '')
-      el.style.position = 'fixed'
-      el.style.top = '-1000px'
-      document.body.appendChild(el)
-      el.select()
-      document.execCommand('copy')
-      document.body.removeChild(el)
+    const copied = await copyToClipboard(linkMenu.href)
+    if (copied) {
       setLinkCopied(true)
       setTimeout(() => setLinkCopied(false), 1200)
     }
   }
+
+  const handleOpenSlackLink = useCallback(() => {
+    const deepLink = slackLinkInfo?.deepLink
+    if (!deepLink || typeof window === 'undefined') return
+    try {
+      window.dispatchEvent(new CustomEvent('worklog:slack-deeplink', { detail: { href: deepLink } }))
+    } catch {}
+    if (window.__PLAYWRIGHT_TEST__) {
+      closeLinkMenu()
+      return
+    }
+    try {
+      if (typeof window.location?.assign === 'function') {
+        window.location.assign(deepLink)
+      } else {
+        window.location.href = deepLink
+      }
+    } catch {
+      window.location.href = deepLink
+    }
+    closeLinkMenu()
+  }, [slackLinkInfo, closeLinkMenu])
+
+  const handleCopySlackThreadLink = useCallback(async () => {
+    if (!slackLinkInfo?.threadLink) return
+    const copied = await copyToClipboard(slackLinkInfo.threadLink)
+    if (copied) {
+      setSlackThreadCopied(true)
+      setTimeout(() => setSlackThreadCopied(false), 1200)
+    }
+  }, [slackLinkInfo, copyToClipboard])
 
   const notifyOutlineSnapshot = useCallback((outline) => {
     if (typeof window === 'undefined') return
@@ -1040,6 +1184,20 @@ export default function OutlinerView({
             <span className="cmd-label">{linkCopied ? 'Copied!' : 'Copy link'}</span>
             <span className="cmd-hint">{linkMenu.href}</span>
           </button>
+
+          {slackLinkInfo?.deepLink && (
+            <button type="button" onClick={handleOpenSlackLink}>
+              <span className="cmd-label">Open in Slack app</span>
+              <span className="cmd-hint">{slackLinkInfo.deepLink}</span>
+            </button>
+          )}
+
+          {slackLinkInfo?.threadLink && (
+            <button type="button" onClick={handleCopySlackThreadLink}>
+              <span className="cmd-label">{slackThreadCopied ? 'Slack thread copied!' : 'Copy Slack thread link'}</span>
+              <span className="cmd-hint">{slackLinkInfo.threadLink}</span>
+            </button>
+          )}
         </div>
       )}
       {imagePreview && (

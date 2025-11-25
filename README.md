@@ -58,6 +58,8 @@ The script builds the client with `VITE_API_URL=http://127.0.0.1:5231`, so ensur
 - `DATABASE_URL` or `PG*` variables – point to your Postgres instance; required before the API boots.
 - `PORT` – set the API port (defaults to `4000`).
 - `VITE_API_URL` – API base path used by the client; `start-all.sh` injects `/` to take advantage of Vite's proxy.
+- `VITE_SLACK_TEAM_ID` – Team ID used when building Slack deep links (e.g. `T0SEVS2SG`). Set this so “Open in Slack app” actions jump into the correct workspace.
+- `VITE_REMINDER_POLL_INTERVAL_MS` – Optional override for the reminder due-status polling interval (defaults to 30000ms). Useful for tests or demos where you need faster updates.
 - `NODE_ENV` – toggles the `/api/test` utilities and influences reminder polling behavior.
 
 ## Helpful Commands
@@ -71,4 +73,3 @@ The script builds the client with `VITE_API_URL=http://127.0.0.1:5231`, so ensur
 - The server auto-creates a default "Workspace" project; Playwright runs get an isolated "Playwright E2E" project when the `x-playwright-test` header is present.
 - Outline snapshots trigger `worklog:outline-snapshot` events, keeping Timeline and Reminders views in sync without full page refreshes.
 - See `FEATURES.md` for deeper UX implementation details captured by automation.
-

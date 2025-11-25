@@ -3,6 +3,7 @@ import { getOutline } from '../api.js'
 import { parseReminderFromNodeContent, reminderIsDue, REMINDER_DISPLAY_BREAK } from '../utils/reminderTokens.js'
 import { deriveReminderUpdate } from '../utils/reminderEditor.js'
 import { REMINDER_POLL_INTERVAL_MS, PLAYWRIGHT_TEST_HOSTS } from '../constants/config.js'
+import { publishReminderSnapshot } from './reminderBridge.js'
 
 const ReminderContext = createContext({
   loading: false,
@@ -369,16 +370,25 @@ export function ReminderProvider({ children }) {
 
   useEffect(() => { refreshReminders() }, [refreshReminders])
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setReminders(prev => prev.map(reminder => {
-        const due = reminderIsDue(reminder)
-        if (due === reminder.due) return reminder
-        return { ...reminder, due }
-      }))
-    }, REMINDER_POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
+  const refreshReminderDueFlags = useCallback(() => {
+    setReminders(prev => prev.map(reminder => {
+      const due = reminderIsDue(reminder)
+      if (due === reminder.due) return reminder
+      return { ...reminder, due }
+    }))
   }, [])
+
+  useEffect(() => {
+    const interval = setInterval(refreshReminderDueFlags, REMINDER_POLL_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [refreshReminderDueFlags])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handler = () => refreshReminderDueFlags()
+    window.addEventListener('worklog:reminder-poll', handler)
+    return () => window.removeEventListener('worklog:reminder-poll', handler)
+  }, [refreshReminderDueFlags])
 
   useEffect(() => () => {
     if (idleTaskRef.current && typeof cancelIdleCallback === 'function') {
@@ -410,6 +420,10 @@ export function ReminderProvider({ children }) {
       if (reminder?.taskId) map.set(String(reminder.taskId), reminder)
     })
     return map
+  }, [reminders])
+
+  useEffect(() => {
+    publishReminderSnapshot(reminders)
   }, [reminders])
 
   const pendingReminders = useMemo(() => reminders.filter(reminderIsDue), [reminders])

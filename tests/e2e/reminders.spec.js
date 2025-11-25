@@ -26,6 +26,10 @@ function nowPlusMinutes(minutes) {
   return toDateTimeLocal(date)
 }
 
+function isoPlusSeconds(seconds) {
+  return new Date(Date.now() + seconds * 1000).toISOString()
+}
+
 function todayDate() {
   const now = new Date()
   const pad = (value) => `${value}`.padStart(2, '0')
@@ -630,6 +634,32 @@ test('dismissing reminders preserves task status', async ({ page, request }) => 
 
   await expect(first).toHaveAttribute('data-status', 'todo', { timeout: SHORT_TIMEOUT })
   await expect(second).toHaveAttribute('data-status', 'done', { timeout: SHORT_TIMEOUT })
+})
+
+test('outline reminder badge updates when reminder becomes overdue', async ({ page, request }) => {
+  const remindAt = isoPlusSeconds(4)
+  await resetOutline(request, [
+    {
+      title: 'Outline badge due check',
+      status: 'todo',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: `Outline badge due check [[reminder|incomplete|${remindAt}]]` }] }
+      ]
+    }
+  ])
+
+  await page.goto('/')
+  const node = page.locator('li.li-node', { hasText: 'Outline badge due check' }).first()
+  const reminderArea = node.locator('.li-reminder-area')
+  const reminderToggle = reminderArea.locator('.reminder-toggle')
+
+  await expect(reminderArea).not.toHaveClass(/due/, { timeout: SHORT_TIMEOUT * 5 })
+  await expect(reminderToggle).toHaveAttribute('aria-label', /Remind/i, { timeout: SHORT_TIMEOUT * 5 })
+
+  await page.waitForTimeout(4500)
+
+  await expect(reminderArea).toHaveClass(/due/, { timeout: SHORT_TIMEOUT * 5 })
+  await expect(reminderToggle).toHaveAttribute('aria-label', /Reminder due/i, { timeout: SHORT_TIMEOUT * 5 })
 })
 
 test('copying and pasting a reminder task preserves the reminder token', async ({ page, request }) => {
