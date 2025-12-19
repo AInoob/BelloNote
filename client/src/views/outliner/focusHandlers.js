@@ -93,7 +93,7 @@ export function focusTaskById(editor, taskId, { select = true } = {}, forceExpan
         const rect = targetEl.getBoundingClientRect()
         const viewportCenter = window.innerHeight / 2
         const scrollTarget = (rect.top + window.scrollY) - (viewportCenter - rect.height / 2)
-        window.scrollTo({ top: Math.max(scrollTarget, 0), behavior: 'smooth' })
+        window.scrollTo({ top: Math.max(scrollTarget, 0), behavior: 'auto' })
         targetEl.classList.add('outline-focus-highlight')
         setTimeout(() => targetEl.classList.remove('outline-focus-highlight'), 1200)
       } catch (err) {

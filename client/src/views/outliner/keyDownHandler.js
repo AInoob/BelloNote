@@ -1,9 +1,36 @@
 import { handleEnterKey } from './enterKeyHandler.js'
 import { setCaretSelection } from './editorSelectionUtils.js'
-import { runListIndentCommand, findListItemDepth } from './listCommands.js'
+import { TextSelection } from 'prosemirror-state'
+import { runListIndentCommand, findListItemDepth, positionOfListChild } from './listCommands.js'
 import { moveIntoFirstChild } from './editorNavigation.js'
 import { now, logCursorTiming } from './performanceUtils.js'
 import { STATUS_EMPTY, STATUS_ORDER } from './constants.js'
+
+function isEmptyLeafListItem(listItemNode) {
+  if (!listItemNode || listItemNode.type?.name !== 'listItem') return false
+  if (listItemNode.childCount === 0) return true
+  for (let i = 0; i < listItemNode.childCount; i += 1) {
+    const child = listItemNode.child(i)
+    const typeName = child?.type?.name || ''
+    if (typeName === 'bulletList' || typeName === 'orderedList') return false
+    if (typeName !== 'paragraph') return false
+    if (child.content.size > 0) return false
+  }
+  return true
+}
+
+function findFirstParagraphPosition(node, nodePos) {
+  if (!node || typeof nodePos !== 'number') return { paragraph: null, pos: null }
+  let offset = 1
+  for (let i = 0; i < node.childCount; i += 1) {
+    const child = node.child(i)
+    if (child?.type?.name === 'paragraph') {
+      return { paragraph: child, pos: nodePos + offset }
+    }
+    offset += child.nodeSize
+  }
+  return { paragraph: null, pos: null }
+}
 
 function cycleActiveTaskStatus(editor) {
   if (!editor) return false
@@ -117,6 +144,89 @@ export function handleKeyDown(
       pushDebug,
       pendingEmptyCaretRef
     })
+  }
+
+  if (event.key === 'Backspace') {
+    const pmView = view || editor?.view
+    if (!editor || !pmView) return false
+    const pmState = pmView.state
+    const sel = pmState?.selection
+    if (!sel || !sel.empty) return false
+    const $from = sel.$from
+    if (!$from) return false
+    // Only when the caret is at the start of a paragraph.
+    if ($from.parent?.type?.name !== 'paragraph') return false
+    if ($from.parentOffset !== 0) return false
+
+    const listItemDepth = findListItemDepth($from)
+    if (listItemDepth === -1) return false
+
+    const listItemPos = $from.before(listItemDepth)
+    const listItemNode = $from.node(listItemDepth)
+    if (!listItemNode) return false
+
+    // When the current item is an empty leaf, Backspace should delete the item and place the caret
+    // directly at the end of the previous logical item (previous sibling, otherwise parent).
+    if (!isEmptyLeafListItem(listItemNode)) return false
+
+    const parentListDepth = listItemDepth - 1
+    if (parentListDepth < 0) return false
+    const parentListNode = $from.node(parentListDepth)
+    const parentListPos = $from.before(parentListDepth)
+    // NOTE: index(listItemDepth) is the index inside the listItem (e.g. paragraph index).
+    // We need the listItem's index inside its parent list node.
+    const indexInList = $from.index(parentListDepth)
+
+    let targetListItemPos = null
+    if (indexInList > 0 && parentListNode && typeof parentListPos === 'number') {
+      targetListItemPos = positionOfListChild(parentListNode, parentListPos, indexInList - 1)
+    }
+    if (targetListItemPos == null) {
+      // Fall back to the nearest ancestor listItem (the parent task).
+      for (let d = parentListDepth - 1; d >= 0; d -= 1) {
+        if ($from.node(d)?.type?.name === 'listItem') {
+          targetListItemPos = $from.before(d)
+          break
+        }
+      }
+    }
+    if (typeof targetListItemPos !== 'number') {
+      // No safe target: fall back to default behavior.
+      return false
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    // If this is the only child in its parent list, deleting just the listItem would leave an
+    // invalid empty list (`listItem+`). In that case, delete the whole parent list node.
+    const deleteParentList = parentListNode?.childCount === 1 && indexInList === 0
+    const deleteFrom = deleteParentList ? parentListPos : listItemPos
+    const deleteTo = deleteParentList
+      ? (parentListPos + (parentListNode?.nodeSize || 0))
+      : (listItemPos + listItemNode.nodeSize)
+    let tr = pmState.tr.delete(deleteFrom, deleteTo)
+
+    const mappedTargetPos = tr.mapping.map(targetListItemPos)
+    const targetNode = tr.doc.nodeAt(mappedTargetPos)
+    if (targetNode && targetNode.type?.name === 'listItem') {
+      const { paragraph, pos: paragraphPos } = findFirstParagraphPosition(targetNode, mappedTargetPos)
+      if (paragraph && typeof paragraphPos === 'number') {
+        const caretPos = paragraphPos + paragraph.nodeSize - 1
+        tr = tr.setSelection(TextSelection.create(tr.doc, Math.max(1, caretPos))).scrollIntoView()
+      } else {
+        tr = tr.setSelection(TextSelection.create(tr.doc, Math.max(1, mappedTargetPos + 1))).scrollIntoView()
+      }
+    }
+
+    pmView.dispatch(tr)
+    try {
+      pmView.dom?.focus?.({ preventScroll: true })
+    } catch {
+      pmView.focus?.()
+    }
+    pushDebug('backspace-empty-item: delete-and-jump')
+    return true
   }
   
   if (event.key === 'Tab') {

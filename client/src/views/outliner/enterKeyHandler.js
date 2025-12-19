@@ -1,4 +1,5 @@
 import { TextSelection } from 'prosemirror-state'
+import { Fragment } from 'prosemirror-model'
 import { STATUS_EMPTY } from './constants.js'
 import { setCaretSelection } from './editorSelectionUtils.js'
 import {
@@ -290,10 +291,37 @@ export function handleEnterKey(...rawArgs) {
   }
 
   if (typeof targetPos === 'number') {
-    const newNode = latest.doc.nodeAt(targetPos)
+    let newNode = latest.doc.nodeAt(targetPos)
     if (newNode) {
-      const para = newNode.childCount > 0 ? newNode.child(0) : null
-      const caretPos = para ? targetPos + 1 + para.content.size : targetPos + Math.max(1, newNode.nodeSize - 1)
+      // Fix: when splitting a listItem that contains multiple paragraphs, ProseMirror can create
+      // a new list item whose first paragraph is empty and the moved content starts in the 2nd
+      // paragraph (rendering as a blank first line). If so, drop the leading empty paragraph.
+      let trimmedLeadingEmptyParagraph = false
+      try {
+        if (newNode.childCount >= 2) {
+          const first = newNode.child(0)
+          const second = newNode.child(1)
+          if (
+            first?.type?.name === 'paragraph' &&
+            first.content.size === 0 &&
+            second?.type?.name === 'paragraph' &&
+            second.content.size > 0
+          ) {
+            const kept = []
+            for (let i = 1; i < newNode.childCount; i += 1) kept.push(newNode.child(i))
+            const updated = newNode.type.create(newNode.attrs, Fragment.fromArray(kept))
+            const tr = view.state.tr.replaceWith(targetPos, targetPos + newNode.nodeSize, updated)
+            view.dispatch(tr)
+            trimmedLeadingEmptyParagraph = true
+            newNode = view.state.doc.nodeAt(targetPos)
+          }
+        }
+      } catch {}
+
+      const para = newNode?.childCount ? newNode.child(0) : null
+      const caretPos = para
+        ? (trimmedLeadingEmptyParagraph ? (targetPos + 2 + para.content.size) : (targetPos + 1 + para.content.size))
+        : targetPos + Math.max(1, newNode.nodeSize - 1)
       pendingEmptyCaretRef.current = true
       setCaretSelection({ editor, view, pos: caretPos })
       view.focus()
