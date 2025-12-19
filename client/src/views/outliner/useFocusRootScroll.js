@@ -26,7 +26,7 @@ export function useFocusRootScroll(focusRootId, editor, pendingFocusScrollRef) {
         const rect = targetEl.getBoundingClientRect()
         const viewportHeight = window.innerHeight || 0
         const desired = Math.max(0, (rect.top + window.scrollY) - Math.max(0, (viewportHeight / 2) - (rect.height / 2)))
-        window.scrollTo({ top: desired, behavior: 'smooth' })
+        window.scrollTo({ top: desired, behavior: 'auto' })
       } finally {
         // Clear once consumed so future renders do not jump again
         pendingFocusScrollRef.current = null

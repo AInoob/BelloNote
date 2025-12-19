@@ -50,7 +50,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
       clearTimeout(flashTimerRef.current)
       flashTimerRef.current = null
     }
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    target.scrollIntoView({ behavior: 'auto', block: 'center' })
     target.classList.add('timeline-shortcut-focus')
     flashTimerRef.current = setTimeout(() => {
       target.classList.remove('timeline-shortcut-focus')
@@ -127,7 +127,7 @@ export default function TimelineView({ focusRequest = null, onFocusHandled = () 
     requestAnimationFrame(() => {
       const el = todaySectionRef.current
       if (!el) return
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.scrollIntoView({ behavior: 'auto', block: 'center' })
     })
   }, [days])
 

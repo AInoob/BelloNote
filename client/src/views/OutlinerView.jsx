@@ -46,6 +46,7 @@ import { computeActiveTask as computeActiveTaskUtil } from './outliner/activeTas
 import { FilterBar } from './outliner/FilterBar.jsx'
 import { SlashMenu } from './outliner/SlashMenu.jsx'
 import { ExportImportControls } from './outliner/ExportImportControls.jsx'
+import { CopySelectionControls } from './outliner/CopySelectionControls.jsx'
 import { handleDragOver, handleDrop } from './outliner/dragDropHandlers.js'
 import { handlePaste } from './outliner/pasteHandler.js'
 import { handleKeyDown } from './outliner/keyDownHandler.js'
@@ -1141,7 +1142,10 @@ export default function OutlinerView({
             excludeTagInput={excludeTagInput}
             clearTagFilters={clearTagFilters}
             extraControls={(
-              <ExportImportControls onImportComplete={loadOutlineFromServer} />
+              <>
+                <CopySelectionControls editor={editor} />
+                <ExportImportControls onImportComplete={loadOutlineFromServer} />
+              </>
             )}
           />
       )}
